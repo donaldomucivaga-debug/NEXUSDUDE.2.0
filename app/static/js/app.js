@@ -873,7 +873,44 @@ function selectNode(node) {
   }
 
   // Datos Técnicos Observables (Read-Only)
-  document.getElementById('prop-node-ip').textContent = node.ip || 'Sin IP configurada';
+  const ipLinkEl = document.getElementById('prop-node-ip-link');
+  const ipTextEl = document.getElementById('prop-node-ip');
+  const webAdminBtn = document.getElementById('btn-open-device-web');
+
+  const rawIp = (node.ip || '').trim();
+  if (rawIp && !isSubmap) {
+    // Limpiar máscara si viene con formato CIDR (ej: 10.9.8.52/24 -> 10.9.8.52)
+    const cleanIp = rawIp.split('/')[0].trim();
+    if (ipTextEl) ipTextEl.textContent = rawIp;
+
+    const deviceWebUrl = `http://${cleanIp}`;
+    if (ipLinkEl) {
+      ipLinkEl.href = deviceWebUrl;
+      ipLinkEl.target = '_blank';
+      ipLinkEl.rel = 'noopener noreferrer';
+      ipLinkEl.title = `Abrir administración web de ${cleanIp} en nueva pestaña`;
+      ipLinkEl.classList.remove('disabled');
+      ipLinkEl.style.display = 'inline-flex';
+    }
+    if (webAdminBtn) {
+      webAdminBtn.href = deviceWebUrl;
+      webAdminBtn.target = '_blank';
+      webAdminBtn.rel = 'noopener noreferrer';
+      webAdminBtn.title = `Abrir administración web de ${cleanIp} en nueva pestaña`;
+      webAdminBtn.style.display = 'flex';
+    }
+  } else {
+    if (ipTextEl) ipTextEl.textContent = isSubmap ? 'Contenedor Virtual' : 'Sin IP configurada';
+    if (ipLinkEl) {
+      ipLinkEl.removeAttribute('href');
+      ipLinkEl.removeAttribute('target');
+      ipLinkEl.title = 'Dispositivo sin dirección IP';
+      ipLinkEl.classList.add('disabled');
+    }
+    if (webAdminBtn) {
+      webAdminBtn.style.display = 'none';
+    }
+  }
   document.getElementById('prop-node-site').textContent = node.site_name || 'No asignado';
   document.getElementById('prop-node-role').textContent = isSubmap ? 'Contenedor Submapa' : (extra.role || node.device_type || 'N/A');
   document.getElementById('prop-node-mfr').textContent = extra.manufacturer || (isSubmap ? 'Sistema' : 'Genérico');

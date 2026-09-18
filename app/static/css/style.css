@@ -729,6 +729,68 @@ body.sidebar-resizing-active * {
   border-radius: 4px;
 }
 
+.device-info-value.ip.device-ip-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  text-decoration: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border: 1px solid rgba(14, 165, 233, 0.3);
+}
+
+.device-info-value.ip.device-ip-link:hover {
+  background: rgba(14, 165, 233, 0.25);
+  border-color: #38bdf8;
+  color: #38bdf8;
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.4);
+  transform: translateY(-1px);
+}
+
+.device-info-value.ip.device-ip-link .ip-link-icon {
+  font-size: 0.68rem;
+  opacity: 0.8;
+  transition: transform 0.2s ease;
+}
+
+.device-info-value.ip.device-ip-link:hover .ip-link-icon {
+  transform: translateX(2px) translateY(-1px);
+  opacity: 1;
+}
+
+.device-info-value.ip.device-ip-link.disabled {
+  pointer-events: none;
+  opacity: 0.6;
+  border-color: transparent;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-muted);
+}
+
+.btn-device-admin {
+  background: rgba(56, 189, 248, 0.15);
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  color: #38bdf8;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  text-decoration: none;
+  transition: all 0.2s ease;
+  margin-bottom: 6px;
+}
+
+.btn-device-admin:hover {
+  background: rgba(56, 189, 248, 0.3);
+  border-color: #38bdf8;
+  color: #ffffff;
+  box-shadow: 0 0 12px rgba(56, 189, 248, 0.35);
+}
+
 .netbox-sync-notice {
   display: flex;
   align-items: flex-start;

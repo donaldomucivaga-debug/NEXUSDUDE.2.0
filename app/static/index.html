@@ -167,7 +167,10 @@
             <div class="device-info-list">
               <div class="device-info-row">
                 <span class="device-info-label"><i class="fas fa-network-wired"></i> IP Primaria</span>
-                <span class="device-info-value ip" id="prop-node-ip">0.0.0.0</span>
+                <a href="#" target="_blank" rel="noopener noreferrer" class="device-info-value ip device-ip-link" id="prop-node-ip-link" title="Abrir administración web del equipo en nueva pestaña">
+                  <span id="prop-node-ip">0.0.0.0</span>
+                  <i class="fas fa-external-link-alt ip-link-icon"></i>
+                </a>
               </div>
 
               <div class="device-info-row">
@@ -211,6 +214,11 @@
               <i class="fas fa-shield-alt"></i>
               <span><strong>Fuente Única de Verdad:</strong> Nombres, IPs e interfaces son gestionados en NetBox para mantener integridad de registro.</span>
             </div>
+
+            <!-- Botón enlace directo a Administración Web del Equipo -->
+            <a href="#" target="_blank" rel="noopener noreferrer" class="btn-device-admin" id="btn-open-device-web" style="display: none;">
+              <i class="fas fa-desktop"></i> Abrir Administración Web
+            </a>
 
             <!-- Botón enlace directo a NetBox -->
             <a href="#" target="_blank" class="btn-netbox" id="btn-open-netbox" style="display: none;">
