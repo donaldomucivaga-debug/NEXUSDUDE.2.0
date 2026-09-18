@@ -400,20 +400,20 @@
 
           <!-- LA REGLA DE FRECUENCIAS INTERACTIVA EN EL SIDEBAR -->
           <div class="spectrum-ruler-section">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-              <span style="font-size: 0.72rem; font-weight: 700; color: #f8fafc; display: flex; align-items: center; gap: 5px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+              <span style="font-size: 0.86rem; font-weight: 700; color: #f8fafc; display: flex; align-items: center; gap: 6px;">
                 <i class="fas fa-ruler-horizontal" style="color: #38bdf8;"></i> Banda de Frecuencias
               </span>
               <div class="spectrum-zoom-controls">
                 <button type="button" class="btn-zoom-tiny" id="btn-spec-zoom-out" title="Alejar regla">-</button>
-                <span id="spec-zoom-label" style="font-size: 0.65rem; color: #cbd5e1; min-width: 32px; text-align: center;">100%</span>
+                <span id="spec-zoom-label" style="font-size: 0.76rem; color: #cbd5e1; min-width: 36px; text-align: center;">100%</span>
                 <button type="button" class="btn-zoom-tiny" id="btn-spec-zoom-in" title="Acercar regla">+</button>
               </div>
             </div>
 
             <!-- Contenedor con Scroll Horizontal para la Regla -->
             <div class="spectrum-horizontal-scroll-container" id="spectrum-sidebar-ruler-scroll">
-              <div class="spectrum-ruler-canvas-area" id="spectrum-sidebar-ruler-canvas" style="width: 100%; min-width: 1100px;">
+              <div class="spectrum-ruler-canvas-area" id="spectrum-sidebar-ruler-canvas" style="width: 100%; min-width: 1250px;">
                 <!-- Regla y Canales renderizados aquí -->
               </div>
             </div>
@@ -429,6 +429,11 @@
         </div>
       </div>
     </aside>
+
+    <!-- Divisor ajustable (Resizer) para cambiar ancho del Sidebar con el Mouse -->
+    <div class="sidebar-resizer" id="sidebar-resizer" title="Arrastrar para ajustar el ancho del panel lateral">
+      <div class="resizer-handle"></div>
+    </div>
 
     <!-- Canvas Area -->
     <main class="canvas-wrapper" id="canvas-dropzone">

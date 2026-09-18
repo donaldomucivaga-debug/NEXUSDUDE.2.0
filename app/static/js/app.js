@@ -305,6 +305,79 @@ function setupDragAndDrop() {
   });
 }
 
+// ─── 3b. Redimensionamiento Horizontal del Sidebar con el Mouse ──────────────
+function setupSidebarResizer() {
+  const resizer = document.getElementById('sidebar-resizer');
+  const sidebar = document.querySelector('.sidebar');
+  if (!resizer || !sidebar) return;
+
+  // Restaurar ancho previo guardado en localStorage si es válido
+  try {
+    const savedWidth = localStorage.getItem('nexusdude_sidebar_width');
+    if (savedWidth) {
+      const w = parseInt(savedWidth, 10);
+      const maxAllowed = Math.min(window.innerWidth * 0.75, 1000);
+      if (!isNaN(w) && w >= 280 && w <= maxAllowed) {
+        sidebar.style.width = `${w}px`;
+      }
+    }
+  } catch (e) {
+    console.warn('No se pudo acceder a localStorage para ancho del sidebar:', e);
+  }
+
+  let isResizing = false;
+  let startX = 0;
+  let startWidth = 0;
+
+  resizer.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return; // Solo clic izquierdo principal
+    isResizing = true;
+    startX = e.clientX;
+    startWidth = sidebar.getBoundingClientRect().width;
+    sidebar.classList.add('resizing');
+    resizer.classList.add('resizing');
+    document.body.classList.add('sidebar-resizing-active');
+    e.preventDefault();
+  });
+
+  window.addEventListener('mousemove', (e) => {
+    if (!isResizing) return;
+    const deltaX = e.clientX - startX;
+    const minW = 280;
+    const maxW = Math.min(window.innerWidth * 0.75, 1000);
+    let newWidth = Math.round(startWidth + deltaX);
+    if (newWidth < minW) newWidth = minW;
+    if (newWidth > maxW) newWidth = maxW;
+
+    sidebar.style.width = `${newWidth}px`;
+
+    // Redimensionar el canvas de Konva inmediatamente para respuesta fluida
+    if (typeof stage !== 'undefined' && stage) {
+      const container = document.getElementById('canvas-container');
+      if (container) {
+        stage.width(container.clientWidth);
+        stage.height(container.clientHeight);
+        stage.batchDraw();
+      }
+    }
+  });
+
+  window.addEventListener('mouseup', () => {
+    if (!isResizing) return;
+    isResizing = false;
+    sidebar.classList.remove('resizing');
+    resizer.classList.remove('resizing');
+    document.body.classList.remove('sidebar-resizing-active');
+
+    const finalWidth = Math.round(sidebar.getBoundingClientRect().width);
+    try {
+      localStorage.setItem('nexusdude_sidebar_width', finalWidth);
+    } catch (e) {}
+
+    window.dispatchEvent(new Event('resize'));
+  });
+}
+
 // ─── 4. Renderizado de Nodos y Enlaces en Konva ──────────────────────────────
 function getRoleIcon(deviceType = '') {
   const t = deviceType.toLowerCase();
@@ -2169,23 +2242,23 @@ function renderSpectrumDeviceList() {
 
     return `
       <div class="spectrum-device-item ${isSelected ? 'active' : ''}" data-node-id="${d.node_id}">
-        <label style="display: flex; align-items: center; gap: 7px; cursor: pointer; flex: 1; overflow: hidden; min-width: 0;">
-          <input type="checkbox" class="chk-spec-device" data-node-id="${d.node_id}" ${isSelected ? 'checked' : ''} style="cursor: pointer; flex-shrink: 0;">
-          <span style="font-size: 0.78rem;">${roleIcon}</span>
+        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; flex: 1; overflow: hidden; min-width: 0;">
+          <input type="checkbox" class="chk-spec-device" data-node-id="${d.node_id}" ${isSelected ? 'checked' : ''} style="cursor: pointer; flex-shrink: 0; width: 14px; height: 14px;">
+          <span style="font-size: 0.92rem;">${roleIcon}</span>
           <div style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;">
-            <div style="font-size: 0.76rem; font-weight: 700; color: #f1f5f9; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${d.name}">
+            <div style="font-size: 0.86rem; font-weight: 700; color: #f1f5f9; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${d.name}">
               ${d.name}
             </div>
-            <div style="font-size: 0.65rem; color: #94a3b8; font-family: monospace;">
+            <div style="font-size: 0.76rem; color: #94a3b8; font-family: monospace;">
               ${d.ip || 'Sin IP'} · <span style="color: ${bwColor}; font-weight: 600;">${d.bandwidth_text}</span>
             </div>
           </div>
         </label>
         <div style="text-align: right; flex-shrink: 0; padding-left: 6px;">
-          <span style="font-size: 0.72rem; font-weight: 800; color: #38bdf8; font-family: monospace; display: block;">
+          <span style="font-size: 0.86rem; font-weight: 800; color: #38bdf8; font-family: monospace; display: block;">
             ${d.frequency_mhz} MHz
           </span>
-          <span style="font-size: 0.62rem; color: #64748b; font-family: monospace;">
+          <span style="font-size: 0.74rem; color: #64748b; font-family: monospace;">
             ${d.freq_start_mhz} - ${d.freq_end_mhz}
           </span>
         </div>
@@ -2218,7 +2291,7 @@ function renderSpectrumRuler(canvasContainerId, isModal = false) {
   if (!container || !spectrumData) return;
 
   const zoom = isModal ? spectrumModalZoom : spectrumSidebarZoom;
-  const baseMinWidth = isModal ? 2200 : 1100;
+  const baseMinWidth = isModal ? 2400 : 1250;
   const totalWidthPx = Math.round(baseMinWidth * zoom);
   container.style.width = `${totalWidthPx}px`;
 
@@ -2251,7 +2324,7 @@ function renderSpectrumRuler(canvasContainerId, isModal = false) {
     const widthPct = ((endClamped - startClamped) / SPAN_SPEC_FREQ) * 100;
     return `
       <div class="spectrum-band-zone ${b.cls}" style="left: ${leftPct}%; width: ${widthPct}%;" title="${b.label}">
-        <span style="position: absolute; top: 2px; left: 4px; font-size: 0.58rem; font-weight: 700; color: rgba(255,255,255,0.25); text-transform: uppercase; pointer-events: none;">
+        <span style="position: absolute; top: 3px; left: 6px; font-size: 0.70rem; font-weight: 700; color: rgba(255,255,255,0.3); text-transform: uppercase; pointer-events: none;">
           ${b.name}
         </span>
       </div>
@@ -2280,10 +2353,10 @@ function renderSpectrumRuler(canvasContainerId, isModal = false) {
     deviceLanes.push({ dev, lane: assignedLane });
   });
 
-  const laneHeight = isModal ? 34 : 26;
-  const laneGap = isModal ? 8 : 5;
-  const rulerHeaderHeight = 36;
-  const totalCanvasHeight = Math.max(isModal ? 440 : 180, rulerHeaderHeight + (lanes.length * (laneHeight + laneGap)) + 20);
+  const laneHeight = isModal ? 40 : 32;
+  const laneGap = isModal ? 9 : 7;
+  const rulerHeaderHeight = 44;
+  const totalCanvasHeight = Math.max(isModal ? 520 : 250, rulerHeaderHeight + (lanes.length * (laneHeight + laneGap)) + 25);
   container.style.height = `${totalCanvasHeight}px`;
 
   const channelColors = [
@@ -2323,10 +2396,10 @@ ${roleIcon} ${dev.name}
            data-node-id="${dev.node_id}"
            title="${tooltipText}">
         <div class="spectrum-center-line"></div>
-        <div style="position: relative; z-index: 2; display: flex; align-items: center; gap: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: ${isModal ? '0.72rem' : '0.62rem'};">
-          <span>${roleIcon}</span>
+        <div style="position: relative; z-index: 2; display: flex; align-items: center; gap: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: ${isModal ? '0.86rem' : '0.76rem'};">
+          <span style="font-size: ${isModal ? '0.96rem' : '0.82rem'};">${roleIcon}</span>
           <strong style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${safeName}</strong>
-          <span style="opacity: 0.85; font-family: monospace; font-size: 0.6rem;">(${dev.bandwidth_mhz}M)</span>
+          <span style="opacity: 0.88; font-family: monospace; font-size: ${isModal ? '0.78rem' : '0.70rem'};">(${dev.bandwidth_mhz}M)</span>
         </div>
       </div>
     `;
@@ -2895,6 +2968,7 @@ async function handleExecuteBulkSites() {
 
 // ─── 12. Inicialización General ─────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', async () => {
+  setupSidebarResizer();
   initSSOAuth();
   initCanvas();
 
