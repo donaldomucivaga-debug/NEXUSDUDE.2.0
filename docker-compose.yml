@@ -1,0 +1,20 @@
+services:
+  nexusdude-web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: nexusdude-web
+    restart: unless-stopped
+    ports:
+      - "8085:8000"
+    volumes:
+      - ./data:/app/data
+      - ./app:/app/app
+    env_file:
+      - .env
+    networks:
+      - monitoreo_default
+
+networks:
+  monitoreo_default:
+    external: true
