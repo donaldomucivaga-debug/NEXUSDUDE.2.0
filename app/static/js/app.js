@@ -2359,9 +2359,10 @@ function renderSpectrumRuler(canvasContainerId, isModal = false) {
     const endClamped = Math.min(b.end, MAX_SPEC_FREQ);
     const leftPct = ((startClamped - MIN_SPEC_FREQ) / SPAN_SPEC_FREQ) * 100;
     const widthPct = ((endClamped - startClamped) / SPAN_SPEC_FREQ) * 100;
+    const bandFontSize = isModal ? '0.70rem' : '0.58rem';
     return `
       <div class="spectrum-band-zone ${b.cls}" style="left: ${leftPct}%; width: ${widthPct}%;" title="${b.label}">
-        <span style="position: absolute; top: 3px; left: 6px; font-size: 0.70rem; font-weight: 700; color: rgba(255,255,255,0.3); text-transform: uppercase; pointer-events: none;">
+        <span style="position: absolute; top: 2px; left: 4px; font-size: ${bandFontSize}; font-weight: 700; color: rgba(255,255,255,0.3); text-transform: uppercase; pointer-events: none;">
           ${b.name}
         </span>
       </div>
@@ -2390,10 +2391,11 @@ function renderSpectrumRuler(canvasContainerId, isModal = false) {
     deviceLanes.push({ dev, lane: assignedLane });
   });
 
-  const laneHeight = isModal ? 40 : 32;
-  const laneGap = isModal ? 9 : 7;
-  const rulerHeaderHeight = 44;
-  const totalCanvasHeight = Math.max(isModal ? 520 : 250, rulerHeaderHeight + (lanes.length * (laneHeight + laneGap)) + 25);
+  const laneHeight = isModal ? 40 : 18;
+  const laneGap = isModal ? 9 : 4;
+  const rulerHeaderHeight = isModal ? 44 : 26;
+  const minCanvasHeight = isModal ? 520 : 115;
+  const totalCanvasHeight = Math.max(minCanvasHeight, rulerHeaderHeight + (lanes.length * (laneHeight + laneGap)) + 10);
   container.style.height = `${totalCanvasHeight}px`;
 
   const channelColors = [
@@ -2433,10 +2435,10 @@ ${roleIcon} ${dev.name}
            data-node-id="${dev.node_id}"
            title="${tooltipText}">
         <div class="spectrum-center-line"></div>
-        <div style="position: relative; z-index: 2; display: flex; align-items: center; gap: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: ${isModal ? '0.86rem' : '0.76rem'};">
-          <span style="font-size: ${isModal ? '0.96rem' : '0.82rem'};">${roleIcon}</span>
+        <div style="position: relative; z-index: 2; display: flex; align-items: center; gap: ${isModal ? '5px' : '3px'}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: ${isModal ? '0.86rem' : '0.66rem'};">
+          <span style="font-size: ${isModal ? '0.96rem' : '0.72rem'};">${roleIcon}</span>
           <strong style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${safeName}</strong>
-          <span style="opacity: 0.88; font-family: monospace; font-size: ${isModal ? '0.78rem' : '0.70rem'};">(${dev.bandwidth_mhz}M)</span>
+          <span style="opacity: 0.88; font-family: monospace; font-size: ${isModal ? '0.78rem' : '0.60rem'};">(${dev.bandwidth_mhz}M)</span>
         </div>
       </div>
     `;

@@ -1189,7 +1189,7 @@ body.sidebar-resizing-active * {
   background: #090d16;
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 8px;
-  padding: 14px 16px;
+  padding: 8px 12px;
   position: relative;
   scrollbar-width: thin;
   scrollbar-color: #38bdf8 rgba(15, 23, 42, 0.6);
@@ -1205,10 +1205,10 @@ body.sidebar-resizing-active * {
 
 .spectrum-ruler-canvas-area {
   position: relative;
-  height: 240px;
+  height: 115px;
 }
 
-/* Escala y Marcas de la Regla */
+/* Escala y Marcas de la Regla (Base) */
 .spectrum-ruler-track {
   position: absolute;
   top: 0;
@@ -1252,6 +1252,36 @@ body.sidebar-resizing-active * {
   color: #cbd5e1;
   font-family: monospace;
   white-space: nowrap;
+}
+
+/* Adaptación Compacta: Regla en Sidebar reducida a la mitad */
+#spectrum-sidebar-ruler-canvas .spectrum-ruler-track {
+  height: 26px;
+}
+#spectrum-sidebar-ruler-canvas .spectrum-tick.major {
+  height: 9px;
+}
+#spectrum-sidebar-ruler-canvas .spectrum-tick.medium {
+  height: 5px;
+}
+#spectrum-sidebar-ruler-canvas .spectrum-tick.minor {
+  height: 3px;
+}
+#spectrum-sidebar-ruler-canvas .spectrum-tick-label {
+  bottom: 11px;
+  font-size: 0.65rem;
+}
+#spectrum-sidebar-ruler-canvas .spectrum-band-zone {
+  top: 26px;
+}
+#spectrum-sidebar-ruler-canvas .spectrum-channel-lane {
+  height: 20px;
+}
+#spectrum-sidebar-ruler-canvas .spectrum-channel-block {
+  height: 18px;
+  border-radius: 4px;
+  font-size: 0.66rem;
+  padding: 0 4px;
 }
 
 /* Destacado de Bandas Estándar */
