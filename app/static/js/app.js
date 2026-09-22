@@ -957,7 +957,7 @@ function selectNode(node) {
   const zabbixBtn = document.getElementById('btn-open-zabbix');
   if (zabbixBtn) {
     if (!isSubmap && node.name) {
-      const zabbixBase = 'https://10.9.8.5:8082';
+      const zabbixBase = window.zabbixBaseUrl || 'https://10.9.1.7:8082';
       const hostName = encodeURIComponent(node.name);
       zabbixBtn.href = `${zabbixBase}/zabbix.php?action=latest.view&filter_name=${hostName}&filter_groupids[]=0`;
       zabbixBtn.style.display = 'inline-flex';
@@ -1469,6 +1469,18 @@ function startRealtimePolling(mapId) {
       const data = await API.getMapRealtimeStatus(mapId);
       if (!data || !data.nodes) return;
 
+      // Actualizar indicador de conectividad con Zabbix
+      const sourceDot = document.getElementById('telemetry-source-dot');
+      if (sourceDot) {
+        if (data.zabbix_connected === false) {
+          sourceDot.style.color = '#ef4444';
+          sourceDot.title = 'Zabbix Desconectado / Fuera de Línea';
+        } else {
+          sourceDot.style.color = '#22c55e';
+          sourceDot.title = 'Zabbix Conectado (7.0)';
+        }
+      }
+
       // Actualizar dot de cada nodo en el canvas sin re-renderizar
       for (const [nodeId, nodeStatus] of Object.entries(data.nodes)) {
         applyNodeStatusToCanvas(nodeId, nodeStatus.status);
@@ -1486,6 +1498,11 @@ function startRealtimePolling(mapId) {
       }
     } catch (e) {
       console.warn('[Realtime] Error en polling de estado:', e);
+      const sourceDot = document.getElementById('telemetry-source-dot');
+      if (sourceDot) {
+        sourceDot.style.color = '#ef4444';
+        sourceDot.title = 'Error de conexión con servicio de telemetría';
+      }
     }
   };
 

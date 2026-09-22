@@ -35,7 +35,7 @@ class InventoryService:
         logger.info("Iniciando sincronización de inventario NetBox...")
 
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
                 headers = await self.get_headers()
 
                 # 1. Cargar Sitios

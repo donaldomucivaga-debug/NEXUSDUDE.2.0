@@ -146,7 +146,7 @@ async def get_netbox_webhook_status(user: Dict[str, Any] = Depends(get_current_u
     event_rule_name = "NexusDude - Sync NetBox Sites to Submaps"
     target_url = "http://nexusdude-web:8000/api/webhooks/netbox"
 
-    async with httpx.AsyncClient(timeout=8.0) as client:
+    async with httpx.AsyncClient(verify=False, timeout=8.0) as client:
         try:
             res_wh = await client.get(f"{settings.NETBOX_URL}/api/extras/webhooks/?name={webhook_name}", headers=headers)
             wh_data = res_wh.json() if res_wh.status_code == 200 else {}
@@ -192,7 +192,7 @@ async def setup_netbox_webhook(user: Dict[str, Any] = Depends(get_current_user))
     webhook_name = "NexusDude Realtime Submaps Webhook"
     event_rule_name = "NexusDude - Sync NetBox Sites to Submaps"
 
-    async with httpx.AsyncClient(timeout=15.0) as client:
+    async with httpx.AsyncClient(verify=False, timeout=15.0) as client:
         # 1. Comprobar o crear Webhook
         res_wh = await client.get(f"{settings.NETBOX_URL}/api/extras/webhooks/?name={webhook_name}", headers=headers)
         wh_id = None

@@ -68,7 +68,7 @@ class ZabbixService:
         if auth and self.auth_token:
             payload["auth"] = self.auth_token
 
-        async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
+        async with httpx.AsyncClient(verify=False, timeout=10.0) as client:
             try:
                 res = await client.post(self.api_url, json=payload)
                 res.raise_for_status()
@@ -533,7 +533,12 @@ class ZabbixService:
         Calcula y actualiza el estado operativo (online/offline/warning) en tiempo real
         de todos los nodos y submapas de un mapa, cruzando telemetría viva de Zabbix 7.0.
         """
-        await self.refresh_zabbix_hosts_cache()
+        zabbix_connected = True
+        try:
+            await self.refresh_zabbix_hosts_cache()
+        except Exception as zbx_err:
+            zabbix_connected = False
+            logger.warning(f"Zabbix inaccesible para mapa {map_id}: {zbx_err}")
 
         async with get_db_connection() as db:
             c_nodes = await db.execute("SELECT id, name, ip, device_type, site_name, extra_data, status FROM nodes WHERE map_id = ?", (map_id,))
@@ -543,6 +548,7 @@ class ZabbixService:
             return {
                 "map_id": map_id,
                 "timestamp": time.time(),
+                "zabbix_connected": zabbix_connected,
                 "summary": {"total": 0, "online": 0, "offline": 0, "warning": 0, "unknown": 0},
                 "nodes": {}
             }
@@ -559,8 +565,53 @@ class ZabbixService:
         nodes_result = {}
         updates_to_db = []
 
-        # 1. PROCESAR DISPOSITIVOS INDIVIDUALES
-        if device_nodes:
+        # SI ZABBIX ESTA CAIDO / INACCESIBLE: Todos los nodos se marcan en OFFLINE / DOWN
+        if not zabbix_connected:
+            for n in device_nodes:
+                nid = n["id"]
+                nodes_result[nid] = {
+                    "node_id": nid,
+                    "name": n["name"],
+                    "ip": n.get("ip") or "",
+                    "status": "down",
+                    "is_online": False,
+                    "icmp_ping": 0,
+                    "packet_loss": 100.0,
+                    "rtt_ms": None,
+                    "problems_count": 1,
+                    "problems": [
+                        {
+                            "triggerid": "zbx_offline",
+                            "description": "Zabbix Server inaccesible o fuera de línea (Telemetría perdida)",
+                            "priority": 5,
+                            "lastchange": int(time.time())
+                        }
+                    ],
+                    "zabbix_matched": False
+                }
+                if n.get("status") != "down":
+                    updates_to_db.append(("down", nid))
+
+            for sm in submap_nodes:
+                nid = sm["id"]
+                nodes_result[nid] = {
+                    "node_id": nid,
+                    "name": sm["name"],
+                    "ip": "",
+                    "status": "down",
+                    "is_online": False,
+                    "device_type": "submap",
+                    "submap_down_devices": len(device_nodes),
+                    "submap_warn_devices": 0,
+                    "problems_count": 1,
+                    "problems": [{"description": "Sitio con telemetría fuera de línea (Zabbix caído)", "priority": 5}],
+                    "zabbix_matched": False
+                }
+                if sm.get("status") != "down":
+                    updates_to_db.append(("down", nid))
+
+        # SI ZABBIX ESTA CONECTADO: Procesar telemetría real
+        elif device_nodes:
             host_map: Dict[str, List[Tuple[Dict[str, Any], Dict[str, Any]]]] = {}
             for n in device_nodes:
                 h = self.find_zabbix_host(n["name"], n.get("ip"))
@@ -572,15 +623,17 @@ class ZabbixService:
                         "node_id": n["id"],
                         "name": n["name"],
                         "ip": n.get("ip") or "",
-                        "status": n.get("status") or "ok",
-                        "is_online": True if (n.get("status") in ("ok", "active", None)) else False,
+                        "status": "unknown",
+                        "is_online": False,
                         "icmp_ping": None,
                         "packet_loss": None,
                         "rtt_ms": None,
-                        "problems_count": 0,
-                        "problems": [],
+                        "problems_count": 1,
+                        "problems": [{"triggerid": "zbx_unmatched", "description": "Dispositivo sin host en Zabbix (Pendiente de sincronizar)", "priority": 1, "lastchange": int(time.time())}],
                         "zabbix_matched": False
                     }
+                    if n.get("status") != "unknown":
+                        updates_to_db.append(("unknown", n["id"]))
 
             if host_map:
                 host_ids = list(host_map.keys())
@@ -768,6 +821,7 @@ class ZabbixService:
         return {
             "map_id": map_id,
             "timestamp": time.time(),
+            "zabbix_connected": zabbix_connected,
             "summary": {
                 "total": total_count,
                 "online": online_count,
@@ -780,7 +834,12 @@ class ZabbixService:
 
     async def get_node_telemetry(self, node_id: str) -> Dict[str, Any]:
         """Obtiene la telemetría detallada en tiempo real de un nodo específico."""
-        await self.refresh_zabbix_hosts_cache()
+        zabbix_connected = True
+        try:
+            await self.refresh_zabbix_hosts_cache()
+        except Exception as zbx_err:
+            zabbix_connected = False
+            logger.warning(f"Zabbix inaccesible para telemetría de nodo {node_id}: {zbx_err}")
 
         async with get_db_connection() as db:
             c = await db.execute("SELECT * FROM nodes WHERE id = ?", (node_id,))
@@ -789,17 +848,43 @@ class ZabbixService:
                 raise Exception(f"Nodo no encontrado: {node_id}")
 
         n_dict = dict(n)
+        if not zabbix_connected:
+            return {
+                "node_id": node_id,
+                "name": n_dict["name"],
+                "ip": n_dict.get("ip") or "",
+                "status": "down",
+                "is_online": False,
+                "zabbix_matched": False,
+                "message": "Servidor Zabbix fuera de línea o inaccesible",
+                "problems": [
+                    {
+                        "triggerid": "zbx_offline",
+                        "description": "Zabbix Server inaccesible o fuera de línea (Telemetría perdida)",
+                        "priority": 5,
+                        "lastchange": int(time.time())
+                    }
+                ]
+            }
+
         h = self.find_zabbix_host(n_dict["name"], n_dict.get("ip"))
         if not h:
             return {
                 "node_id": node_id,
                 "name": n_dict["name"],
                 "ip": n_dict.get("ip") or "",
-                "status": n_dict.get("status") or "ok",
-                "is_online": True if n_dict.get("status") == "ok" else False,
+                "status": "unknown",
+                "is_online": False,
                 "zabbix_matched": False,
-                "message": "Dispositivo no monitoreado en Zabbix",
-                "problems": []
+                "message": "Dispositivo sin host en Zabbix (Pendiente de sincronizar)",
+                "problems": [
+                    {
+                        "triggerid": "zbx_unmatched",
+                        "description": "Dispositivo sin monitoreo activo en Zabbix",
+                        "priority": 1,
+                        "lastchange": int(time.time())
+                    }
+                ]
             }
 
         hid = str(h["hostid"])
