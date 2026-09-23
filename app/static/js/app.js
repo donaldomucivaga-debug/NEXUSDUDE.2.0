@@ -777,6 +777,8 @@ function renderNode(node) {
         const coordsEl = document.getElementById('prop-node-coords');
         if (coordsEl) coordsEl.textContent = `X: ${Math.round(group.x())}, Y: ${Math.round(group.y())}`;
       }
+
+      updateAllLinks();
     } catch (err) {
       console.error('Error guardando posición:', err);
     }
@@ -867,6 +869,62 @@ function getNodePerimeterIntersection(cx, cy, halfW, halfH, targetCx, targetCy) 
   };
 }
 
+function lineIntersectsBox(p1, p2, box) {
+  const minX = Math.min(p1.x, p2.x);
+  const maxX = Math.max(p1.x, p2.x);
+  const minY = Math.min(p1.y, p2.y);
+  const maxY = Math.max(p1.y, p2.y);
+
+  if (maxX < box.left || minX > box.right || maxY < box.top || minY > box.bottom) {
+    return false;
+  }
+
+  const dx = p2.x - p1.x;
+  const dy = p2.y - p1.y;
+
+  let tMin = 0.0;
+  let tMax = 1.0;
+
+  if (Math.abs(dx) > 1e-7) {
+    let t1 = (box.left - p1.x) / dx;
+    let t2 = (box.right - p1.x) / dx;
+    if (t1 > t2) { const tmp = t1; t1 = t2; t2 = tmp; }
+    tMin = Math.max(tMin, t1);
+    tMax = Math.min(tMax, t2);
+    if (tMin > tMax) return false;
+  } else {
+    if (p1.x < box.left || p1.x > box.right) return false;
+  }
+
+  if (Math.abs(dy) > 1e-7) {
+    let t1 = (box.top - p1.y) / dy;
+    let t2 = (box.bottom - p1.y) / dy;
+    if (t1 > t2) { const tmp = t1; t1 = t2; t2 = tmp; }
+    tMin = Math.max(tMin, t1);
+    tMax = Math.min(tMax, t2);
+    if (tMin > tMax) return false;
+  } else {
+    if (p1.y < box.top || p1.y > box.bottom) return false;
+  }
+
+  return tMin <= tMax && tMax >= 0.0 && tMin <= 1.0;
+}
+
+function reversePoints(pts) {
+  const rev = [];
+  for (let i = pts.length - 2; i >= 0; i -= 2) {
+    rev.push(pts[i], pts[i + 1]);
+  }
+  return rev;
+}
+
+function getArrowPointsForDirection(pts, direction) {
+  if (direction === 'target_to_source') {
+    return reversePoints(pts);
+  }
+  return pts;
+}
+
 function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
   if (!sourceNode || !targetNode) return [0, 0, 0, 0];
 
@@ -876,20 +934,120 @@ function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
   const srcGroup = nodeGroups.get(sourceNode.id);
   const tgtGroup = nodeGroups.get(targetNode.id);
 
-  const srcX = srcGroup ? srcGroup.x() : sourceNode.x;
-  const srcY = srcGroup ? srcGroup.y() : sourceNode.y;
-  const tgtX = tgtGroup ? tgtGroup.x() : targetNode.x;
-  const tgtY = tgtGroup ? tgtGroup.y() : targetNode.y;
+  const srcX = srcGroup ? srcGroup.x() : (sourceNode.x || 0);
+  const srcY = srcGroup ? srcGroup.y() : (sourceNode.y || 0);
+  const tgtX = tgtGroup ? tgtGroup.x() : (targetNode.x || 0);
+  const tgtY = tgtGroup ? tgtGroup.y() : (targetNode.y || 0);
 
   const srcCx = srcX + srcHalf.halfW;
   const srcCy = srcY + srcHalf.halfH;
   const tgtCx = tgtX + tgtHalf.halfW;
   const tgtCy = tgtY + tgtHalf.halfH;
 
-  const p1 = getNodePerimeterIntersection(srcCx, srcCy, srcHalf.halfW, srcHalf.halfH, tgtCx, tgtCy);
-  const p2 = getNodePerimeterIntersection(tgtCx, tgtCy, tgtHalf.halfW, tgtHalf.halfH, srcCx, srcCy);
+  const dx = tgtCx - srcCx;
+  const dy = tgtCy - srcCy;
+  const distSq = dx * dx + dy * dy;
+  const dist = Math.sqrt(distSq);
 
-  return [p1.x, p1.y, p2.x, p2.y];
+  if (dist < 1e-5) {
+    return [srcCx, srcCy, tgtCx, tgtCy];
+  }
+
+  // Detect intermediate node obstacles between source and target
+  const allNodes = (currentMap && currentMap.nodes) ? currentMap.nodes : [];
+  const obstacles = [];
+  const boxPad = 10;
+
+  for (let i = 0; i < allNodes.length; i++) {
+    const n = allNodes[i];
+    if (n.id === sourceNode.id || n.id === targetNode.id) continue;
+
+    const nHalf = getNodeHalfDimensions(n);
+    const nGrp = nodeGroups.get(n.id);
+    const nx = nGrp ? nGrp.x() : (n.x || 0);
+    const ny = nGrp ? nGrp.y() : (n.y || 0);
+    const ncx = nx + nHalf.halfW;
+    const ncy = ny + nHalf.halfH;
+
+    // Must be intermediate along the segment direction
+    const t = ((ncx - srcCx) * dx + (ncy - srcCy) * dy) / distSq;
+    if (t <= 0.08 || t >= 0.92) continue;
+
+    const box = {
+      left: nx - boxPad,
+      right: nx + nHalf.halfW * 2 + boxPad,
+      top: ny - boxPad,
+      bottom: ny + nHalf.halfH * 2 + boxPad
+    };
+
+    if (lineIntersectsBox({ x: srcCx, y: srcCy }, { x: tgtCx, y: tgtCy }, box)) {
+      const side = dx * (ncy - srcCy) - dy * (ncx - srcCx);
+      obstacles.push({
+        node: n,
+        t: t,
+        cx: ncx,
+        cy: ncy,
+        halfW: nHalf.halfW,
+        halfH: nHalf.halfH,
+        side: side
+      });
+    }
+  }
+
+  // If no intermediate obstacles, return direct perimeter-clipped segment
+  if (obstacles.length === 0) {
+    const p1 = getNodePerimeterIntersection(srcCx, srcCy, srcHalf.halfW, srcHalf.halfH, tgtCx, tgtCy);
+    const p2 = getNodePerimeterIntersection(tgtCx, tgtCy, tgtHalf.halfW, tgtHalf.halfH, srcCx, srcCy);
+    return [p1.x, p1.y, p2.x, p2.y];
+  }
+
+  // Sort obstacles by projection t
+  obstacles.sort((a, b) => a.t - b.t);
+
+  const ux = dx / dist;
+  const uy = dy / dist;
+
+  // Detour side based on obstacle positions relative to vector AB
+  const totalSide = obstacles.reduce((sum, o) => sum + o.side, 0);
+  const routeSide = totalSide >= 0 ? 1 : -1;
+  const nxNorm = uy * routeSide;
+  const nyNorm = -ux * routeSide;
+
+  const clearance = 24;
+  const waypoints = [];
+
+  for (let i = 0; i < obstacles.length; i++) {
+    const o = obstacles[i];
+    const rn = (o.halfW + clearance) * Math.abs(nxNorm) + (o.halfH + clearance) * Math.abs(nyNorm);
+    const ru = o.halfW * Math.abs(ux) + o.halfH * Math.abs(uy);
+
+    if (ru > 40) {
+      const w1x = o.cx - ux * (ru * 0.65) + nxNorm * rn;
+      const w1y = o.cy - uy * (ru * 0.65) + nyNorm * rn;
+      const w2x = o.cx + ux * (ru * 0.65) + nxNorm * rn;
+      const w2y = o.cy + uy * (ru * 0.65) + nyNorm * rn;
+      waypoints.push({ x: w1x, y: w1y });
+      waypoints.push({ x: w2x, y: w2y });
+    } else {
+      const wx = o.cx + nxNorm * rn;
+      const wy = o.cy + nyNorm * rn;
+      waypoints.push({ x: wx, y: wy });
+    }
+  }
+
+  const firstWp = waypoints[0];
+  const lastWp = waypoints[waypoints.length - 1];
+
+  const p1 = getNodePerimeterIntersection(srcCx, srcCy, srcHalf.halfW, srcHalf.halfH, firstWp.x, firstWp.y);
+  const p2 = getNodePerimeterIntersection(tgtCx, tgtCy, tgtHalf.halfW, tgtHalf.halfH, lastWp.x, lastWp.y);
+
+  const pts = [p1.x, p1.y];
+  for (let i = 0; i < waypoints.length; i++) {
+    pts.push(waypoints[i].x, waypoints[i].y);
+  }
+  pts.push(p2.x, p2.y);
+
+  return pts;
 }
 
 function renderLink(link, nodesDict) {
@@ -900,13 +1058,14 @@ function renderLink(link, nodesDict) {
   const pts = calculateLinkEndpoints(source, target, link);
   const isIntermap = !!(link.extra_data && (link.extra_data.is_intermap || link.extra_data.remote_node_id));
   const direction = link.extra_data?.direction || 'source_to_target';
-  const isTargetToSource = direction === 'target_to_source';
-  const arrowPts = isTargetToSource ? [pts[2], pts[3], pts[0], pts[1]] : [pts[0], pts[1], pts[2], pts[3]];
+  const arrowPts = getArrowPointsForDirection(pts, direction);
+  const hasObstacles = pts.length > 4;
 
   const color = isIntermap ? '#a855f7' : (link.status === 'ok' ? '#0ea5e9' : '#ef4444');
 
   const line = new Konva.Arrow({
     points: arrowPts,
+    tension: hasObstacles ? 0.35 : 0,
     pointerLength: 9,
     pointerWidth: 8,
     stroke: color,
@@ -1030,9 +1189,10 @@ function openLinkPropertiesModal(link, sourceNode, targetNode) {
         const linkEntry = linkLines.get(link.id);
         if (linkEntry && linkEntry.line) {
           const pts = calculateLinkEndpoints(sourceNode, targetNode, link);
-          const isTargetToSource = chosenDir === 'target_to_source';
-          const arrowPts = isTargetToSource ? [pts[2], pts[3], pts[0], pts[1]] : [pts[0], pts[1], pts[2], pts[3]];
+          const arrowPts = getArrowPointsForDirection(pts, chosenDir);
+          const hasObstacles = pts.length > 4;
           linkEntry.line.points(arrowPts);
+          linkEntry.line.tension(hasObstacles ? 0.35 : 0);
           linksLayer.batchDraw();
         }
 
@@ -1080,9 +1240,10 @@ function updateAttachedLinks(nodeId, newX, newY) {
       if (srcNode && tgtNode) {
         const pts = calculateLinkEndpoints(srcNode, tgtNode, link);
         const direction = link.extra_data?.direction || 'source_to_target';
-        const isTargetToSource = direction === 'target_to_source';
-        const arrowPts = isTargetToSource ? [pts[2], pts[3], pts[0], pts[1]] : [pts[0], pts[1], pts[2], pts[3]];
+        const arrowPts = getArrowPointsForDirection(pts, direction);
+        const hasObstacles = pts.length > 4;
         line.points(arrowPts);
+        line.tension(hasObstacles ? 0.35 : 0);
         hasUpdated = true;
       }
     }
@@ -1091,6 +1252,27 @@ function updateAttachedLinks(nodeId, newX, newY) {
   if (hasUpdated && linksLayer) {
     linksLayer.batchDraw();
   }
+}
+
+function updateAllLinks() {
+  if (!currentMap || !currentMap.nodes || !linksLayer) return;
+  const nodeMap = new Map();
+  currentMap.nodes.forEach(n => nodeMap.set(n.id, n));
+
+  linkLines.forEach((linkObj, linkId) => {
+    const { line, sourceId, targetId, link } = linkObj;
+    const srcNode = nodeMap.get(sourceId);
+    const tgtNode = nodeMap.get(targetId);
+    if (srcNode && tgtNode && line) {
+      const pts = calculateLinkEndpoints(srcNode, tgtNode, link);
+      const direction = link.extra_data?.direction || 'source_to_target';
+      const arrowPts = getArrowPointsForDirection(pts, direction);
+      const hasObstacles = pts.length > 4;
+      line.points(arrowPts);
+      line.tension(hasObstacles ? 0.35 : 0);
+    }
+  });
+  linksLayer.batchDraw();
 }
 
 // ─── 5. Herramienta de Conexión de Enlaces ──────────────────────────────────
@@ -1806,9 +1988,9 @@ function showMultiSelectionNotice(count) {
           selectedNodes.clear();
           hideMultiSelectionNotice();
 
-          // Redibujar capas
+          // Redibujar capas y actualizar enlaces restantes
           nodesLayer.batchDraw();
-          linksLayer.batchDraw();
+          updateAllLinks();
 
           console.log(`[NexusDude] ${countToDelete} nodos eliminados del mapa correctamente.`);
         } catch (err) {
@@ -4068,6 +4250,7 @@ window.addEventListener('DOMContentLoaded', async () => {
         currentMap.nodes = currentMap.nodes.filter(n => n.id !== selectedNode.id);
         deselectNode();
         nodesLayer.batchDraw();
+        updateAllLinks();
 
       } catch (err) {
         alert('Error quitando nodo: ' + err.message);
