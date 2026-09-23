@@ -999,122 +999,6 @@ function getNodeFaceCenter(node, face) {
   return { x: nx + half.halfW * 2, y: cy, cx, cy, halfW: half.halfW, halfH: half.halfH }; // right
 }
 
-function avoidObstaclesInPath(rawPath, srcId, tgtId, allNodes, margin = 16) {
-  let currentPath = [...rawPath];
-
-  for (let passIdx = 0; passIdx < 5; passIdx++) {
-    const newPath = [currentPath[0]];
-    let modified = false;
-
-    for (let i = 0; i < currentPath.length - 1; i++) {
-      const p1 = currentPath[i];
-      const p2 = currentPath[i + 1];
-
-      let hit = null;
-      for (let j = 0; j < allNodes.length; j++) {
-        const node = allNodes[j];
-        if (node.id === srcId || node.id === tgtId) continue;
-
-        const half = getNodeHalfDimensions(node);
-        const grp = nodeGroups.get(node.id);
-        const nx = grp ? grp.x() : (node.x || 0);
-        const ny = grp ? grp.y() : (node.y || 0);
-        const cx = nx + half.halfW;
-        const cy = ny + half.halfH;
-
-        const box = {
-          left: cx - half.halfW - margin,
-          right: cx + half.halfW + margin,
-          top: cy - half.halfH - margin,
-          bottom: cy + half.halfH + margin,
-          cx: cx,
-          cy: cy
-        };
-
-        if (lineIntersectsBox(p1, p2, box)) {
-          hit = { node, box };
-          break;
-        }
-      }
-
-      if (!hit) {
-        newPath.push(p2);
-      } else {
-        modified = true;
-        const box = hit.box;
-        const isVert = Math.abs(p1.x - p2.x) < 1e-4;
-        const isHoriz = Math.abs(p1.y - p2.y) < 1e-4;
-
-        if (isVert) {
-          const x = p1.x;
-          const y1 = p1.y;
-          const y2 = p2.y;
-          const clearX = x < box.cx ? box.left : box.right;
-
-          if (y1 < y2) {
-            newPath.push({ x: x, y: box.top });
-            newPath.push({ x: clearX, y: box.top });
-            newPath.push({ x: clearX, y: box.bottom });
-            newPath.push({ x: x, y: box.bottom });
-          } else {
-            newPath.push({ x: x, y: box.bottom });
-            newPath.push({ x: clearX, y: box.bottom });
-            newPath.push({ x: clearX, y: box.top });
-            newPath.push({ x: x, y: box.top });
-          }
-          newPath.push(p2);
-        } else if (isHoriz) {
-          const y = p1.y;
-          const x1 = p1.x;
-          const x2 = p2.x;
-          const clearY = y < box.cy ? box.top : box.bottom;
-
-          if (x1 < x2) {
-            newPath.push({ x: box.left, y: y });
-            newPath.push({ x: box.left, y: clearY });
-            newPath.push({ x: box.right, y: clearY });
-            newPath.push({ x: box.right, y: y });
-          } else {
-            newPath.push({ x: box.right, y: y });
-            newPath.push({ x: box.right, y: clearY });
-            newPath.push({ x: box.left, y: clearY });
-            newPath.push({ x: box.left, y: y });
-          }
-          newPath.push(p2);
-        } else {
-          const clearY = p1.y < box.cy ? box.top : box.bottom;
-          newPath.push({ x: box.left, y: clearY });
-          newPath.push({ x: box.right, y: clearY });
-          newPath.push(p2);
-        }
-      }
-    }
-
-    currentPath = newPath;
-    if (!modified) break;
-  }
-
-  // Simplify collinear / redundant points
-  const simplified = [currentPath[0]];
-  for (let i = 1; i < currentPath.length; i++) {
-    const pt = currentPath[i];
-    const prev = simplified[simplified.length - 1];
-    if (Math.hypot(pt.x - prev.x, pt.y - prev.y) < 1.0) continue;
-
-    if (simplified.length >= 2) {
-      const prev2 = simplified[simplified.length - 2];
-      if ((Math.abs(pt.x - prev.x) < 1e-4 && Math.abs(prev.x - prev2.x) < 1e-4) ||
-          (Math.abs(pt.y - prev.y) < 1e-4 && Math.abs(prev.y - prev2.y) < 1e-4)) {
-        simplified[simplified.length - 1] = pt;
-        continue;
-      }
-    }
-    simplified.push(pt);
-  }
-
-  return simplified;
-}
-
 function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
   if (!sourceNode || !targetNode) return [0, 0, 0, 0];
 
@@ -1273,11 +1157,18 @@ function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
     }
   }
 
-  // Avoid intermediate obstacles
-  const clearPath = avoidObstaclesInPath(rawPath, sourceNode.id, targetNode.id, allNodes, 16);
+  // Simplify collinear / redundant points
+  const simplified = [rawPath[0]];
+  for (let i = 1; i < rawPath.length; i++) {
+    const pt = rawPath[i];
+    const prev = simplified[simplified.length - 1];
+    if (Math.hypot(pt.x - prev.x, pt.y - prev.y) > 1.0) {
+      simplified.push(pt);
+    }
+  }
 
   // Smooth short 8px corners
-  const rounded = roundCorners(clearPath, 8);
+  const rounded = roundCorners(simplified, 8);
 
   const pts = [];
   for (let i = 0; i < rounded.length; i++) {
@@ -4225,7 +4116,7 @@ async function autoLayoutMapAsTree() {
   const nodeMap = new Map();
   nodes.forEach(n => nodeMap.set(n.id, n));
 
-  // Build children & parents maps
+  // 1. Build directed hierarchy (parent -> children) respecting link direction
   const childrenMap = new Map();
   const parentsMap = new Map();
   nodes.forEach(n => {
@@ -4235,14 +4126,20 @@ async function autoLayoutMapAsTree() {
 
   links.forEach(l => {
     if (nodeMap.has(l.source_node_id) && nodeMap.has(l.target_node_id)) {
-      childrenMap.get(l.source_node_id).push(l.target_node_id);
-      parentsMap.get(l.target_node_id).push(l.source_node_id);
+      const dir = l.extra_data?.direction || 'source_to_target';
+      const parentId = dir === 'target_to_source' ? l.target_node_id : l.source_node_id;
+      const childId = dir === 'target_to_source' ? l.source_node_id : l.target_node_id;
+
+      if (!childrenMap.get(parentId).includes(childId)) {
+        childrenMap.get(parentId).push(childId);
+      }
+      if (!parentsMap.get(childId).includes(parentId)) {
+        parentsMap.get(childId).push(parentId);
+      }
     }
   });
 
-  // Identify root nodes:
-  // 1. Nodes with 0 incoming parent links
-  // 2. Or Core/Router/Gateway/Parent_map devices
+  // 2. Identify root nodes (nodes with 0 incoming parent links, or highest priority)
   let rootIds = nodes
     .filter(n => (parentsMap.get(n.id) || []).length === 0)
     .map(n => n.id);
@@ -4251,72 +4148,133 @@ async function autoLayoutMapAsTree() {
     rootIds = [nodes[0].id];
   }
 
-  // BFS level assignment
+  // 3. Strict generational level calculation (Longest Path DAG relaxation)
+  // Guarantees level(child) >= max(level(parent)) + 1 so all same-generation siblings share the same horizontal Y row!
   const levelMap = new Map();
-  const visited = new Set();
-  const queue = [];
+  rootIds.forEach(rid => levelMap.set(rid, 0));
 
-  rootIds.forEach(rid => {
-    levelMap.set(rid, 0);
-    visited.add(rid);
-    queue.push(rid);
-  });
-
-  while (queue.length > 0) {
-    const currId = queue.shift();
-    const currLvl = levelMap.get(currId);
-    const kids = childrenMap.get(currId) || [];
-    kids.forEach(kidId => {
-      if (!visited.has(kidId)) {
-        visited.add(kidId);
-        levelMap.set(kidId, currLvl + 1);
-        queue.push(kidId);
-      }
+  for (let pass = 0; pass < nodes.length; pass++) {
+    let changed = false;
+    childrenMap.forEach((kids, parentId) => {
+      const pLvl = levelMap.get(parentId) ?? 0;
+      kids.forEach(kidId => {
+        const needed = pLvl + 1;
+        const cur = levelMap.get(kidId) ?? -1;
+        if (cur < needed) {
+          levelMap.set(kidId, needed);
+          changed = true;
+        }
+      });
     });
+    if (!changed) break;
   }
 
-  // Assign any remaining disconnected nodes
   nodes.forEach(n => {
-    if (!visited.has(n.id)) {
-      levelMap.set(n.id, 0);
-      visited.add(n.id);
+    if (!levelMap.has(n.id)) levelMap.set(n.id, 0);
+  });
+
+  // 4. Recursive Subtree Layout with non-overlapping bounding columns / universes
+  const nodeW = 180.0;
+  const colGap = 50.0;
+  const rowSpacing = 130.0;
+  const universeGap = 80.0;
+  const startX = 80.0;
+  const startY = 80.0;
+
+  const visited = new Set();
+  const nodePositions = new Map();
+
+  function layoutSubtree(nodeId) {
+    visited.add(nodeId);
+    const rawKids = childrenMap.get(nodeId) || [];
+    const kids = rawKids.filter(kid => !visited.has(kid));
+
+    if (kids.length === 0) {
+      const singleWidth = nodeW + colGap;
+      const nodePos = new Map();
+      nodePos.set(nodeId, { relX: 0.0, depth: levelMap.get(nodeId) || 0 });
+      return {
+        width: singleWidth,
+        relX: 0.0,
+        nodes: nodePos
+      };
+    }
+
+    const childLayouts = [];
+    let currentOffset = 0.0;
+    const subtreeNodes = new Map();
+    subtreeNodes.set(nodeId, { relX: 0.0, depth: levelMap.get(nodeId) || 0 });
+
+    for (let i = 0; i < kids.length; i++) {
+      const kLayout = layoutSubtree(kids[i]);
+      childLayouts.push({ layout: kLayout, offset: currentOffset });
+
+      kLayout.nodes.forEach((kPos, kId) => {
+        subtreeNodes.set(kId, {
+          relX: kPos.relX + currentOffset,
+          depth: kPos.depth
+        });
+      });
+
+      currentOffset += kLayout.width;
+    }
+
+    const totalChildrenWidth = currentOffset;
+    const firstKidRelX = childLayouts[0].layout.relX + childLayouts[0].offset;
+    const lastKidRelX = childLayouts[childLayouts.length - 1].layout.relX + childLayouts[childLayouts.length - 1].offset;
+    const parentRelX = (firstKidRelX + lastKidRelX) / 2.0;
+
+    subtreeNodes.get(nodeId).relX = parentRelX;
+    const totalWidth = Math.max(nodeW + colGap, totalChildrenWidth);
+
+    return {
+      width: totalWidth,
+      relX: parentRelX,
+      nodes: subtreeNodes
+    };
+  }
+
+  let currentTreeX = startX;
+
+  // Process each root component as its own delimited universe
+  rootIds.forEach(rootId => {
+    if (visited.has(rootId)) return;
+    const treeLayout = layoutSubtree(rootId);
+
+    treeLayout.nodes.forEach((pos, nid) => {
+      const absX = Math.round(currentTreeX + pos.relX);
+      const absY = Math.round(startY + pos.depth * rowSpacing);
+      nodePositions.set(nid, { x: absX, y: absY, level: pos.depth });
+    });
+
+    currentTreeX += treeLayout.width + universeGap;
+  });
+
+  // Position any disconnected nodes
+  nodes.forEach(n => {
+    if (!nodePositions.has(n.id)) {
+      const absX = Math.round(currentTreeX);
+      const absY = Math.round(startY + (levelMap.get(n.id) || 0) * rowSpacing);
+      nodePositions.set(n.id, { x: absX, y: absY, level: levelMap.get(n.id) || 0 });
+      currentTreeX += nodeW + colGap;
     }
   });
 
-  // Group nodes by level
-  const levels = new Map();
-  nodes.forEach(n => {
-    const lvl = levelMap.get(n.id) || 0;
-    if (!levels.has(lvl)) levels.set(lvl, []);
-    levels.get(lvl).push(n);
-  });
-
-  const startX = 80.0;
-  const startY = 80.0;
-  const colSpacing = 220.0;
-  const rowSpacing = 130.0;
-
-  const maxLvl = Math.max(...Array.from(levels.keys()));
+  // Apply positions to Konva canvas with tween animations and update backend
   const updatePromises = [];
-
-  for (let lvl = 0; lvl <= maxLvl; lvl++) {
-    const lvlNodes = levels.get(lvl) || [];
-    const lvlY = startY + lvl * rowSpacing;
-
-    lvlNodes.forEach((n, idx) => {
-      const targetX = startX + idx * colSpacing;
-      const targetY = lvlY;
-
-      n.x = targetX;
-      n.y = targetY;
+  nodes.forEach(n => {
+    const pos = nodePositions.get(n.id);
+    if (pos) {
+      n.x = pos.x;
+      n.y = pos.y;
 
       const grp = nodeGroups.get(n.id);
       if (grp) {
         new Konva.Tween({
           node: grp,
           duration: 0.35,
-          x: targetX,
-          y: targetY,
+          x: pos.x,
+          y: pos.y,
           easing: Konva.Easings.EaseInOut,
           onFinish: () => {
             updateLinks();
@@ -4324,9 +4282,9 @@ async function autoLayoutMapAsTree() {
         }).play();
       }
 
-      updatePromises.push(API.updateNode(n.id, { x: targetX, y: targetY }).catch(e => console.warn(e)));
-    });
-  }
+      updatePromises.push(API.updateNode(n.id, { x: pos.x, y: pos.y }).catch(e => console.warn(e)));
+    }
+  });
 
   setTimeout(() => {
     updateLinks();
