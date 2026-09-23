@@ -722,8 +722,8 @@
 
           <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-bottom: 10px;">
             <div style="background: var(--bg-card); padding: 8px; border-radius: 6px; border: 1px solid var(--border-color); text-align: center;">
-              <div style="font-size: 1.1rem; font-weight: 800; color: #fff;" id="zbx-stat-nodes">0</div>
-              <div style="font-size: 0.68rem; color: var(--text-muted);">Nodos Totales</div>
+              <div style="font-size: 1.1rem; font-weight: 800; color: #38bdf8;" id="zbx-stat-nodes">0</div>
+              <div style="font-size: 0.68rem; color: var(--text-muted);">Nodos Conectados</div>
             </div>
             <div style="background: var(--bg-card); padding: 8px; border-radius: 6px; border: 1px solid var(--border-color); text-align: center;">
               <div style="font-size: 1.1rem; font-weight: 800; color: #10b981;" id="zbx-stat-matched">0</div>
@@ -735,10 +735,12 @@
             </div>
           </div>
 
-          <div style="display: flex; gap: 14px; font-size: 0.75rem; color: var(--text-secondary); background: rgba(0,0,0,0.2); padding: 6px 12px; border-radius: 6px; justify-content: center;">
-            <div><strong style="color: #38bdf8;" id="zbx-stat-direct">0</strong> Dependencias Directas de Servicio</div>
+          <div style="display: flex; gap: 10px; font-size: 0.72rem; color: var(--text-secondary); background: rgba(0,0,0,0.2); padding: 6px 10px; border-radius: 6px; justify-content: center; flex-wrap: wrap;">
+            <div><strong style="color: #10b981;" id="zbx-stat-root">0</strong> Raíces Proveedores</div>
             <div>•</div>
-            <div><strong style="color: #10b981;" id="zbx-stat-root">0</strong> Gateways / Nodos Raíz</div>
+            <div><strong style="color: #38bdf8;" id="zbx-stat-direct">0</strong> Dependencias Directas</div>
+            <div>•</div>
+            <div style="color: #94a3b8;"><strong style="color: #f59e0b;" id="zbx-stat-isolated">0</strong> Aislados (Omitidos)</div>
           </div>
         </div>
 

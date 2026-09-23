@@ -317,18 +317,29 @@ class ZabbixService:
         node_analysis = []
         direct_relations_count = 0
         root_nodes_count = 0
+        connected_nodes_count = 0
+        isolated_nodes_count = 0
 
         for nid, n in nodes_dict.items():
+            if n.get("device_type") in ("submap", "parent_map"):
+                continue
             uplinks = in_degree[nid]
             downlinks = out_degree[nid]
             matched_host = self.find_zabbix_host(n["name"], n.get("ip"))
 
-            if len(uplinks) == 0:
+            has_links = len(uplinks) > 0 or len(downlinks) > 0
+
+            if not has_links:
+                relation_type = "isolated"
+                isolated_nodes_count += 1
+            elif len(uplinks) == 0:
                 relation_type = "root"
                 root_nodes_count += 1
+                connected_nodes_count += 1
             else:
                 relation_type = "direct"
                 direct_relations_count += len(uplinks)
+                connected_nodes_count += 1
 
             node_analysis.append({
                 "node_id": nid,
@@ -337,6 +348,7 @@ class ZabbixService:
                 "device_type": n.get("device_type"),
                 "rank": get_role_rank(n.get("device_type")),
                 "relation_type": relation_type,
+                "is_connected": has_links,
                 "uplink_ids": [u["uplink_id"] for u in uplinks],
                 "uplink_names": [nodes_dict[u["uplink_id"]]["name"] if u["uplink_id"] in nodes_dict else u.get("remote_name", "Remoto") for u in uplinks],
                 "downlink_ids": [d["downlink_id"] for d in downlinks],
@@ -351,6 +363,8 @@ class ZabbixService:
             "map_name": map_row["name"],
             "parent_map_id": map_row["parent_map_id"],
             "total_nodes": len(nodes_dict),
+            "connected_nodes_count": connected_nodes_count,
+            "isolated_nodes_count": isolated_nodes_count,
             "total_links": len(links),
             "root_nodes_count": root_nodes_count,
             "direct_relations_count": direct_relations_count,
@@ -531,29 +545,32 @@ class ZabbixService:
                 else:
                     p_id, c_id = s_id, t_id
 
-                uplink_parents[c_id].add(p_id)
-                downlink_children[p_id].add(c_id)
+        # ─── Paso 2.5: Filtrar SOLO dispositivos que tengan relaciones activas ──────
+        connected_device_ids = {
+            nid for nid in devices_dict
+            if len(uplink_parents[nid]) > 0 or len(downlink_children[nid]) > 0
+        }
 
         # ─── Paso 3: Ordenación Topológica (Padres/Proveedores primero) ─────────────
         sorted_device_ids = []
         visited_ids = set()
 
-        # Raíces: nodos sin padres dentro del conjunto de dispositivos
-        for nid in devices_dict:
-            parents_in_scope = [pid for pid in uplink_parents[nid] if pid in devices_dict]
+        # Raíces: nodos conectados sin padres dentro del conjunto conectado
+        for nid in connected_device_ids:
+            parents_in_scope = [pid for pid in uplink_parents[nid] if pid in connected_device_ids]
             if not parents_in_scope:
                 sorted_device_ids.append(nid)
                 visited_ids.add(nid)
 
         # Nodos dependientes iterativamente
-        remaining = [nid for nid in devices_dict if nid not in visited_ids]
+        remaining = [nid for nid in connected_device_ids if nid not in visited_ids]
         iterations = 0
         while remaining and iterations < 100:
             iterations += 1
             progress = False
             next_remaining = []
             for nid in remaining:
-                parents_in_scope = [pid for pid in uplink_parents[nid] if pid in devices_dict]
+                parents_in_scope = [pid for pid in uplink_parents[nid] if pid in connected_device_ids]
                 if all(pid in visited_ids for pid in parents_in_scope):
                     sorted_device_ids.append(nid)
                     visited_ids.add(nid)
@@ -571,6 +588,9 @@ class ZabbixService:
             "scope": scope,
             "root_map_id": map_id if scope == "branch" else None,
             "maps_processed": len(target_maps),
+            "total_devices_in_maps": len(devices_dict),
+            "connected_devices_count": len(connected_device_ids),
+            "isolated_devices_skipped": len(devices_dict) - len(connected_device_ids),
             "root_devices_count": 0,
             "nodes_synced": 0,
             "nodes_matched_zabbix": 0,

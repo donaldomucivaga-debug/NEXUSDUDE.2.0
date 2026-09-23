@@ -3304,11 +3304,17 @@ async function openZabbixSyncModal() {
     try {
       const analysis = await API.getTopologyAnalysis(currentMap.id);
       if (analysis) {
-        document.getElementById('zbx-stat-nodes').textContent = analysis.total_nodes;
-        document.getElementById('zbx-stat-matched').textContent = `${analysis.nodes.filter(n => n.zabbix_matched).length} / ${analysis.total_nodes}`;
+        const connectedCount = analysis.connected_nodes_count !== undefined ? analysis.connected_nodes_count : (analysis.nodes.filter(n => n.relation_type !== 'isolated').length);
+        const isolatedCount = analysis.isolated_nodes_count !== undefined ? analysis.isolated_nodes_count : (analysis.total_nodes - connectedCount);
+        const matchedConnected = analysis.nodes.filter(n => n.zabbix_matched && n.relation_type !== 'isolated').length;
+
+        document.getElementById('zbx-stat-nodes').textContent = `${connectedCount} / ${analysis.total_nodes}`;
+        document.getElementById('zbx-stat-matched').textContent = `${matchedConnected} / ${connectedCount}`;
         document.getElementById('zbx-stat-links').textContent = analysis.total_links;
         document.getElementById('zbx-stat-direct').textContent = analysis.direct_relations_count;
         document.getElementById('zbx-stat-root').textContent = analysis.root_nodes_count;
+        const isolatedEl = document.getElementById('zbx-stat-isolated');
+        if (isolatedEl) isolatedEl.textContent = isolatedCount;
       }
     } catch (err) {
       console.error('Error obteniendo análisis de topología:', err);
@@ -3333,18 +3339,19 @@ async function handleExecuteZabbixSync() {
   consoleBox.innerHTML = `<div style="color: #38bdf8;">[1/3] Iniciando sincronización BSM con Zabbix 7.0 (${scopeLabel})...</div>`;
 
   try {
-    consoleBox.innerHTML += '<div style="color: #94a3b8;">[2/3] Mapeando jerarquía de servicios, nodos y dependencias directas (Padre ➔ Hijo)...</div>';
+    consoleBox.innerHTML += '<div style="color: #94a3b8;">[2/3] Filtrando nodos con relaciones y mapeando jerarquía Host-a-Host (Padre ➔ Hijo)...</div>';
     const res = await API.syncZabbix({ scope, map_id: mapId, clear_first: clearFirst });
     const rep = res.report || {};
 
     consoleBox.innerHTML += `
       <div style="color: #10b981; margin-top: 6px; font-weight: bold;">✔ ¡Sincronización BSM Host-a-Host exitosa!</div>
       <div style="color: #cbd5e1; margin-top: 4px;">• Alcance: <strong>${scope === 'branch' ? 'Rama Actual' : 'Todo el Sistema'}</strong> (${rep.maps_processed || 1} mapas)</div>
-      <div style="color: #cbd5e1;">• Nodos Raíz Proveedores (Gateways/Core): <strong>${rep.root_devices_count || 0}</strong></div>
-      <div style="color: #cbd5e1;">• Dispositivos sincronizados: <strong>${rep.nodes_synced || 0}</strong></div>
+      <div style="color: #cbd5e1;">• Dispositivos con relaciones sincronizados: <strong>${rep.nodes_synced || 0}</strong></div>
+      <div style="color: #94a3b8;">• Dispositivos aislados sin aristas (omitidos): <strong>${rep.isolated_devices_skipped || 0}</strong></div>
+      <div style="color: #38bdf8;">• Nodos Raíz Proveedores (Gateways/Core): <strong>${rep.root_devices_count || 0}</strong></div>
       <div style="color: #10b981;">• Hosts vinculados a triggers en Zabbix: <strong>${rep.nodes_matched_zabbix || 0}</strong></div>
       <div style="color: #38bdf8;">• Dependencias directas (Aristas Padre ➔ Hijo): <strong>${rep.direct_dependencies_created || 0}</strong></div>
-      <div style="color: #64748b; font-size: 0.7rem; margin-top: 6px;">Estructura pura Host ➔ Host. Las alertas de Zabbix ahora reconocerán automáticamente la causa raíz en caídas.</div>
+      <div style="color: #64748b; font-size: 0.7rem; margin-top: 6px;">Solo se enviaron equipos con contexto y conexiones reales. Causa raíz BSM activa.</div>
     `;
     consoleBox.scrollTop = consoleBox.scrollHeight;
   } catch (err) {
