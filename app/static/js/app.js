@@ -999,6 +999,141 @@ function getNodeFaceCenter(node, face) {
   return { x: nx + half.halfW * 2, y: cy, cx, cy, halfW: half.halfW, halfH: half.halfH }; // right
 }
 
+function getObstaclesForLink(sourceId, targetId) {
+  const allNodes = (currentMap && currentMap.nodes) ? currentMap.nodes : [];
+  const obstacles = [];
+  const boxPad = 14; // Margen de seguridad para no tocar el contorno de ningún nodo
+
+  for (let i = 0; i < allNodes.length; i++) {
+    const n = allNodes[i];
+    if (n.id === sourceId || n.id === targetId) continue;
+    const half = getNodeHalfDimensions(n);
+    const grp = nodeGroups.get(n.id);
+    const nx = grp ? grp.x() : (n.x || 0);
+    const ny = grp ? grp.y() : (n.y || 0);
+    obstacles.push({
+      id: n.id,
+      left: nx - boxPad,
+      right: nx + half.halfW * 2 + boxPad,
+      top: ny - boxPad,
+      bottom: ny + half.halfH * 2 + boxPad,
+      cx: nx + half.halfW,
+      cy: ny + half.halfH
+    });
+  }
+  return obstacles;
+}
+
+function segmentHitsBox(p1, p2, box) {
+  const minX = Math.min(p1.x, p2.x);
+  const maxX = Math.max(p1.x, p2.x);
+  const minY = Math.min(p1.y, p2.y);
+  const maxY = Math.max(p1.y, p2.y);
+
+  if (maxX <= box.left || minX >= box.right || maxY <= box.top || minY >= box.bottom) {
+    return false;
+  }
+
+  if (Math.abs(p1.x - p2.x) < 1e-4) {
+    return (p1.x > box.left && p1.x < box.right && minY < box.bottom && maxY > box.top);
+  }
+  if (Math.abs(p1.y - p2.y) < 1e-4) {
+    return (p1.y > box.top && p1.y < box.bottom && minX < box.right && maxX > box.left);
+  }
+  return lineIntersectsBox(p1, p2, box);
+}
+
+function avoidObstaclesOrthogonal(waypoints, obstacles) {
+  if (!obstacles || obstacles.length === 0 || waypoints.length < 2) return waypoints;
+
+  let current = waypoints;
+  for (let pass = 0; pass < 2; pass++) {
+    let changed = false;
+    const nextWaypoints = [current[0]];
+
+    for (let i = 0; i < current.length - 1; i++) {
+      const p1 = current[i];
+      const p2 = current[i + 1];
+
+      const isVert = Math.abs(p1.x - p2.x) < 1e-4;
+      const isHoriz = Math.abs(p1.y - p2.y) < 1e-4;
+
+      if (!isVert && !isHoriz) {
+        nextWaypoints.push(p2);
+        continue;
+      }
+
+      const hitting = [];
+      for (let j = 0; j < obstacles.length; j++) {
+        const obs = obstacles[j];
+        if (segmentHitsBox(p1, p2, obs)) {
+          hitting.push(obs);
+        }
+      }
+
+      if (hitting.length === 0) {
+        nextWaypoints.push(p2);
+        continue;
+      }
+
+      changed = true;
+
+      if (isVert) {
+        const goingDown = p2.y > p1.y;
+        hitting.sort((a, b) => goingDown ? (a.cy - b.cy) : (b.cy - a.cy));
+
+        let curP = p1;
+        for (let k = 0; k < hitting.length; k++) {
+          const obs = hitting[k];
+          const detourLeft = curP.x <= obs.cx;
+          const detourX = detourLeft ? obs.left : obs.right;
+
+          if (goingDown) {
+            nextWaypoints.push({ x: curP.x, y: obs.top });
+            nextWaypoints.push({ x: detourX, y: obs.top });
+            nextWaypoints.push({ x: detourX, y: obs.bottom });
+            nextWaypoints.push({ x: curP.x, y: obs.bottom });
+          } else {
+            nextWaypoints.push({ x: curP.x, y: obs.bottom });
+            nextWaypoints.push({ x: detourX, y: obs.bottom });
+            nextWaypoints.push({ x: detourX, y: obs.top });
+            nextWaypoints.push({ x: curP.x, y: obs.top });
+          }
+        }
+        nextWaypoints.push(p2);
+      } else {
+        const goingRight = p2.x > p1.x;
+        hitting.sort((a, b) => goingRight ? (a.cx - b.cx) : (b.cx - a.cx));
+
+        let curP = p1;
+        for (let k = 0; k < hitting.length; k++) {
+          const obs = hitting[k];
+          const detourAbove = curP.y <= obs.cy;
+          const detourY = detourAbove ? obs.top : obs.bottom;
+
+          if (goingRight) {
+            nextWaypoints.push({ x: obs.left, y: curP.y });
+            nextWaypoints.push({ x: obs.left, y: detourY });
+            nextWaypoints.push({ x: obs.right, y: detourY });
+            nextWaypoints.push({ x: obs.right, y: curP.y });
+          } else {
+            nextWaypoints.push({ x: obs.right, y: curP.y });
+            nextWaypoints.push({ x: obs.right, y: detourY });
+            nextWaypoints.push({ x: obs.left, y: detourY });
+            nextWaypoints.push({ x: obs.left, y: curP.y });
+          }
+        }
+        nextWaypoints.push(p2);
+      }
+    }
+
+    current = nextWaypoints;
+    if (!changed) break;
+  }
+
+  return current;
+}
+
 function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
   if (!sourceNode || !targetNode) return [0, 0, 0, 0];
 
@@ -1026,8 +1161,11 @@ function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
   const nodeMap = new Map();
   allNodes.forEach(n => nodeMap.set(n.id, n));
 
-  // Find all sibling links leaving src on the same face
-  const siblings = [];
+  const isSVert = (sFace === 'top' || sFace === 'bottom');
+  const isTVert = (tFace === 'top' || tFace === 'bottom');
+
+  // 1. Distribuir pines de origen (Source Face)
+  const srcSiblings = [];
   for (let i = 0; i < allLinks.length; i++) {
     const l = allLinks[i];
     let otherId = null;
@@ -1046,67 +1184,103 @@ function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
 
         const oFace = determineNodeFace(srcCx, srcCy, oCx, oCy, srcHalf.halfW, srcHalf.halfH);
         if (oFace === sFace) {
-          siblings.push({
+          srcSiblings.push({
+            linkId: l.id,
             id: other.id,
             cx: oCx,
-            cy: oCy,
-            node: other
+            cy: oCy
           });
         }
       }
     }
   }
 
-  const isSVert = (sFace === 'top' || sFace === 'bottom');
-  const isTVert = (tFace === 'top' || tFace === 'bottom');
-
-  // Sort siblings along the face to eliminate any line overlap or crossing
   if (isSVert) {
-    siblings.sort((a, b) => a.cx - b.cx);
+    srcSiblings.sort((a, b) => a.cx !== b.cx ? (a.cx - b.cx) : String(a.linkId).localeCompare(String(b.linkId)));
   } else {
-    siblings.sort((a, b) => a.cy - b.cy);
+    srcSiblings.sort((a, b) => a.cy !== b.cy ? (a.cy - b.cy) : String(a.linkId).localeCompare(String(b.linkId)));
   }
 
-  const k = siblings.length;
-  let idx = 0;
-  for (let i = 0; i < siblings.length; i++) {
-    if (siblings[i].id === targetNode.id) {
-      idx = i;
-      break;
-    }
-  }
+  const srcK = srcSiblings.length;
+  let srcIdx = srcSiblings.findIndex(s => (link && s.linkId === link.id) || s.id === targetNode.id);
+  if (srcIdx === -1) srcIdx = 0;
 
-  // Calculate separated pin position on source face so no lines overlap on the node
   const pitch = 14;
-  const maxExtent = isSVert ? (srcHalf.halfW - 12) : (srcHalf.halfH - 10);
-  const actualPitch = k > 1 ? Math.min(pitch, (maxExtent * 2) / Math.max(1, k - 1)) : 0;
-  const pinOffset = k > 1 ? (-(k - 1) / 2.0 + idx) * actualPitch : 0;
+  const srcMaxExtent = isSVert ? (srcHalf.halfW - 12) : (srcHalf.halfH - 10);
+  const actualSrcPitch = srcK > 1 ? Math.min(pitch, (srcMaxExtent * 2) / Math.max(1, srcK - 1)) : 0;
+  const srcPinOffset = srcK > 1 ? (-(srcK - 1) / 2.0 + srcIdx) * actualSrcPitch : 0;
 
   let srcPt = { x: srcCx, y: srcCy };
   if (sFace === 'bottom') {
-    srcPt = { x: srcCx + pinOffset, y: srcNy + srcHalf.halfH * 2 };
+    srcPt = { x: srcCx + srcPinOffset, y: srcNy + srcHalf.halfH * 2 };
   } else if (sFace === 'top') {
-    srcPt = { x: srcCx + pinOffset, y: srcNy };
+    srcPt = { x: srcCx + srcPinOffset, y: srcNy };
   } else if (sFace === 'right') {
-    srcPt = { x: srcNx + srcHalf.halfW * 2, y: srcCy + pinOffset };
+    srcPt = { x: srcNx + srcHalf.halfW * 2, y: srcCy + srcPinOffset };
   } else {
-    srcPt = { x: srcNx, y: srcCy + pinOffset };
+    srcPt = { x: srcNx, y: srcCy + srcPinOffset };
   }
 
-  // Target port (centered on target face)
+  // 2. Distribuir pines de destino (Target Face)
+  const tgtSiblings = [];
+  for (let i = 0; i < allLinks.length; i++) {
+    const l = allLinks[i];
+    let otherId = null;
+    if (l.target_node_id === targetNode.id) otherId = l.source_node_id;
+    else if (l.source_node_id === targetNode.id) otherId = l.target_node_id;
+
+    if (otherId) {
+      const other = nodeMap.get(otherId);
+      if (other) {
+        const oHalf = getNodeHalfDimensions(other);
+        const oGrp = nodeGroups.get(other.id);
+        const oNx = oGrp ? oGrp.x() : (other.x || 0);
+        const oNy = oGrp ? oGrp.y() : (other.y || 0);
+        const oCx = oNx + oHalf.halfW;
+        const oCy = oNy + oHalf.halfH;
+
+        const oFace = determineNodeFace(tgtCx, tgtCy, oCx, oCy, tgtHalf.halfW, tgtHalf.halfH);
+        if (oFace === tFace) {
+          tgtSiblings.push({
+            linkId: l.id,
+            id: other.id,
+            cx: oCx,
+            cy: oCy
+          });
+        }
+      }
+    }
+  }
+
+  if (isTVert) {
+    tgtSiblings.sort((a, b) => a.cx !== b.cx ? (a.cx - b.cx) : String(a.linkId).localeCompare(String(b.linkId)));
+  } else {
+    tgtSiblings.sort((a, b) => a.cy !== b.cy ? (a.cy - b.cy) : String(a.linkId).localeCompare(String(b.linkId)));
+  }
+
+  const tgtK = tgtSiblings.length;
+  let tgtIdx = tgtSiblings.findIndex(s => (link && s.linkId === link.id) || s.id === sourceNode.id);
+  if (tgtIdx === -1) tgtIdx = 0;
+
+  const tgtMaxExtent = isTVert ? (tgtHalf.halfW - 12) : (tgtHalf.halfH - 10);
+  const actualTgtPitch = tgtK > 1 ? Math.min(pitch, (tgtMaxExtent * 2) / Math.max(1, tgtK - 1)) : 0;
+  const tgtPinOffset = tgtK > 1 ? (-(tgtK - 1) / 2.0 + tgtIdx) * actualTgtPitch : 0;
+
   let tgtPt = { x: tgtCx, y: tgtCy };
   if (tFace === 'top') {
-    tgtPt = { x: tgtCx, y: tgtNy };
+    tgtPt = { x: tgtCx + tgtPinOffset, y: tgtNy };
   } else if (tFace === 'bottom') {
-    tgtPt = { x: tgtCx, y: tgtNy + tgtHalf.halfH * 2 };
+    tgtPt = { x: tgtCx + tgtPinOffset, y: tgtNy + tgtHalf.halfH * 2 };
   } else if (tFace === 'left') {
-    tgtPt = { x: tgtNx, y: tgtCy };
+    tgtPt = { x: tgtNx, y: tgtCy + tgtPinOffset };
   } else {
-    tgtPt = { x: tgtNx + tgtHalf.halfW * 2, y: tgtCy };
+    tgtPt = { x: tgtNx + tgtHalf.halfW * 2, y: tgtCy + tgtPinOffset };
   }
 
-  // Separated horizontal/vertical corridor channel so sibling lines don't overlap in transit
-  const channelOffset = k > 1 ? (-(k - 1) / 2.0 + idx) * 8 : 0;
+  // 3. Canales Paralelos en el corredor para que ninguna línea se monte sobre otra
+  const maxK = Math.max(srcK, tgtK);
+  const chosenIdx = srcK >= tgtK ? srcIdx : tgtIdx;
+  const channelOffset = maxK > 1 ? (-(maxK - 1) / 2.0 + chosenIdx) * 12 : 0;
 
   let rawPath = [];
 
@@ -1172,17 +1346,30 @@ function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
     }
   }
 
-  // Simplify collinear / redundant points
-  const simplified = [rawPath[0]];
-  for (let i = 1; i < rawPath.length; i++) {
-    const pt = rawPath[i];
+  // 4. Esquivar obstáculos de nodos intermedios (Evita tocar el contorno de otros nodos)
+  const obstacles = getObstaclesForLink(sourceNode.id, targetNode.id);
+  const clearedPath = avoidObstaclesOrthogonal(rawPath, obstacles);
+
+  // 5. Simplificar puntos colineales / redundantes
+  const simplified = [clearedPath[0]];
+  for (let i = 1; i < clearedPath.length; i++) {
+    const pt = clearedPath[i];
     const prev = simplified[simplified.length - 1];
-    if (Math.hypot(pt.x - prev.x, pt.y - prev.y) > 1.0) {
+    if (Math.hypot(pt.x - prev.x, pt.y - prev.y) > 0.5) {
+      if (simplified.length >= 2) {
+        const pPrev = simplified[simplified.length - 2];
+        const isCollinearX = Math.abs(pPrev.x - prev.x) < 0.5 && Math.abs(prev.x - pt.x) < 0.5;
+        const isCollinearY = Math.abs(pPrev.y - prev.y) < 0.5 && Math.abs(prev.y - pt.y) < 0.5;
+        if (isCollinearX || isCollinearY) {
+          simplified[simplified.length - 1] = pt;
+          continue;
+        }
+      }
       simplified.push(pt);
     }
   }
 
-  // Smooth short 8px corners
+  // 6. Suavizar esquinas con curvas de 8px
   const rounded = roundCorners(simplified, 8);
 
   const pts = [];
@@ -1192,57 +1379,50 @@ function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
   return pts;
 }
 
-// ─── Secuencia de Parpadeo e Iluminación Verde en Cascada (Traffic Pulse) ──────
-let _linkPulseInterval = null;
-let _currentPulseLinkIndex = 0;
+// ─── Colores y Estados Fijos de Enlaces (Verde OK / Rojo Problema) ─────────────
 
-function stopLinkPulseAnimation() {
-  if (_linkPulseInterval) {
-    clearInterval(_linkPulseInterval);
-    _linkPulseInterval = null;
+function getLinkColor(link, sourceNode, targetNode) {
+  const isIntermap = !!(link && link.extra_data && (link.extra_data.is_intermap || link.extra_data.remote_node_id));
+
+  const tgtPing = targetNode ? (targetNode.ping_status || targetNode.status || 'ok') : (link?.status || 'ok');
+  const srcPing = sourceNode ? (sourceNode.ping_status || sourceNode.status || 'ok') : 'ok';
+  const linkStat = link ? link.status : 'ok';
+
+  const isProblem = (
+    tgtPing === 'problem' || tgtPing === 'down' || tgtPing === 'critical' || tgtPing === 'error' ||
+    srcPing === 'problem' || srcPing === 'down' || srcPing === 'critical' || srcPing === 'error' ||
+    linkStat === 'problem' || linkStat === 'down' || linkStat === 'critical'
+  );
+
+  if (isProblem) {
+    return '#ef4444'; // Rojo fijo para problemas de ping / conectividad
   }
+  if (isIntermap) {
+    return '#a855f7'; // Violeta para enlaces intermapa cuando está OK
+  }
+  return '#22c55e'; // Verde fijo cuando el ping al equipo está OK
 }
 
-function startLinkPulseAnimation() {
-  stopLinkPulseAnimation();
+function updateAllLinkColors() {
+  if (!currentMap || !currentMap.nodes || !linksLayer) return;
+  const nodeMap = new Map();
+  currentMap.nodes.forEach(n => nodeMap.set(n.id, n));
 
-  _linkPulseInterval = setInterval(() => {
-    if (!currentMap || !currentMap.links || currentMap.links.length === 0 || !linksLayer) return;
-    const entries = Array.from(linkLines.values());
-    if (entries.length === 0) return;
-
-    const entry = entries[_currentPulseLinkIndex % entries.length];
-    _currentPulseLinkIndex = (_currentPulseLinkIndex + 1) % entries.length;
-
-    if (!entry || !entry.line || !entry.line.getStage()) return;
-
-    const line = entry.line;
-    const isIntermap = !!(entry.link && entry.link.extra_data && (entry.link.extra_data.is_intermap || entry.link.extra_data.remote_node_id));
-    const origColor = isIntermap ? '#a855f7' : (entry.link?.status === 'ok' ? '#0ea5e9' : '#ef4444');
-    const origWidth = isIntermap ? 2.5 : 2;
-
-    // 1. Iluminar en Verde Neón por 180ms
-    line.stroke('#22c55e');
-    line.fill('#22c55e');
-    line.strokeWidth(3.5);
-    line.shadowColor('#22c55e');
-    line.shadowBlur(8);
-    line.shadowOpacity(0.8);
-    linksLayer.batchDraw();
-
-    // 2. Apagar después de 180ms (dejando ~70ms de pausa antes de la siguiente a los 250ms)
-    setTimeout(() => {
-      if (line && line.getStage()) {
-        line.stroke(origColor);
-        line.fill(origColor);
-        line.strokeWidth(origWidth);
-        line.shadowBlur(0);
-        line.shadowOpacity(0);
-        linksLayer.batchDraw();
-      }
-    }, 180);
-
-  }, 250);
+  linkLines.forEach((linkObj) => {
+    const { line, sourceId, targetId, link } = linkObj;
+    const srcNode = nodeMap.get(sourceId);
+    const tgtNode = nodeMap.get(targetId);
+    if (line && line.getStage()) {
+      const isIntermap = !!(link && link.extra_data && (link.extra_data.is_intermap || link.extra_data.remote_node_id));
+      const color = getLinkColor(link, srcNode, tgtNode);
+      line.stroke(color);
+      line.fill(color);
+      line.strokeWidth(isIntermap ? 2.5 : 2);
+      line.shadowBlur(0);
+      line.shadowOpacity(0);
+    }
+  });
+  linksLayer.batchDraw();
 }
 
 function renderLink(link, nodesDict) {
@@ -1255,7 +1435,7 @@ function renderLink(link, nodesDict) {
   const direction = link.extra_data?.direction || 'source_to_target';
   const arrowPts = getArrowPointsForDirection(pts, direction);
 
-  const color = isIntermap ? '#a855f7' : (link.status === 'ok' ? '#0ea5e9' : '#ef4444');
+  const color = getLinkColor(link, source, target);
 
   const line = new Konva.Arrow({
     points: arrowPts,
@@ -1275,16 +1455,17 @@ function renderLink(link, nodesDict) {
 
   line.on('mouseenter', () => {
     document.body.style.cursor = 'pointer';
-    line.stroke('#f43f5e');
-    line.fill('#f43f5e');
+    line.stroke('#38bdf8');
+    line.fill('#38bdf8');
     line.strokeWidth(3.5);
     linksLayer.batchDraw();
   });
 
   line.on('mouseleave', () => {
     document.body.style.cursor = 'default';
-    line.stroke(color);
-    line.fill(color);
+    const curColor = getLinkColor(link, source, target);
+    line.stroke(curColor);
+    line.fill(curColor);
     line.strokeWidth(isIntermap ? 2.5 : 2);
     linksLayer.batchDraw();
   });
@@ -2553,6 +2734,7 @@ function startRealtimePolling(mapId) {
             n.snmp_status = data.nodes[n.id].snmp_status;
           }
         });
+        updateAllLinkColors();
       }
     } catch (e) {
       console.warn('[Realtime] Error en polling de estado:', e);
@@ -2590,12 +2772,11 @@ async function loadMap(mapId) {
   deselectNode();
   clearMultiSelection();
 
-  // Detener polling y animación de pulso del mapa anterior
+  // Detener polling del mapa anterior
   if (_realtimePollInterval) {
     clearInterval(_realtimePollInterval);
     _realtimePollInterval = null;
   }
-  stopLinkPulseAnimation();
 
   const mapData = await API.getMapDetail(mapId);
   if (!mapData) return;
@@ -2625,9 +2806,8 @@ async function loadMap(mapId) {
   refreshMapsTabList();
   checkMapCanPopulateFromSite();
 
-  // Arrancar polling de estado en tiempo real y pulso de tráfico para este mapa
+  // Arrancar polling de estado en tiempo real para este mapa
   startRealtimePolling(mapId);
-  startLinkPulseAnimation();
 
   // Persistir mapa actual y sincronizar estado en URL
   localStorage.setItem('nexusdude_last_map_id', mapId);
