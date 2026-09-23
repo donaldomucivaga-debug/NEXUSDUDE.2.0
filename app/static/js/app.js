@@ -816,8 +816,19 @@ function renderNode(node) {
 
   // Doble clic: drill-down si es submapa o ascenso a mapa padre
   group.on('dblclick dbltap', () => {
-    if ((isSubmap || isParentShortcut) && node.extra_data && node.extra_data.target_map_id) {
-      loadMap(node.extra_data.target_map_id);
+    if (isSubmap || isParentShortcut) {
+      let targetId = node.extra_data?.target_map_id;
+      if (!targetId && isParentShortcut) {
+        targetId = currentMap?.parent_map_id;
+      }
+      if (!targetId && Array.isArray(cachedMaps)) {
+        const cleanName = node.name.replace("📁", "").replace("⬆", "").trim().toLowerCase();
+        const matched = cachedMaps.find(m => m.name.toLowerCase().trim() === cleanName);
+        if (matched) targetId = matched.id;
+      }
+      if (targetId) {
+        loadMap(targetId);
+      }
     }
   });
 
@@ -2641,13 +2652,8 @@ async function handleSaveMap() {
         parent_map_id: parentId
       });
 
-      if (currentMap && currentMap.id === editId) {
-        currentMap.name = updated.name;
-        currentMap.description = updated.description;
-        currentMap.grid_size = updated.grid_size;
-        currentMap.parent_map_id = updated.parent_map_id;
-        const crumbs = await API.getMapBreadcrumb(currentMap.id);
-        renderBreadcrumbs(crumbs);
+      if (currentMap) {
+        await loadMap(currentMap.id);
       }
     } else if (currentModalMode === 'site') {
       // MODO CREACIÓN DESDE SITIO NETBOX
@@ -2665,11 +2671,9 @@ async function handleSaveMap() {
         auto_populate: autoPopulate
       });
 
-      // Si insertó un nodo en el mapa activo actual, renderizarlo
-      if (res.submap_node && parentId && currentMap && currentMap.id === parentId) {
-        currentMap.nodes.push(res.submap_node);
-        renderNode(res.submap_node);
-        nodesLayer.batchDraw();
+      // Si insertó un nodo en el mapa activo actual, recargar el mapa para renderizarlo con toda la sincronización
+      if (parentId && currentMap && currentMap.id === parentId) {
+        await loadMap(currentMap.id);
       }
 
       if (!parentId) {
@@ -2689,29 +2693,9 @@ async function handleSaveMap() {
         grid_size: grid
       });
 
-      if (parentId && currentMap && currentMap.id === parentId && insertSubmapNode) {
-        const centerX = (-stage.x() + stage.width() / 2) / stage.scaleX();
-        const centerY = (-stage.y() + stage.height() / 2) / stage.scaleY();
-        const snapX = snapToGrid ? Math.round(centerX / GRID_SIZE) * GRID_SIZE : centerX;
-        const snapY = snapToGrid ? Math.round(centerY / GRID_SIZE) * GRID_SIZE : centerY;
-
-        const submapNode = await API.createNode({
-          map_id: currentMap.id,
-          name: newMap.name,
-          ip: '',
-          device_type: 'submap',
-          site_name: desc || 'Submapa',
-          x: snapX,
-          y: snapY,
-          status: 'ok',
-          extra_data: { target_map_id: newMap.id }
-        });
-        currentMap.nodes.push(submapNode);
-        renderNode(submapNode);
-        nodesLayer.batchDraw();
-      }
-
-      if (!parentId) {
+      if (parentId && currentMap && currentMap.id === parentId) {
+        await loadMap(currentMap.id);
+      } else if (!parentId) {
         await loadMap(newMap.id);
       }
     }
@@ -2730,7 +2714,7 @@ async function handleDeleteMap(mapId, mapName) {
     return;
   }
 
-  const ok = confirm(`¿Estás seguro de eliminar el mapa "${mapName}"?\n\nADVERTENCIA: Se eliminarán todos sus submapas hijos, nodos y enlaces de forma permanente.`);
+  const ok = confirm(`¿Estás seguro de eliminar el mapa "${mapName}"?\n\nNota: Los submapas que dependían de este mapa no serán eliminados; quedarán preservados como mapas independientes y solo se desvinculará la relación.`);
   if (!ok) return;
 
   try {
@@ -2738,6 +2722,8 @@ async function handleDeleteMap(mapId, mapName) {
     if (res) {
       if (currentMap && (currentMap.id === mapId || currentMap.parent_map_id === mapId)) {
         await loadMap('default-map');
+      } else if (currentMap) {
+        await loadMap(currentMap.id);
       }
       await refreshMapsTabList();
     }

@@ -88,10 +88,152 @@ async def get_sites_mapping_status(user: Dict[str, Any] = Depends(get_current_us
         "sites": status_list
     }
 
+async def ensure_map_navigation_nodes(db, map_id: str):
+    """
+    Garantiza automáticamente la presencia y sincronía de los nodos de navegación en el lienzo:
+    1. Si este mapa tiene parent_map_id válido, asegura el nodo de retorno hacia el mapa padre ('parent_map').
+       Si el mapa padre no existe o el mapa es raíz, elimina nodos 'parent_map' huérfanos.
+    2. Si este mapa tiene submapas hijos (maps con parent_map_id = map_id), asegura un nodo de navegación ('submap')
+       por cada submapa hijo.
+       Si existen nodos 'submap' que apuntan a submapas inexistentes o desvinculados, los limpia.
+    """
+    c_map = await db.execute("SELECT id, name, parent_map_id FROM maps WHERE id = ?", (map_id,))
+    m = await c_map.fetchone()
+    if not m:
+        return
+
+    # --- 1. Sincronizar Nodo de Retorno a Mapa Padre ---
+    parent_id = m["parent_map_id"]
+    if parent_id and parent_id != map_id:
+        c_parent = await db.execute("SELECT id, name FROM maps WHERE id = ?", (parent_id,))
+        p_row = await c_parent.fetchone()
+        if p_row:
+            parent_name = p_row["name"]
+            c_existing = await db.execute("""
+                SELECT id, name, extra_data FROM nodes 
+                WHERE map_id = ? AND (device_type = 'parent_map' OR extra_data LIKE '%"is_parent_shortcut": true%')
+            """, (map_id,))
+            p_nodes = await c_existing.fetchall()
+            if p_nodes:
+                for pn in p_nodes:
+                    extra = json.loads(pn["extra_data"]) if pn["extra_data"] else {}
+                    if extra.get("target_map_id") != parent_id or pn["name"] != f"📁 ⬆ {parent_name}":
+                        extra["target_map_id"] = parent_id
+                        extra["is_parent_shortcut"] = True
+                        extra["parent_map_name"] = parent_name
+                        extra["role"] = "Mapa Superior"
+                        await db.execute("""
+                            UPDATE nodes SET name = ?, site_name = ?, extra_data = ?, updated_at = CURRENT_TIMESTAMP
+                            WHERE id = ?
+                        """, (f"📁 ⬆ {parent_name}", parent_name, json.dumps(extra), pn["id"]))
+            else:
+                pnode_id = f"node-{uuid.uuid4().hex[:8]}"
+                p_extra = json.dumps({
+                    "target_map_id": parent_id,
+                    "is_parent_shortcut": True,
+                    "parent_map_name": parent_name,
+                    "role": "Mapa Superior"
+                })
+                await db.execute("""
+                    INSERT INTO nodes (id, map_id, name, ip, device_type, site_name, x, y, status, extra_data)
+                    VALUES (?, ?, ?, ?, 'parent_map', ?, 80.0, 80.0, 'ok', ?)
+                """, (pnode_id, map_id, f"📁 ⬆ {parent_name}", "", parent_name, p_extra))
+        else:
+            await db.execute("UPDATE maps SET parent_map_id = NULL WHERE id = ?", (map_id,))
+            c_del = await db.execute("""
+                SELECT id FROM nodes 
+                WHERE map_id = ? AND (device_type = 'parent_map' OR extra_data LIKE '%"is_parent_shortcut": true%')
+            """, (map_id,))
+            for d in await c_del.fetchall():
+                await db.execute("DELETE FROM links WHERE source_node_id = ? OR target_node_id = ?", (d["id"], d["id"]))
+                await db.execute("DELETE FROM nodes WHERE id = ?", (d["id"],))
+    else:
+        c_del = await db.execute("""
+            SELECT id FROM nodes 
+            WHERE map_id = ? AND (device_type = 'parent_map' OR extra_data LIKE '%"is_parent_shortcut": true%')
+        """, (map_id,))
+        for d in await c_del.fetchall():
+            await db.execute("DELETE FROM links WHERE source_node_id = ? OR target_node_id = ?", (d["id"], d["id"]))
+            await db.execute("DELETE FROM nodes WHERE id = ?", (d["id"],))
+
+    # --- 2. Sincronizar Nodos de Submapas Hijos ---
+    c_children = await db.execute("SELECT id, name, description FROM maps WHERE parent_map_id = ?", (map_id,))
+    child_maps = await c_children.fetchall()
+    child_map_dict = {cm["id"]: cm for cm in child_maps}
+
+    c_cur_sub = await db.execute("SELECT id, name, x, y, extra_data FROM nodes WHERE map_id = ? AND device_type = 'submap'", (map_id,))
+    existing_sub_nodes = await c_cur_sub.fetchall()
+
+    covered_child_ids = set()
+    for sn in existing_sub_nodes:
+        extra = json.loads(sn["extra_data"]) if sn["extra_data"] else {}
+        t_id = extra.get("target_map_id")
+
+        if not t_id:
+            clean_name = sn["name"].replace("📁", "").strip().lower()
+            for cm_id, cm in child_map_dict.items():
+                if cm["name"].strip().lower() == clean_name:
+                    t_id = cm_id
+                    extra["target_map_id"] = cm_id
+                    break
+
+        if t_id and t_id in child_map_dict:
+            covered_child_ids.add(t_id)
+            cm = child_map_dict[t_id]
+            expected_name = f"📁 {cm['name']}"
+            if sn["name"] != expected_name and sn["name"].replace("📁", "").strip() != cm["name"].strip():
+                expected_name = f"📁 {cm['name']}"
+
+            needs_update = False
+            if extra.get("target_map_id") != t_id:
+                extra["target_map_id"] = t_id
+                needs_update = True
+            if not extra.get("role"):
+                extra["role"] = "Submapa"
+                needs_update = True
+            if sn["name"] != expected_name:
+                needs_update = True
+
+            if needs_update:
+                await db.execute("""
+                    UPDATE nodes SET name = ?, site_name = ?, extra_data = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                """, (expected_name, cm["description"] or cm["name"], json.dumps(extra), sn["id"]))
+        else:
+            # Submapa desvinculado o inexistente -> eliminar nodo y sus enlaces
+            await db.execute("DELETE FROM links WHERE source_node_id = ? OR target_node_id = ?", (sn["id"], sn["id"]))
+            await db.execute("DELETE FROM nodes WHERE id = ?", (sn["id"],))
+
+    uncovered_children = [cm for cm in child_maps if cm["id"] not in covered_child_ids]
+    if uncovered_children:
+        cur_count = len(covered_child_ids)
+        for idx, cm in enumerate(uncovered_children):
+            slot_idx = cur_count + idx
+            col = slot_idx % 4
+            row = slot_idx // 4
+            x = 80.0 + (col * 220.0)
+            y = 170.0 + (row * 100.0)
+
+            snode_id = f"node-{uuid.uuid4().hex[:8]}"
+            extra = json.dumps({
+                "target_map_id": cm["id"],
+                "role": "Submapa",
+                "site_name": cm["name"]
+            })
+            await db.execute("""
+                INSERT INTO nodes (id, map_id, name, ip, device_type, site_name, x, y, status, extra_data)
+                VALUES (?, ?, ?, '', 'submap', ?, ?, ?, 'ok', ?)
+            """, (snode_id, map_id, f"📁 {cm['name']}", cm["description"] or cm["name"], x, y, extra))
+
+    await db.commit()
+
 @router.get("/{map_id}", response_model=MapDetailOut)
 async def get_map_detail(map_id: str, user: Dict[str, Any] = Depends(get_current_user)):
-    """Obtiene el mapa con todos sus nodos y enlaces."""
+    """Obtiene el mapa con todos sus nodos y enlaces, asegurando automáticamente la presencia de nodos de navegación."""
     async with get_db_connection() as db:
+        # Asegurar y sincronizar nodos de navegación para este mapa
+        await ensure_map_navigation_nodes(db, map_id)
+
         # Obtener mapa
         cursor = await db.execute("SELECT * FROM maps WHERE id = ?", (map_id,))
         m = await cursor.fetchone()
@@ -157,37 +299,25 @@ async def get_map_detail(map_id: str, user: Dict[str, Any] = Depends(get_current
 
 @router.post("", response_model=MapOut, status_code=status.HTTP_201_CREATED)
 async def create_map(map_data: MapCreate, user: Dict[str, Any] = Depends(get_current_user)):
-    """Crea un nuevo mapa de topología."""
+    """Crea un nuevo mapa de topología y sincroniza la navegación jerárquica."""
     new_id = map_data.id or f"map-{uuid.uuid4().hex[:8]}"
+    parent_id = map_data.parent_map_id.strip() if map_data.parent_map_id and map_data.parent_map_id.strip() else None
     async with get_db_connection() as db:
         await db.execute("""
             INSERT INTO maps (id, name, description, parent_map_id, grid_size)
             VALUES (?, ?, ?, ?, ?)
-        """, (new_id, map_data.name, map_data.description, map_data.parent_map_id, map_data.grid_size))
-
-        # Si es un mapa hijo con mapa padre, insertar automáticamente el nodo de navegación hacia el padre
-        if map_data.parent_map_id:
-            c_parent = await db.execute("SELECT name FROM maps WHERE id = ?", (map_data.parent_map_id,))
-            p_row = await c_parent.fetchone()
-            parent_name = p_row["name"] if p_row else "Topología Principal"
-            parent_node_id = f"node-{uuid.uuid4().hex[:8]}"
-            parent_extra = json.dumps({
-                "target_map_id": map_data.parent_map_id,
-                "is_parent_shortcut": True,
-                "parent_map_name": parent_name,
-                "role": "Mapa Superior"
-            })
-            await db.execute("""
-                INSERT INTO nodes (id, map_id, name, ip, device_type, site_name, x, y, status, extra_data)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                parent_node_id, new_id, f"📁 ⬆ {parent_name}", "", "parent_map",
-                parent_name, 80.0, 80.0, "ok", parent_extra
-            ))
-
+        """, (new_id, map_data.name, map_data.description, parent_id, map_data.grid_size or 20))
         await db.commit()
 
-        cursor = await db.execute("SELECT * FROM maps WHERE id = ?", (new_id,))
+        # Sincronizar automáticamente navegación en el nuevo mapa y en el padre
+        await ensure_map_navigation_nodes(db, new_id)
+        if parent_id:
+            await ensure_map_navigation_nodes(db, parent_id)
+
+        cursor = await db.execute("""
+            SELECT m.*, (SELECT COUNT(*) FROM nodes n WHERE n.map_id = m.id) as nodes_count
+            FROM maps m WHERE m.id = ?
+        """, (new_id,))
         m = await cursor.fetchone()
         return MapOut(
             id=m["id"],
@@ -197,7 +327,7 @@ async def create_map(map_data: MapCreate, user: Dict[str, Any] = Depends(get_cur
             grid_size=m["grid_size"],
             created_at=str(m["created_at"]),
             updated_at=str(m["updated_at"]),
-            nodes_count=1 if map_data.parent_map_id else 0,
+            nodes_count=m["nodes_count"] or 0,
             links_count=0
         )
 
@@ -645,25 +775,42 @@ async def populate_map_from_site(map_id: str, req: PopulateMapFromSiteRequest, u
 
 @router.put("/{map_id}", response_model=MapOut)
 async def update_map(map_id: str, map_data: MapUpdate, user: Dict[str, Any] = Depends(get_current_user)):
-    """Actualiza propiedades de un mapa (nombre, descripción, cuadrícula)."""
+    """Actualiza propiedades de un mapa (nombre, descripción, cuadrícula, mapa padre) y sincroniza jerarquía."""
     async with get_db_connection() as db:
         cursor = await db.execute("SELECT * FROM maps WHERE id = ?", (map_id,))
         m = await cursor.fetchone()
         if not m:
             raise HTTPException(status_code=404, detail="Mapa no encontrado")
 
+        old_parent_id = m["parent_map_id"]
         new_name = map_data.name if map_data.name is not None else m["name"]
         new_desc = map_data.description if map_data.description is not None else m["description"]
         new_grid = map_data.grid_size if map_data.grid_size is not None else m["grid_size"]
 
+        new_parent_id = old_parent_id
+        if map_data.parent_map_id is not None:
+            raw_p = map_data.parent_map_id.strip() if map_data.parent_map_id else ""
+            new_parent_id = raw_p if raw_p and raw_p != map_id else None
+
         await db.execute("""
             UPDATE maps
-            SET name = ?, description = ?, grid_size = ?, updated_at = CURRENT_TIMESTAMP
+            SET name = ?, description = ?, grid_size = ?, parent_map_id = ?, updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
-        """, (new_name, new_desc, new_grid, map_id))
+        """, (new_name, new_desc, new_grid, new_parent_id, map_id))
         await db.commit()
 
-        c_updated = await db.execute("SELECT * FROM maps WHERE id = ?", (map_id,))
+        # Sincronizar automáticamente los nodos de navegación en los mapas afectados
+        await ensure_map_navigation_nodes(db, map_id)
+        if old_parent_id and old_parent_id != new_parent_id:
+            await ensure_map_navigation_nodes(db, old_parent_id)
+        if new_parent_id:
+            await ensure_map_navigation_nodes(db, new_parent_id)
+
+        c_updated = await db.execute("""
+            SELECT m.*, (SELECT COUNT(*) FROM nodes n WHERE n.map_id = m.id) as nodes_count,
+                   (SELECT COUNT(*) FROM links l WHERE l.map_id = m.id) as links_count
+            FROM maps m WHERE m.id = ?
+        """, (map_id,))
         u = await c_updated.fetchone()
         return MapOut(
             id=u["id"],
@@ -672,46 +819,69 @@ async def update_map(map_id: str, map_data: MapUpdate, user: Dict[str, Any] = De
             parent_map_id=u["parent_map_id"],
             grid_size=u["grid_size"],
             created_at=str(u["created_at"]),
-            updated_at=str(u["updated_at"])
+            updated_at=str(u["updated_at"]),
+            nodes_count=u["nodes_count"] or 0,
+            links_count=u["links_count"] or 0
         )
 
 @router.delete("/{map_id}")
 async def delete_map(map_id: str, user: Dict[str, Any] = Depends(get_current_user)):
-    """Elimina un mapa, sus submapas hijos recursivamente y todos sus nodos y enlaces asociados."""
+    """
+    Elimina un mapa específico sin destruir sus submapas dependientes.
+    Los submapas hijos se desacoplan (parent_map_id pasa a NULL o nivel independiente),
+    preservando todos sus dispositivos, nodos, enlaces y configuración intactos.
+    """
     if map_id == "default-map":
         raise HTTPException(status_code=400, detail="No se puede eliminar el mapa principal del sistema")
 
     async with get_db_connection() as db:
-        cursor = await db.execute("SELECT id FROM maps WHERE id = ?", (map_id,))
-        if not await cursor.fetchone():
+        cursor = await db.execute("SELECT id, name, parent_map_id FROM maps WHERE id = ?", (map_id,))
+        m = await cursor.fetchone()
+        if not m:
             raise HTTPException(status_code=404, detail="Mapa no encontrado")
 
-        # Recopilar todos los IDs de mapas descendientes de forma recursiva
-        all_map_ids = [map_id]
-        queue = [map_id]
-        while queue:
-            parent = queue.pop(0)
-            c = await db.execute("SELECT id FROM maps WHERE parent_map_id = ?", (parent,))
-            children = await c.fetchall()
-            for child in children:
-                cid = child["id"]
-                all_map_ids.append(cid)
-                queue.append(cid)
+        map_name = m["name"]
+        old_parent_id = m["parent_map_id"]
 
-        placeholders = ",".join(["?"] * len(all_map_ids))
-        await db.execute(f"DELETE FROM links WHERE map_id IN ({placeholders})", all_map_ids)
-        await db.execute(f"DELETE FROM nodes WHERE map_id IN ({placeholders})", all_map_ids)
+        # 1. Desacoplar submapas dependientes (hijos directos) preservando todas sus instancias intactas
+        c_children = await db.execute("SELECT id, name FROM maps WHERE parent_map_id = ?", (map_id,))
+        children = await c_children.fetchall()
+        for child in children:
+            cid = child["id"]
+            # Desvincular parent_map_id para que quede como mapa independiente
+            await db.execute("UPDATE maps SET parent_map_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (cid,))
+            # Limpiar en el submapa hijo el nodo de retorno hacia este mapa eliminado
+            c_pnodes = await db.execute("""
+                SELECT id FROM nodes 
+                WHERE map_id = ? AND (device_type = 'parent_map' OR extra_data LIKE '%"is_parent_shortcut": true%')
+            """, (cid,))
+            for pn in await c_pnodes.fetchall():
+                await db.execute("DELETE FROM links WHERE source_node_id = ? OR target_node_id = ?", (pn["id"], pn["id"]))
+                await db.execute("DELETE FROM nodes WHERE id = ?", (pn["id"],))
 
-        for m_id in all_map_ids:
-            await db.execute("DELETE FROM nodes WHERE device_type = 'submap' AND extra_data LIKE ?", (f'%"{m_id}"%',))
+        # 2. Limpiar en otros mapas los nodos 'submap' que apuntaban a este mapa eliminado
+        c_subnodes = await db.execute("SELECT id FROM nodes WHERE device_type = 'submap' AND extra_data LIKE ?", (f'%"{map_id}"%',))
+        for sn in await c_subnodes.fetchall():
+            await db.execute("DELETE FROM links WHERE source_node_id = ? OR target_node_id = ?", (sn["id"], sn["id"]))
+            await db.execute("DELETE FROM nodes WHERE id = ?", (sn["id"],))
 
-        await db.execute(f"DELETE FROM maps WHERE id IN ({placeholders})", all_map_ids)
+        # 3. Eliminar enlaces y nodos pertenecientes ÚNICAMENTE a este mapa
+        await db.execute("DELETE FROM links WHERE map_id = ?", (map_id,))
+        await db.execute("DELETE FROM nodes WHERE map_id = ?", (map_id,))
+
+        # 4. Eliminar el registro del mapa
+        await db.execute("DELETE FROM maps WHERE id = ?", (map_id,))
         await db.commit()
+
+        # Si el mapa eliminado tenía un padre, sincronizar los nodos de navegación del padre
+        if old_parent_id:
+            await ensure_map_navigation_nodes(db, old_parent_id)
 
         return {
             "status": "success",
-            "message": f"Se eliminaron {len(all_map_ids)} mapa(s) correctamente",
-            "deleted_ids": all_map_ids
+            "message": f"Se eliminó el mapa '{map_name}'. Se preservaron {len(children)} submapa(s) hijo(s) de forma independiente.",
+            "deleted_id": map_id,
+            "preserved_child_ids": [c["id"] for c in children]
         }
 
 @router.get("/{map_id}/breadcrumb")
@@ -739,102 +909,29 @@ async def get_map_breadcrumb(map_id: str, user: Dict[str, Any] = Depends(get_cur
 
 @router.post("/{map_id}/ensure-parent-node")
 async def ensure_parent_node(map_id: str, user: Dict[str, Any] = Depends(get_current_user)):
-    """Verifica e inserta el nodo de navegación hacia el mapa padre si no existe en este submapa."""
+    """Sincroniza y asegura los nodos de navegación (padre y submapas) para este mapa."""
     async with get_db_connection() as db:
-        c_map = await db.execute("SELECT id, name, parent_map_id FROM maps WHERE id = ?", (map_id,))
-        m = await c_map.fetchone()
-        if not m:
-            raise HTTPException(status_code=404, detail="Mapa no encontrado")
-
-        if not m["parent_map_id"]:
-            return {"status": "ignored", "message": "Este mapa es de nivel raíz y no tiene mapa padre."}
-
-        parent_id = m["parent_map_id"]
-        c_parent = await db.execute("SELECT id, name FROM maps WHERE id = ?", (parent_id,))
-        p_row = await c_parent.fetchone()
-        parent_name = p_row["name"] if p_row else "Topología Principal"
-
-        # Verificar si ya existe un nodo de retorno
-        c_existing = await db.execute("""
-            SELECT * FROM nodes 
-            WHERE map_id = ? AND (device_type = 'parent_map' OR extra_data LIKE '%"is_parent_shortcut": true%')
-        """, (map_id,))
-        existing_node = await c_existing.fetchone()
-        if existing_node:
-            return {
-                "status": "exists",
-                "message": f"El nodo de navegación hacia '{parent_name}' ya está presente en el mapa.",
-                "node_id": existing_node["id"]
-            }
-
-        # Crear el nodo de navegación
-        node_id = f"node-{uuid.uuid4().hex[:8]}"
-        extra = json.dumps({
-            "target_map_id": parent_id,
-            "is_parent_shortcut": True,
-            "parent_map_name": parent_name,
-            "role": "Mapa Superior"
-        })
-
-        await db.execute("""
-            INSERT INTO nodes (id, map_id, name, ip, device_type, site_name, x, y, status, extra_data)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            node_id, map_id, f"📁 ⬆ {parent_name}", "", "parent_map",
-            parent_name, 80.0, 80.0, "ok", extra
-        ))
-        await db.commit()
-
-        return {
-            "status": "created",
-            "message": f"✔ Nodo de navegación hacia '{parent_name}' insertado correctamente en el lienzo.",
-            "node_id": node_id
-        }
-
-@router.post("/retrofit-parent-nodes")
-async def retrofit_parent_nodes(user: Dict[str, Any] = Depends(get_current_user)):
-    """Inserta el nodo de navegación hacia el mapa padre en todos los submapas que carezcan de él."""
-    async with get_db_connection() as db:
-        c_maps = await db.execute("SELECT id, name, parent_map_id FROM maps WHERE parent_map_id IS NOT NULL AND parent_map_id != ''")
-        submaps = await c_maps.fetchall()
-
-        c_all = await db.execute("SELECT id, name FROM maps")
-        all_maps = {r["id"]: r["name"] for r in await c_all.fetchall()}
-
-        c_pnodes = await db.execute("SELECT map_id FROM nodes WHERE device_type = 'parent_map' OR extra_data LIKE '%\"is_parent_shortcut\": true%'")
-        maps_with_parent_node = {r["map_id"] for r in await c_pnodes.fetchall()}
-
-        created_count = 0
-        for sm in submaps:
-            sm_id = sm["id"]
-            if sm_id in maps_with_parent_node:
-                continue
-
-            parent_id = sm["parent_map_id"]
-            parent_name = all_maps.get(parent_id, "Topología Principal")
-            node_id = f"node-{uuid.uuid4().hex[:8]}"
-            extra = json.dumps({
-                "target_map_id": parent_id,
-                "is_parent_shortcut": True,
-                "parent_map_name": parent_name,
-                "role": "Mapa Superior"
-            })
-
-            await db.execute("""
-                INSERT INTO nodes (id, map_id, name, ip, device_type, site_name, x, y, status, extra_data)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                node_id, sm_id, f"📁 ⬆ {parent_name}", "", "parent_map",
-                parent_name, 80.0, 80.0, "ok", extra
-            ))
-            created_count += 1
-
-        await db.commit()
+        await ensure_map_navigation_nodes(db, map_id)
         return {
             "status": "success",
-            "message": f"Se insertó el nodo de navegación a mapa padre en {created_count} submapas.",
-            "retrofitted_count": created_count,
-            "total_submaps": len(submaps)
+            "message": "✔ Nodos de navegación sincronizados correctamente para el mapa.",
+            "map_id": map_id
+        }
+
+@router.post("/sync-all-navigation-nodes")
+@router.post("/retrofit-parent-nodes")
+async def sync_all_navigation_nodes(user: Dict[str, Any] = Depends(get_current_user)):
+    """Sincroniza todos los nodos de navegación (submapas y padres) en todos los mapas del sistema."""
+    async with get_db_connection() as db:
+        c_maps = await db.execute("SELECT id FROM maps")
+        all_maps = await c_maps.fetchall()
+        for m in all_maps:
+            await ensure_map_navigation_nodes(db, m["id"])
+
+        return {
+            "status": "success",
+            "message": f"Se sincronizaron los nodos de navegación en {len(all_maps)} mapas.",
+            "total_maps": len(all_maps)
         }
 
 # --- Endpoints de Nodos ---
