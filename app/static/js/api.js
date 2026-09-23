@@ -118,6 +118,22 @@ const API = {
     throw new Error(await res.text());
   },
 
+  async ensureParentNode(mapId) {
+    const res = await this.fetch(`/api/maps/${mapId}/ensure-parent-node`, {
+      method: 'POST'
+    });
+    if (res.ok) return await res.json();
+    throw new Error(await res.text());
+  },
+
+  async retrofitParentNodes() {
+    const res = await this.fetch('/api/maps/retrofit-parent-nodes', {
+      method: 'POST'
+    });
+    if (res.ok) return await res.json();
+    throw new Error(await res.text());
+  },
+
   async bulkCreateMapsFromSites(params = {}) {
     const res = await this.fetch('/api/maps/bulk-from-sites', {
       method: 'POST',

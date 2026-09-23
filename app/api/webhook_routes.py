@@ -105,6 +105,22 @@ async def receive_netbox_webhook(request: Request):
                     site_name, sub_x, sub_y, "ok", sub_extra
                 ))
 
+                # 3. Insertar acceso directo de retorno al mapa padre dentro del nuevo submapa
+                parent_node_id = f"node-{uuid.uuid4().hex[:8]}"
+                parent_extra = json.dumps({
+                    "target_map_id": "default-map",
+                    "is_parent_shortcut": True,
+                    "parent_map_name": "Topología Principal",
+                    "role": "Mapa Superior"
+                })
+                await db.execute("""
+                    INSERT INTO nodes (id, map_id, name, ip, device_type, site_name, x, y, status, extra_data)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    parent_node_id, new_map_id, "📁 ⬆ Topología Principal", "", "parent_map",
+                    "Topología Principal", 80.0, 80.0, "ok", parent_extra
+                ))
+
                 await db.commit()
 
                 logger.info(f"✨ Webhook NetBox: ¡Nuevo sitio '{site_name}' detectado! Submapa '{new_map_id}' generado automáticamente.")

@@ -164,6 +164,27 @@ async def create_map(map_data: MapCreate, user: Dict[str, Any] = Depends(get_cur
             INSERT INTO maps (id, name, description, parent_map_id, grid_size)
             VALUES (?, ?, ?, ?, ?)
         """, (new_id, map_data.name, map_data.description, map_data.parent_map_id, map_data.grid_size))
+
+        # Si es un mapa hijo con mapa padre, insertar automáticamente el nodo de navegación hacia el padre
+        if map_data.parent_map_id:
+            c_parent = await db.execute("SELECT name FROM maps WHERE id = ?", (map_data.parent_map_id,))
+            p_row = await c_parent.fetchone()
+            parent_name = p_row["name"] if p_row else "Topología Principal"
+            parent_node_id = f"node-{uuid.uuid4().hex[:8]}"
+            parent_extra = json.dumps({
+                "target_map_id": map_data.parent_map_id,
+                "is_parent_shortcut": True,
+                "parent_map_name": parent_name,
+                "role": "Mapa Superior"
+            })
+            await db.execute("""
+                INSERT INTO nodes (id, map_id, name, ip, device_type, site_name, x, y, status, extra_data)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                parent_node_id, new_id, f"📁 ⬆ {parent_name}", "", "parent_map",
+                parent_name, 80.0, 80.0, "ok", parent_extra
+            ))
+
         await db.commit()
 
         cursor = await db.execute("SELECT * FROM maps WHERE id = ?", (new_id,))
@@ -176,7 +197,7 @@ async def create_map(map_data: MapCreate, user: Dict[str, Any] = Depends(get_cur
             grid_size=m["grid_size"],
             created_at=str(m["created_at"]),
             updated_at=str(m["updated_at"]),
-            nodes_count=0,
+            nodes_count=1 if map_data.parent_map_id else 0,
             links_count=0
         )
 
@@ -269,9 +290,30 @@ async def create_map_from_site(req: CreateMapFromSiteRequest, user: Dict[str, An
                 extra_data=json.loads(sub_r["extra_data"]) if sub_r["extra_data"] else None
             )
 
-        # 3. Si auto_populate es True, insertar los equipos organizados jerárquicamente
+        # 3. Si tiene mapa padre, insertar nodo de navegación de retorno hacia el mapa padre
+        if req.parent_map_id:
+            c_parent = await db.execute("SELECT name FROM maps WHERE id = ?", (req.parent_map_id,))
+            p_row = await c_parent.fetchone()
+            parent_name = p_row["name"] if p_row else "Topología Principal"
+            parent_node_id = f"node-{uuid.uuid4().hex[:8]}"
+            parent_extra = json.dumps({
+                "target_map_id": req.parent_map_id,
+                "is_parent_shortcut": True,
+                "parent_map_name": parent_name,
+                "role": "Mapa Superior"
+            })
+            await db.execute("""
+                INSERT INTO nodes (id, map_id, name, ip, device_type, site_name, x, y, status, extra_data)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                parent_node_id, new_map_id, f"📁 ⬆ {parent_name}", "", "parent_map",
+                parent_name, 80.0, 80.0, "ok", parent_extra
+            ))
+
+        # 4. Si auto_populate es True, insertar los equipos organizados jerárquicamente
         if req.auto_populate and devices:
-            arranged = arrange_site_nodes(devices, start_x=80.0, start_y=80.0)
+            devices_start_y = 170.0 if req.parent_map_id else 80.0
+            arranged = arrange_site_nodes(devices, start_x=80.0, start_y=devices_start_y)
             for item in arranged:
                 d = item["device"]
                 nid = f"node-{uuid.uuid4().hex[:8]}"
@@ -344,6 +386,7 @@ async def bulk_create_maps_from_sites(
 
     async with get_db_connection() as db:
         # Verificar mapa padre si se especificó
+        parent_name_for_bulk = "Topología Principal"
         if parent_map_id:
             c_parent = await db.execute("SELECT id, name FROM maps WHERE id = ?", (parent_map_id,))
             parent_row = await c_parent.fetchone()
@@ -355,6 +398,8 @@ async def bulk_create_maps_from_sites(
                     """)
                 else:
                     parent_map_id = None
+            else:
+                parent_name_for_bulk = parent_row["name"]
 
         # Cargar mapas existentes para evitar duplicados
         c_maps = await db.execute("SELECT id, name FROM maps")
@@ -414,9 +459,27 @@ async def bulk_create_maps_from_sites(
             created_maps_count += 1
             created_maps.append({"id": new_map_id, "name": site_name, "devices_count": len(site_devices)})
 
-            # 2. Poblar equipos del sitio con distribución jerárquica
+            # 2. Si tiene mapa padre, insertar acceso directo hacia el mapa padre dentro del submapa
+            if parent_map_id:
+                parent_node_id = f"node-{uuid.uuid4().hex[:8]}"
+                parent_extra = json.dumps({
+                    "target_map_id": parent_map_id,
+                    "is_parent_shortcut": True,
+                    "parent_map_name": parent_name_for_bulk,
+                    "role": "Mapa Superior"
+                })
+                await db.execute("""
+                    INSERT INTO nodes (id, map_id, name, ip, device_type, site_name, x, y, status, extra_data)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    parent_node_id, new_map_id, f"📁 ⬆ {parent_name_for_bulk}", "", "parent_map",
+                    parent_name_for_bulk, 80.0, 80.0, "ok", parent_extra
+                ))
+
+            # 3. Poblar equipos del sitio con distribución jerárquica
             if req.auto_populate_devices and site_devices:
-                arranged = arrange_site_nodes(site_devices, start_x=80.0, start_y=80.0)
+                dev_start_y = 170.0 if parent_map_id else 80.0
+                arranged = arrange_site_nodes(site_devices, start_x=80.0, start_y=dev_start_y)
                 for item in arranged:
                     d = item["device"]
                     nid = f"node-{uuid.uuid4().hex[:8]}"
@@ -436,7 +499,7 @@ async def bulk_create_maps_from_sites(
                     ))
                 total_devices_populated += len(site_devices)
 
-            # 3. Insertar acceso directo de submapa en el mapa padre
+            # 4. Insertar acceso directo de submapa en el mapa padre
             if req.insert_submap_nodes and parent_map_id:
                 if not (req.skip_existing and site_lower in existing_submap_names):
                     col = submap_idx % cols
@@ -479,18 +542,46 @@ async def bulk_create_maps_from_sites(
 @router.post("/{map_id}/populate-from-site")
 async def populate_map_from_site(map_id: str, req: PopulateMapFromSiteRequest, user: Dict[str, Any] = Depends(get_current_user)):
     """Puebla un mapa existente con los equipos de su sitio de NetBox correspondiente sin duplicar."""
+    # Forzar refresco fresco desde NetBox
+    await inventory_service.refresh_cache(force=True)
+
     async with get_db_connection() as db:
         cursor_map = await db.execute("SELECT * FROM maps WHERE id = ?", (map_id,))
         m = await cursor_map.fetchone()
         if not m:
             raise HTTPException(status_code=404, detail="Mapa no encontrado")
 
+        # Asegurar que si el mapa tiene parent_map_id tenga su nodo de navegación hacia el padre
+        if m["parent_map_id"]:
+            c_pnode = await db.execute("""
+                SELECT id FROM nodes 
+                WHERE map_id = ? AND (device_type = 'parent_map' OR extra_data LIKE '%"is_parent_shortcut": true%')
+            """, (map_id,))
+            if not await c_pnode.fetchone():
+                c_parent = await db.execute("SELECT name FROM maps WHERE id = ?", (m["parent_map_id"],))
+                p_row = await c_parent.fetchone()
+                parent_name = p_row["name"] if p_row else "Topología Principal"
+                p_node_id = f"node-{uuid.uuid4().hex[:8]}"
+                p_extra = json.dumps({
+                    "target_map_id": m["parent_map_id"],
+                    "is_parent_shortcut": True,
+                    "parent_map_name": parent_name,
+                    "role": "Mapa Superior"
+                })
+                await db.execute("""
+                    INSERT INTO nodes (id, map_id, name, ip, device_type, site_name, x, y, status, extra_data)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    p_node_id, map_id, f"📁 ⬆ {parent_name}", "", "parent_map",
+                    parent_name, 80.0, 80.0, "ok", p_extra
+                ))
+
         site_name = (req.site_name or m["name"]).strip()
         devices = await inventory_service.get_devices_by_site(site_name)
         if not devices:
             all_sites = await inventory_service.get_sites()
             for s in all_sites:
-                if s["name"].lower() in site_name.lower() or site_name.lower() in s["name"].lower():
+                if s["name"].lower() == site_name.lower() or s["name"].lower() in site_name.lower() or site_name.lower() in s["name"].lower():
                     site_name = s["name"]
                     devices = await inventory_service.get_devices_by_site(site_name)
                     break
@@ -498,7 +589,7 @@ async def populate_map_from_site(map_id: str, req: PopulateMapFromSiteRequest, u
         if not devices:
             raise HTTPException(status_code=404, detail=f"No se encontraron dispositivos en NetBox para el sitio '{site_name}'")
 
-        cursor_existing = await db.execute("SELECT device_id, name FROM nodes WHERE map_id = ?", (map_id,))
+        cursor_existing = await db.execute("SELECT device_id, name, y FROM nodes WHERE map_id = ?", (map_id,))
         existing = await cursor_existing.fetchall()
         existing_device_ids = {r["device_id"] for r in existing if r["device_id"]}
         existing_names = {r["name"].lower() for r in existing if r["name"]}
@@ -506,14 +597,21 @@ async def populate_map_from_site(map_id: str, req: PopulateMapFromSiteRequest, u
         to_insert = [d for d in devices if d.get("id") not in existing_device_ids and d.get("name", "").lower() not in existing_names]
 
         if not to_insert:
+            await db.commit()
             return {
                 "status": "info",
-                "message": f"Todos los {len(devices)} equipos del sitio '{site_name}' ya están en este mapa",
+                "message": f"Todos los {len(devices)} equipos del sitio '{site_name}' ya están presentes en este mapa.",
                 "added_count": 0,
+                "total_devices": len(devices),
                 "site_name": site_name
             }
 
-        arranged = arrange_site_nodes(to_insert, start_x=80.0, start_y=80.0)
+        start_y = 170.0 if m["parent_map_id"] else 80.0
+        if existing:
+            max_y = max((r["y"] for r in existing if r["y"] is not None), default=80.0)
+            start_y = max(start_y, max_y + 120.0)
+
+        arranged = arrange_site_nodes(to_insert, start_x=80.0, start_y=start_y)
         for item in arranged:
             d = item["device"]
             nid = f"node-{uuid.uuid4().hex[:8]}"
@@ -536,8 +634,9 @@ async def populate_map_from_site(map_id: str, req: PopulateMapFromSiteRequest, u
 
         return {
             "status": "success",
-            "message": f"Se agregaron {len(to_insert)} equipos del sitio '{site_name}' al mapa",
+            "message": f"✔ ¡Sincronización completada! Se agregaron {len(to_insert)} nuevos equipos del sitio '{site_name}' al mapa (Total: {len(existing) + len(to_insert)}).",
             "added_count": len(to_insert),
+            "total_devices": len(devices),
             "site_name": site_name
         }
 
@@ -634,6 +733,106 @@ async def get_map_breadcrumb(map_id: str, user: Dict[str, Any] = Depends(get_cur
             curr_id = row["parent_map_id"]
 
     return breadcrumbs
+
+@router.post("/{map_id}/ensure-parent-node")
+async def ensure_parent_node(map_id: str, user: Dict[str, Any] = Depends(get_current_user)):
+    """Verifica e inserta el nodo de navegación hacia el mapa padre si no existe en este submapa."""
+    async with get_db_connection() as db:
+        c_map = await db.execute("SELECT id, name, parent_map_id FROM maps WHERE id = ?", (map_id,))
+        m = await c_map.fetchone()
+        if not m:
+            raise HTTPException(status_code=404, detail="Mapa no encontrado")
+
+        if not m["parent_map_id"]:
+            return {"status": "ignored", "message": "Este mapa es de nivel raíz y no tiene mapa padre."}
+
+        parent_id = m["parent_map_id"]
+        c_parent = await db.execute("SELECT id, name FROM maps WHERE id = ?", (parent_id,))
+        p_row = await c_parent.fetchone()
+        parent_name = p_row["name"] if p_row else "Topología Principal"
+
+        # Verificar si ya existe un nodo de retorno
+        c_existing = await db.execute("""
+            SELECT * FROM nodes 
+            WHERE map_id = ? AND (device_type = 'parent_map' OR extra_data LIKE '%"is_parent_shortcut": true%')
+        """, (map_id,))
+        existing_node = await c_existing.fetchone()
+        if existing_node:
+            return {
+                "status": "exists",
+                "message": f"El nodo de navegación hacia '{parent_name}' ya está presente en el mapa.",
+                "node_id": existing_node["id"]
+            }
+
+        # Crear el nodo de navegación
+        node_id = f"node-{uuid.uuid4().hex[:8]}"
+        extra = json.dumps({
+            "target_map_id": parent_id,
+            "is_parent_shortcut": True,
+            "parent_map_name": parent_name,
+            "role": "Mapa Superior"
+        })
+
+        await db.execute("""
+            INSERT INTO nodes (id, map_id, name, ip, device_type, site_name, x, y, status, extra_data)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            node_id, map_id, f"📁 ⬆ {parent_name}", "", "parent_map",
+            parent_name, 80.0, 80.0, "ok", extra
+        ))
+        await db.commit()
+
+        return {
+            "status": "created",
+            "message": f"✔ Nodo de navegación hacia '{parent_name}' insertado correctamente en el lienzo.",
+            "node_id": node_id
+        }
+
+@router.post("/retrofit-parent-nodes")
+async def retrofit_parent_nodes(user: Dict[str, Any] = Depends(get_current_user)):
+    """Inserta el nodo de navegación hacia el mapa padre en todos los submapas que carezcan de él."""
+    async with get_db_connection() as db:
+        c_maps = await db.execute("SELECT id, name, parent_map_id FROM maps WHERE parent_map_id IS NOT NULL AND parent_map_id != ''")
+        submaps = await c_maps.fetchall()
+
+        c_all = await db.execute("SELECT id, name FROM maps")
+        all_maps = {r["id"]: r["name"] for r in await c_all.fetchall()}
+
+        c_pnodes = await db.execute("SELECT map_id FROM nodes WHERE device_type = 'parent_map' OR extra_data LIKE '%\"is_parent_shortcut\": true%'")
+        maps_with_parent_node = {r["map_id"] for r in await c_pnodes.fetchall()}
+
+        created_count = 0
+        for sm in submaps:
+            sm_id = sm["id"]
+            if sm_id in maps_with_parent_node:
+                continue
+
+            parent_id = sm["parent_map_id"]
+            parent_name = all_maps.get(parent_id, "Topología Principal")
+            node_id = f"node-{uuid.uuid4().hex[:8]}"
+            extra = json.dumps({
+                "target_map_id": parent_id,
+                "is_parent_shortcut": True,
+                "parent_map_name": parent_name,
+                "role": "Mapa Superior"
+            })
+
+            await db.execute("""
+                INSERT INTO nodes (id, map_id, name, ip, device_type, site_name, x, y, status, extra_data)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                node_id, sm_id, f"📁 ⬆ {parent_name}", "", "parent_map",
+                parent_name, 80.0, 80.0, "ok", extra
+            ))
+            created_count += 1
+
+        await db.commit()
+        return {
+            "status": "success",
+            "message": f"Se insertó el nodo de navegación a mapa padre en {created_count} submapas.",
+            "retrofitted_count": created_count,
+            "total_submaps": len(submaps)
+        }
 
 # --- Endpoints de Nodos ---
 

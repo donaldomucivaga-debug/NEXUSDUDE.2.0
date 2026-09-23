@@ -14,7 +14,10 @@ services:
       - .env
     networks:
       - monitoreo_default
+      - netbox-docker_default
 
 networks:
   monitoreo_default:
+    external: true
+  netbox-docker_default:
     external: true

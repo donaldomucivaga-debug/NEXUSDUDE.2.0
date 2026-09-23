@@ -42,6 +42,11 @@
         <span id="btn-populate-text">Poblar desde Sitio NetBox</span>
       </button>
 
+      <button class="btn" id="btn-ensure-parent-node" style="display: none; background: rgba(56, 189, 248, 0.15); border-color: #38bdf8; color: #38bdf8;" title="Insertar o verificar nodo de navegación para subir al mapa padre en este lienzo">
+        <i class="fas fa-level-up-alt"></i>
+        <span>Insertar Acceso a Padre</span>
+      </button>
+
       <button class="btn" id="btn-toggle-link-mode" title="Activar modo para trazar enlaces entre nodos">
         <i class="fas fa-link"></i>
         <span>Conectar Enlace</span>
@@ -57,7 +62,7 @@
         <span>Sincronizar Zabbix</span>
       </button>
 
-      <a href="https://10.9.8.52:5001/#/dashboard" target="_blank" class="btn" title="Ir al Dashboard de Nexus Orchestrator">
+      <a href="https://10.9.1.6:5001/#/dashboard" target="_blank" class="btn" title="Ir al Dashboard de Nexus Orchestrator">
         <i class="fas fa-external-link-alt"></i>
         <span>Nexus</span>
       </a>
@@ -78,10 +83,10 @@
     <!-- Left Sidebar: Tabs (Inventario / Mapas / Propiedades) -->
     <aside class="sidebar">
       <div class="sidebar-tabs">
-        <div class="sidebar-tab active" data-tab="tab-inventory">
+        <div class="sidebar-tab" data-tab="tab-inventory">
           <i class="fas fa-search"></i> Inventario
         </div>
-        <div class="sidebar-tab" data-tab="tab-maps">
+        <div class="sidebar-tab active" data-tab="tab-maps">
           <i class="fas fa-project-diagram"></i> Mapas
         </div>
         <div class="sidebar-tab" data-tab="tab-properties">
@@ -93,7 +98,7 @@
       </div>
 
       <!-- Tab 1: Inventario NetBox / Zabbix -->
-      <div class="sidebar-body" id="tab-inventory">
+      <div class="sidebar-body" id="tab-inventory" style="display: none;">
         <div class="search-box">
           <input type="text" class="input-text" id="input-search-devices" placeholder="Buscar por nombre, IP, modelo...">
           <div class="filter-grid">
@@ -118,7 +123,7 @@
       </div>
 
       <!-- Tab 2: Jerarquía de Mapas y Submapas (CRUD) -->
-      <div class="sidebar-body" id="tab-maps" style="display: none;">
+      <div class="sidebar-body" id="tab-maps">
         <div class="maps-toolbar">
           <input type="text" class="input-text" id="input-search-maps" placeholder="Buscar mapa o submapa...">
           <div class="maps-actions-row">
@@ -260,27 +265,108 @@
                 </div>
               </div>
 
-              <!-- Telemetría Inalámbrica / Radio (Cambium & Wireless) -->
+              <!-- Telemetría Inalámbrica / Radio (Cambium, Altai, Ubiquiti, Mimosa) -->
               <div id="telemetry-wireless-box" style="display: none; margin-top: 6px; margin-bottom: 6px; background: rgba(15,23,42,0.6); border: 1px solid var(--border-color); border-radius: 8px; padding: 8px;">
-                <div style="font-size: 0.72rem; font-weight: 700; color: #38bdf8; margin-bottom: 6px; display: flex; align-items: center; gap: 5px;">
-                  <i class="fas fa-broadcast-tower"></i> Parámetros de Radio Inalámbrico
+                <div style="font-size: 0.72rem; font-weight: 700; color: #38bdf8; margin-bottom: 6px; display: flex; align-items: center; justify-content: space-between;">
+                  <span><i class="fas fa-broadcast-tower"></i> Parámetros Inalámbricos</span>
+                  <span id="telemetry-radio-mode" style="font-size: 0.65rem; background: rgba(56,189,248,0.15); color: #38bdf8; padding: 1px 5px; border-radius: 4px; font-weight: bold;">—</span>
                 </div>
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px; font-size: 0.74rem;">
                   <div style="background: var(--bg-card); border-radius: 5px; padding: 4px 6px;">
-                    <span style="color: var(--text-muted); font-size: 0.65rem; display: block;">Ancho de Canal:</span>
+                    <span style="color: var(--text-muted); font-size: 0.62rem; display: block;">Ancho de Canal:</span>
                     <strong id="telemetry-channel-bw" style="color: #38bdf8; font-family: monospace;">—</strong>
                   </div>
                   <div style="background: var(--bg-card); border-radius: 5px; padding: 4px 6px;">
-                    <span style="color: var(--text-muted); font-size: 0.65rem; display: block;">Frecuencia:</span>
+                    <span style="color: var(--text-muted); font-size: 0.62rem; display: block;">Frecuencia:</span>
                     <strong id="telemetry-freq" style="color: #f8fafc; font-family: monospace;">—</strong>
                   </div>
                   <div style="background: var(--bg-card); border-radius: 5px; padding: 4px 6px;">
-                    <span style="color: var(--text-muted); font-size: 0.65rem; display: block;">Señal RSSI:</span>
+                    <span style="color: var(--text-muted); font-size: 0.62rem; display: block;">Señal RSSI:</span>
                     <strong id="telemetry-rssi" style="color: #10b981; font-family: monospace;">—</strong>
                   </div>
                   <div style="background: var(--bg-card); border-radius: 5px; padding: 4px 6px;">
-                    <span style="color: var(--text-muted); font-size: 0.65rem; display: block;">SNR / Ruido:</span>
+                    <span style="color: var(--text-muted); font-size: 0.62rem; display: block;">SNR / Ruido:</span>
                     <strong id="telemetry-snr" style="color: #f59e0b; font-family: monospace;">—</strong>
+                  </div>
+                  <div id="box-telemetry-mcs" style="background: var(--bg-card); border-radius: 5px; padding: 4px 6px; display: none;">
+                    <span style="color: var(--text-muted); font-size: 0.62rem; display: block;">Modulación (MCS):</span>
+                    <strong id="telemetry-mcs" style="color: #a855f7; font-family: monospace;">—</strong>
+                  </div>
+                  <div id="box-telemetry-distance" style="background: var(--bg-card); border-radius: 5px; padding: 4px 6px; display: none;">
+                    <span style="color: var(--text-muted); font-size: 0.62rem; display: block;">Distancia Enlace:</span>
+                    <strong id="telemetry-distance" style="color: #38bdf8; font-family: monospace;">—</strong>
+                  </div>
+                  <div id="box-telemetry-ssid" style="background: var(--bg-card); border-radius: 5px; padding: 4px 6px; grid-column: span 2; display: none;">
+                    <span style="color: var(--text-muted); font-size: 0.62rem; display: block;">SSID / Sector Conectado:</span>
+                    <strong id="telemetry-ssid" style="color: #cbd5e1; font-family: monospace; font-size: 0.68rem; word-break: break-all;">—</strong>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Hardware & Recursos (MikroTik / Routers / Switches) -->
+              <div id="telemetry-hardware-box" style="display: none; margin-top: 6px; margin-bottom: 6px; background: rgba(15,23,42,0.6); border: 1px solid var(--border-color); border-radius: 8px; padding: 8px;">
+                <div style="font-size: 0.72rem; font-weight: 700; color: #a855f7; margin-bottom: 6px; display: flex; align-items: center; gap: 5px;">
+                  <i class="fas fa-microchip"></i> Recursos de Hardware & Sensores
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px; font-size: 0.74rem;">
+                  <div style="background: var(--bg-card); border-radius: 5px; padding: 4px 6px;">
+                    <span style="color: var(--text-muted); font-size: 0.62rem; display: block;">Uso de CPU:</span>
+                    <strong id="telemetry-cpu-util" style="color: #38bdf8; font-family: monospace;">—</strong>
+                  </div>
+                  <div style="background: var(--bg-card); border-radius: 5px; padding: 4px 6px;">
+                    <span style="color: var(--text-muted); font-size: 0.62rem; display: block;">Memoria RAM:</span>
+                    <strong id="telemetry-mem-util" style="color: #10b981; font-family: monospace;">—</strong>
+                  </div>
+                  <div style="background: var(--bg-card); border-radius: 5px; padding: 4px 6px;">
+                    <span style="color: var(--text-muted); font-size: 0.62rem; display: block;">Temperatura CPU:</span>
+                    <strong id="telemetry-temp-cpu" style="color: #f59e0b; font-family: monospace;">—</strong>
+                  </div>
+                  <div style="background: var(--bg-card); border-radius: 5px; padding: 4px 6px;">
+                    <span style="color: var(--text-muted); font-size: 0.62rem; display: block;">Voltaje / Board:</span>
+                    <strong id="telemetry-voltage" style="color: #cbd5e1; font-family: monospace;">—</strong>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Sistema & Inventario Zabbix -->
+              <div id="telemetry-system-box" style="display: none; margin-top: 6px; margin-bottom: 6px; background: rgba(15,23,42,0.6); border: 1px solid var(--border-color); border-radius: 8px; padding: 8px;">
+                <div style="font-size: 0.72rem; font-weight: 700; color: #10b981; margin-bottom: 6px; display: flex; align-items: center; gap: 5px;">
+                  <i class="fas fa-server"></i> Sistema & Inventario
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px; font-size: 0.74rem;">
+                  <div style="background: var(--bg-card); border-radius: 5px; padding: 4px 6px; grid-column: span 2;">
+                    <span style="color: var(--text-muted); font-size: 0.62rem; display: block;">Modelo / Firmware:</span>
+                    <strong id="telemetry-model-fw" style="color: #f8fafc; font-family: monospace; font-size: 0.7rem;">—</strong>
+                  </div>
+                  <div style="background: var(--bg-card); border-radius: 5px; padding: 4px 6px;">
+                    <span style="color: var(--text-muted); font-size: 0.62rem; display: block;">N° de Serie:</span>
+                    <strong id="telemetry-serial" style="color: #38bdf8; font-family: monospace; font-size: 0.68rem;">—</strong>
+                  </div>
+                  <div style="background: var(--bg-card); border-radius: 5px; padding: 4px 6px;">
+                    <span style="color: var(--text-muted); font-size: 0.62rem; display: block;">Tiempo Activo:</span>
+                    <strong id="telemetry-uptime" style="color: #10b981; font-family: monospace; font-size: 0.68rem;">—</strong>
+                  </div>
+                  <div id="box-telemetry-mac" style="background: var(--bg-card); border-radius: 5px; padding: 4px 6px; grid-column: span 2; display: none;">
+                    <span style="color: var(--text-muted); font-size: 0.62rem; display: block;">Dirección MAC:</span>
+                    <strong id="telemetry-mac" style="color: #cbd5e1; font-family: monospace; font-size: 0.68rem;">—</strong>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Tráfico de Red LAN -->
+              <div id="telemetry-lan-box" style="display: none; margin-top: 6px; margin-bottom: 6px; background: rgba(15,23,42,0.6); border: 1px solid var(--border-color); border-radius: 8px; padding: 8px;">
+                <div style="font-size: 0.72rem; font-weight: 700; color: #38bdf8; margin-bottom: 6px; display: flex; align-items: center; justify-content: space-between;">
+                  <span><i class="fas fa-network-wired"></i> Interfaz LAN</span>
+                  <span id="telemetry-lan-status" style="font-size: 0.65rem; background: rgba(16,185,129,0.15); color: #10b981; padding: 1px 5px; border-radius: 4px; font-weight: bold;">Up</span>
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px; font-size: 0.74rem;">
+                  <div style="background: var(--bg-card); border-radius: 5px; padding: 4px 6px;">
+                    <span style="color: var(--text-muted); font-size: 0.62rem; display: block;"><i class="fas fa-arrow-down" style="color: #10b981;"></i> Tráfico Bajada:</span>
+                    <strong id="telemetry-lan-in" style="color: #10b981; font-family: monospace;">—</strong>
+                  </div>
+                  <div style="background: var(--bg-card); border-radius: 5px; padding: 4px 6px;">
+                    <span style="color: var(--text-muted); font-size: 0.62rem; display: block;"><i class="fas fa-arrow-up" style="color: #38bdf8;"></i> Tráfico Subida:</span>
+                    <strong id="telemetry-lan-out" style="color: #38bdf8; font-family: monospace;">—</strong>
                   </div>
                 </div>
               </div>
@@ -493,10 +579,17 @@
           </button>
         </div>
 
-        <!-- Selector de Sitio NetBox -->
+        <!-- Selector de Sitio NetBox con Buscador en Tiempo Real -->
         <div class="prop-row" id="row-site-picker" style="display: none;">
-          <label class="prop-label"><i class="fas fa-map-marker-alt"></i> Seleccionar Sitio NetBox</label>
-          <select class="select-filter" id="select-site-for-submap">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+            <label class="prop-label" style="margin: 0;"><i class="fas fa-map-marker-alt"></i> Seleccionar Sitio NetBox</label>
+            <span id="site-submap-count-badge" style="font-size: 0.7rem; color: #38bdf8; font-weight: 600;">Cargando...</span>
+          </div>
+          <div style="position: relative; margin-bottom: 6px;">
+            <i class="fas fa-search" style="position: absolute; left: 10px; top: 50%; transform: translateY(-50%); font-size: 0.75rem; color: var(--text-muted);"></i>
+            <input type="text" class="input-text" id="input-filter-site-submap" placeholder="🔍 Escribe para buscar sitio (ej: San Ignacio, Rucio...)" style="padding-left: 28px; font-size: 0.8rem; background: rgba(15,23,42,0.6);">
+          </div>
+          <select class="select-filter" id="select-site-for-submap" size="5" style="height: auto; max-height: 140px; overflow-y: auto; font-family: inherit;">
             <option value="">-- Elige un Sitio de NetBox --</option>
           </select>
         </div>
@@ -941,14 +1034,14 @@
       <p style="color: var(--text-secondary); font-size: 0.9rem; margin: 12px 0 20px 0; line-height: 1.5;">
         NexusDude requiere una sesión activa validada a través de <strong>Nexus Orchestrator</strong>.
       </p>
-      <a href="https://10.9.8.52:5001/#/login" class="btn btn-primary" style="justify-content: center; padding: 12px;">
+      <a href="https://10.9.1.6:5001/#/login" class="btn btn-primary" style="justify-content: center; padding: 12px;">
         <i class="fas fa-sign-in-alt"></i> Iniciar Sesión en Nexus Orchestrator
       </a>
     </div>
   </div>
 
   <!-- Scripts -->
-  <script src="/static/js/api.js"></script>
-  <script src="/static/js/app.js"></script>
+  <script src="/static/js/api.js?v=1.7"></script>
+  <script src="/static/js/app.js?v=1.7"></script>
 </body>
 </html>

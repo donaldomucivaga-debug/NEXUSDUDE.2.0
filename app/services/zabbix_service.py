@@ -292,6 +292,7 @@ class ZabbixService:
 
         for nid, n in nodes_dict.items():
             uplinks = in_degree[nid]
+            downlinks = out_degree[nid]
             matched_host = self.find_zabbix_host(n["name"], n.get("ip"))
 
             if len(uplinks) == 0:
@@ -313,6 +314,8 @@ class ZabbixService:
                 "relation_type": relation_type,
                 "uplink_ids": [u["uplink_id"] for u in uplinks],
                 "uplink_names": [nodes_dict[u["uplink_id"]]["name"] for u in uplinks],
+                "downlink_ids": [d["downlink_id"] for d in downlinks],
+                "downlink_names": [nodes_dict[d["downlink_id"]]["name"] for d in downlinks],
                 "zabbix_matched": matched_host is not None,
                 "zabbix_hostid": matched_host["hostid"] if matched_host else None,
                 "zabbix_hostname": matched_host["name"] if matched_host else None
@@ -482,16 +485,21 @@ class ZabbixService:
                         parents.append({"serviceid": map_service_id})
                     report["redundant_dependencies_created"] += 1
 
+                has_children = len(n_info.get("downlink_ids", [])) > 0
+
                 # Algoritmo de cálculo:
-                # 2 = Most critical of child services (por defecto para propagar fallas)
-                algorithm = 2
+                # 2 = Most critical of child services (para propagar fallas hacia arriba)
+                algorithm = 2 if has_children else 0
+
+                # En Zabbix 7.0, un servicio con hijos NO puede tener problem_tags directamente
+                service_problem_tags = [] if has_children else problem_tags
 
                 service_payload = {
                     "name": f"[DEVICE] {node_name}",
                     "algorithm": algorithm,
                     "sortorder": 0,
                     "parents": parents,
-                    "problem_tags": problem_tags,
+                    "problem_tags": service_problem_tags,
                     "tags": [
                         {"tag": "managed_by", "value": "nexusdude"},
                         {"tag": "nexus_type", "value": "device"},
@@ -507,6 +515,27 @@ class ZabbixService:
                     node_s_id = s_res["serviceids"][0]
                     node_service_ids[nid] = node_s_id
                     report["nodes_synced"] += 1
+
+                    # Si tiene hijos y está vinculado a Zabbix, crear un servicio hoja [HOST]
+                    # para que las alarmas del propio equipo se propaguen al contenedor
+                    if has_children and problem_tags:
+                        try:
+                            host_leaf_payload = {
+                                "name": f"[HOST] {node_name}",
+                                "algorithm": 0,
+                                "sortorder": 0,
+                                "parents": [{"serviceid": node_s_id}],
+                                "problem_tags": problem_tags,
+                                "tags": [
+                                    {"tag": "managed_by", "value": "nexusdude"},
+                                    {"tag": "nexus_type", "value": "host_status"},
+                                    {"tag": "node_id", "value": nid},
+                                    {"tag": "map_id", "value": map_id}
+                                ]
+                            }
+                            await self._call_api("service.create", host_leaf_payload)
+                        except Exception as h_err:
+                            logger.warning(f"Error creando servicio hoja [HOST] para {node_name}: {h_err}")
 
                     map_nodes_details.append({
                         "node_name": node_name,
@@ -888,6 +917,33 @@ class ZabbixService:
             }
 
         hid = str(h["hostid"])
+        telemetry_keys = [
+            # Ping e ICMP
+            "icmpping", "icmppingsec", "icmppingloss",
+            # Cambium ePMP / Force 4600 / 300 / 200 / 180 / 130
+            "cambium.radio.chwidth", "cambium.radio.bandwidth", "cambium.radio.freq", "cambium.radio.tx_power",
+            "cambium.radio.rssi", "cambium.cpe.rssi", "cambium.radio.snr", "cambium.cpe.snr",
+            "cambium.cpe.rx_mcs", "cambium.cpe.tx_mcs", "cambium.cpe.distance_km", "cambium.cpe.ssid",
+            "cambium.cpe.ap_mac", "cambium.ap.connected_sms", "cambium.ap.connected_sta_count",
+            "cambium.serial", "cambium.sw.version", "cambium.model", "cambium.mac",
+            "cambium.lan.speed", "net.if.status[LAN]", "net.if.in[LAN]", "net.if.out[LAN]",
+            # Altai SuperWiFi C1n / C1xn / WA1011N-G
+            "altai.radio.channel", "altai.radio.mode", "altai.radio.tx_power",
+            "altai.hw.model", "altai.hw.serial", "altai.sw.version", "altai.mac", "altai.ip",
+            "net.if.status[eth0]", "net.if.in[eth0]", "net.if.out[eth0]",
+            # MikroTik Routers & Switches
+            "system.cpu.util.total", "system.cpu.util[0]", "vm.memory.util",
+            "sensor.temp.board", "sensor.temp.cpu", "sensor.voltage",
+            "sensor.power.psu1.state", "sensor.power.psu2.state",
+            # Ubiquiti AirMAX
+            "ubnt.radio.freq", "ubnt.radio.rssi", "ubnt.radio.signal", "ubnt.radio.ccq",
+            "ubnt.radio.distance", "ubnt.sw.version",
+            # Mimosa
+            "mimosa.radio.freq", "mimosa.radio.rssi", "mimosa.radio.tx_power", "mimosa.sw.version",
+            # Sistema general
+            "system.uptime", "system.name", "system.descr"
+        ]
+
         triggers, items = await asyncio.gather(
             self._call_api("trigger.get", {
                 "hostids": [hid],
@@ -897,12 +953,7 @@ class ZabbixService:
             self._call_api("item.get", {
                 "hostids": [hid],
                 "filter": {
-                    "key_": [
-                        "icmpping", "icmppingsec", "icmppingloss",
-                        "cambium.radio.bandwidth", "cambium.radio.freq", "cambium.radio.tx_power",
-                        "cambium.radio.rssi", "cambium.cpe.rssi", "cambium.radio.snr", "cambium.cpe.snr",
-                        "cambium.sw.version", "cambium.ap.connected_sta_count"
-                    ]
+                    "key_": telemetry_keys
                 },
                 "output": ["itemid", "name", "key_", "lastvalue", "units", "lastclock"]
             })
@@ -937,20 +988,116 @@ class ZabbixService:
             "5": "80 MHz",
             "6": "160 MHz"
         }
-        bw_raw = pdata.get("cambium.radio.bandwidth")
-        bw_text = CAMBIUM_BANDWIDTH_MAP.get(str(bw_raw)) if (bw_raw is not None and str(bw_raw) != '0') else (f"Valor {bw_raw}" if bw_raw is not None else None)
+        bw_raw = pdata.get("cambium.radio.chwidth") or pdata.get("cambium.radio.bandwidth")
+        bw_text = CAMBIUM_BANDWIDTH_MAP.get(str(bw_raw)) if (bw_raw is not None and str(bw_raw) != '0') else (f"{bw_raw} MHz" if bw_raw and str(bw_raw).isdigit() and int(bw_raw) > 6 else None)
 
+        # 1. Telemetría Inalámbrica
         wireless_info = None
-        if bw_raw is not None or "cambium.radio.freq" in pdata or "cambium.radio.rssi" in pdata or "cambium.cpe.rssi" in pdata:
+        has_wireless = (
+            bw_raw is not None or
+            "cambium.radio.freq" in pdata or "cambium.radio.rssi" in pdata or "cambium.cpe.rssi" in pdata or
+            "altai.radio.channel" in pdata or "ubnt.radio.freq" in pdata or "mimosa.radio.freq" in pdata
+        )
+
+        if has_wireless:
+            freq_val = pdata.get("cambium.radio.freq") or pdata.get("ubnt.radio.freq") or pdata.get("mimosa.radio.freq")
+            altai_chan = pdata.get("altai.radio.channel")
+            if not freq_val and altai_chan:
+                # Canal Wi-Fi 2.4 GHz
+                try:
+                    c_num = int(altai_chan)
+                    freq_val = str(2407 + (c_num * 5)) if 1 <= c_num <= 14 else str(altai_chan)
+                except Exception:
+                    freq_val = str(altai_chan)
+
+            rssi_val = pdata.get("cambium.cpe.rssi") or pdata.get("cambium.radio.rssi") or pdata.get("ubnt.radio.rssi") or pdata.get("ubnt.radio.signal") or pdata.get("mimosa.radio.rssi")
+            snr_val = pdata.get("cambium.cpe.snr") or pdata.get("cambium.radio.snr")
+            tx_pow = pdata.get("cambium.radio.tx_power") or pdata.get("altai.radio.tx_power") or pdata.get("mimosa.radio.tx_power")
+            sta_cnt = pdata.get("cambium.ap.connected_sms") or pdata.get("cambium.ap.connected_sta_count")
+
             wireless_info = {
-                "channel_width_id": bw_raw,
-                "channel_width_text": bw_text,
-                "frequency_mhz": pdata.get("cambium.radio.freq"),
-                "tx_power_dbm": pdata.get("cambium.radio.tx_power"),
-                "rssi_dbm": pdata.get("cambium.cpe.rssi") or pdata.get("cambium.radio.rssi"),
-                "snr_db": pdata.get("cambium.cpe.snr") or pdata.get("cambium.radio.snr"),
-                "firmware": pdata.get("cambium.sw.version"),
-                "connected_sta_count": pdata.get("cambium.ap.connected_sta_count")
+                "channel_width_id": bw_raw or (altai_chan if altai_chan else None),
+                "channel_width_text": bw_text or ("20/40 MHz" if altai_chan else "—"),
+                "frequency_mhz": freq_val,
+                "tx_power_dbm": tx_pow,
+                "rssi_dbm": rssi_val,
+                "snr_db": snr_val,
+                "rx_mcs": pdata.get("cambium.cpe.rx_mcs"),
+                "tx_mcs": pdata.get("cambium.cpe.tx_mcs"),
+                "distance_km": pdata.get("cambium.cpe.distance_km") or pdata.get("ubnt.radio.distance"),
+                "ssid": pdata.get("cambium.cpe.ssid"),
+                "connected_ap_mac": pdata.get("cambium.cpe.ap_mac"),
+                "connected_sta_count": sta_cnt,
+                "mode": pdata.get("altai.radio.mode") or ("AP" if sta_cnt is not None else "CPE")
+            }
+
+        # 2. Información del Sistema y Hardware
+        def format_uptime(seconds_val):
+            if not seconds_val:
+                return "—"
+            try:
+                s = int(float(seconds_val))
+                days, s = divmod(s, 86400)
+                hours, s = divmod(s, 3600)
+                minutes, _ = divmod(s, 60)
+                parts = []
+                if days > 0: parts.append(f"{days}d")
+                if hours > 0: parts.append(f"{hours}h")
+                parts.append(f"{minutes}m")
+                return " ".join(parts)
+            except Exception:
+                return str(seconds_val)
+
+        system_info = {
+            "model": pdata.get("cambium.model") or pdata.get("altai.hw.model"),
+            "serial": pdata.get("cambium.serial") or pdata.get("altai.hw.serial"),
+            "firmware": pdata.get("cambium.sw.version") or pdata.get("altai.sw.version") or pdata.get("ubnt.sw.version") or pdata.get("mimosa.sw.version"),
+            "mac": pdata.get("cambium.mac") or pdata.get("altai.mac"),
+            "uptime_seconds": pdata.get("system.uptime"),
+            "uptime_text": format_uptime(pdata.get("system.uptime")),
+            "sys_name": pdata.get("system.name"),
+            "sys_descr": pdata.get("system.descr")
+        }
+
+        # 3. Métricas de Hardware (Routers / Switches / MikroTik)
+        hardware_info = None
+        has_hw = any(k in pdata for k in ["system.cpu.util.total", "system.cpu.util[0]", "vm.memory.util", "sensor.temp.cpu", "sensor.temp.board", "sensor.voltage"])
+        if has_hw:
+            hardware_info = {
+                "cpu_util_pct": pdata.get("system.cpu.util.total") or pdata.get("system.cpu.util[0]"),
+                "memory_util_pct": pdata.get("vm.memory.util"),
+                "temp_cpu_c": pdata.get("sensor.temp.cpu"),
+                "temp_board_c": pdata.get("sensor.temp.board"),
+                "voltage_v": pdata.get("sensor.voltage")
+            }
+
+        # 4. Estadísticas de Interfaz LAN
+        lan_info = None
+        has_lan = any(k in pdata for k in ["net.if.status[LAN]", "net.if.in[LAN]", "net.if.out[LAN]", "net.if.status[eth0]", "net.if.in[eth0]", "net.if.out[eth0]"])
+        if has_lan:
+            in_bps = pdata.get("net.if.in[LAN]") or pdata.get("net.if.in[eth0]")
+            out_bps = pdata.get("net.if.out[LAN]") or pdata.get("net.if.out[eth0]")
+            status_lan = pdata.get("net.if.status[LAN]") or pdata.get("net.if.status[eth0]")
+            speed_mbps = pdata.get("cambium.lan.speed")
+
+            def fmt_bps(val):
+                if val is None: return "—"
+                try:
+                    b = float(val)
+                    if b >= 1_000_000_000: return f"{b/1_000_000_000:.2f} Gbps"
+                    if b >= 1_000_000: return f"{b/1_000_000:.2f} Mbps"
+                    if b >= 1_000: return f"{b/1_000:.2f} Kbps"
+                    return f"{b:.0f} bps"
+                except Exception:
+                    return str(val)
+
+            lan_info = {
+                "status": "Up" if str(status_lan) in ("1", "up") else "Down",
+                "speed_mbps": speed_mbps,
+                "in_bps": in_bps,
+                "in_text": fmt_bps(in_bps),
+                "out_bps": out_bps,
+                "out_text": fmt_bps(out_bps)
             }
 
         return {
@@ -963,6 +1110,9 @@ class ZabbixService:
             "packet_loss": loss_val,
             "rtt_ms": rtt_ms,
             "wireless": wireless_info,
+            "system": system_info,
+            "hardware": hardware_info,
+            "lan": lan_info,
             "zabbix_matched": True,
             "zabbix_hostid": hid,
             "zabbix_hostname": h.get("name"),
@@ -1042,9 +1192,11 @@ class ZabbixService:
             "hostids": host_ids,
             "filter": {
                 "key_": [
-                    "cambium.radio.bandwidth", "cambium.radio.freq", "cambium.radio.tx_power",
+                    "cambium.radio.chwidth", "cambium.radio.bandwidth", "cambium.radio.freq", "cambium.radio.tx_power",
                     "cambium.radio.rssi", "cambium.cpe.rssi", "cambium.radio.snr", "cambium.cpe.snr",
-                    "cambium.sw.version", "cambium.ap.connected_sta_count",
+                    "cambium.sw.version", "cambium.ap.connected_sms", "cambium.ap.connected_sta_count",
+                    "ubnt.radio.freq", "ubnt.radio.rssi", "ubnt.radio.signal", "ubnt.sw.version",
+                    "mimosa.radio.freq", "mimosa.radio.rssi", "mimosa.radio.tx_power", "mimosa.sw.version",
                     "icmpping", "icmppingsec"
                 ]
             },
@@ -1068,8 +1220,8 @@ class ZabbixService:
         devices_with_rf = []
         for hid, nodes_list in host_map.items():
             pdata = host_items.get(hid, {})
-            freq_str = pdata.get("cambium.radio.freq")
-            bw_id_str = pdata.get("cambium.radio.bandwidth")
+            freq_str = pdata.get("cambium.radio.freq") or pdata.get("ubnt.radio.freq") or pdata.get("mimosa.radio.freq")
+            bw_id_str = pdata.get("cambium.radio.chwidth") or pdata.get("cambium.radio.bandwidth")
 
             try:
                 freq_mhz = float(freq_str) if freq_str and freq_str != "0" else None
@@ -1108,11 +1260,11 @@ class ZabbixService:
                         "bandwidth_text": f"{bandwidth_final} MHz",
                         "freq_start_mhz": freq_start,
                         "freq_end_mhz": freq_end,
-                        "tx_power_dbm": pdata.get("cambium.radio.tx_power"),
-                        "rssi_dbm": pdata.get("cambium.cpe.rssi") or pdata.get("cambium.radio.rssi"),
+                        "tx_power_dbm": pdata.get("cambium.radio.tx_power") or pdata.get("mimosa.radio.tx_power"),
+                        "rssi_dbm": pdata.get("cambium.cpe.rssi") or pdata.get("cambium.radio.rssi") or pdata.get("ubnt.radio.rssi"),
                         "snr_db": pdata.get("cambium.cpe.snr") or pdata.get("cambium.radio.snr"),
-                        "firmware": pdata.get("cambium.sw.version"),
-                        "connected_sta_count": pdata.get("cambium.ap.connected_sta_count"),
+                        "firmware": pdata.get("cambium.sw.version") or pdata.get("ubnt.sw.version") or pdata.get("mimosa.sw.version"),
+                        "connected_sta_count": pdata.get("cambium.ap.connected_sms") or pdata.get("cambium.ap.connected_sta_count"),
                         "rtt_ms": round(float(pdata.get("icmppingsec", 0)) * 1000, 1) if pdata.get("icmppingsec") else None
                     })
 

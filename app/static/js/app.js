@@ -39,6 +39,13 @@ function getNodeStatusColor(status, isSubmap = false) {
 // Modal State
 let isCreatingSubmap = false;
 
+// Definición global inmediata para evitar errores de ReferenceError
+window.loadMapsTree = function(filterText = '') {
+  if (typeof refreshMapsTabList === 'function') {
+    return refreshMapsTabList(filterText);
+  }
+};
+
 // ─── 1. Autenticación SSO y Detección de Tokens ─────────────────────────────
 function initSSOAuth() {
   const hash = window.location.hash;
@@ -48,6 +55,12 @@ function initSSOAuth() {
   if (hash) {
     const hashParams = new URLSearchParams(hash.replace(/^#/, ''));
     foundToken = hashParams.get('token') || hashParams.get('access_token');
+    if (foundToken) {
+      hashParams.delete('token');
+      hashParams.delete('access_token');
+      const cleanHash = hashParams.toString() ? `#${hashParams.toString()}` : '';
+      history.replaceState(null, null, window.location.pathname + cleanHash);
+    }
   }
   if (!foundToken) {
     foundToken = urlParams.get('token');
@@ -55,7 +68,6 @@ function initSSOAuth() {
 
   if (foundToken) {
     API.setToken(foundToken);
-    history.replaceState(null, null, window.location.pathname);
   }
 }
 
@@ -379,8 +391,10 @@ function setupSidebarResizer() {
 }
 
 // ─── 4. Renderizado de Nodos y Enlaces en Konva ──────────────────────────────
-function getRoleIcon(deviceType = '') {
-  const t = deviceType.toLowerCase();
+function getRoleIcon(deviceType = '', extraData = null) {
+  if (deviceType === 'parent_map' || extraData?.is_parent_shortcut) return '⬆️';
+  const t = (deviceType || '').toLowerCase();
+  if (t.includes('parent')) return '⬆️';
   if (t.includes('router') || t.includes('core')) return '🖧';
   if (t.includes('switch')) return '⮀';
   if (t.includes('olt')) return '⚡';
@@ -401,12 +415,16 @@ function measureTextWidth(text, font) {
 }
 
 function computeNodeDimensions(node) {
-  const isSubmap = node.device_type === 'submap';
+  const isParentShortcut = node.device_type === 'parent_map' || !!node.extra_data?.is_parent_shortcut;
+  const isSubmap = node.device_type === 'submap' || isParentShortcut;
   const nameFont = 'bold 11px system-ui, -apple-system, sans-serif';
   const nameW = measureTextWidth(node.name, nameFont);
 
   let subLabelText = '';
-  if (isSubmap) {
+  if (isParentShortcut) {
+    const parentName = node.extra_data?.parent_map_name || 'Mapa Padre';
+    subLabelText = `Subir a ${parentName} ➔`;
+  } else if (isSubmap) {
     const count = node.extra_data?.device_count;
     if (count !== undefined && count !== null) {
       subLabelText = count === 0 ? 'Sin equipos ➔' : `${count} ${count === 1 ? 'equipo' : 'equipos'} ➔`;
@@ -425,8 +443,8 @@ function computeNodeDimensions(node) {
   // Margen izquierdo del subtítulo: 14px + subW + margen derecho (16px)
   const subNeeded = 14 + subW + 16;
 
-  const minWidth = isSubmap ? 150 : 136;
-  const maxWidth = isSubmap ? 290 : 250;
+  const minWidth = isParentShortcut ? 170 : (isSubmap ? 150 : 136);
+  const maxWidth = isParentShortcut ? 320 : (isSubmap ? 290 : 250);
   const nodeWidth = Math.min(Math.max(minWidth, Math.ceil(Math.max(titleNeeded, subNeeded))), maxWidth);
   const nodeHeight = isSubmap ? 56 : 52;
 
@@ -448,7 +466,8 @@ function getNodeHalfDimensions(nodeOrId) {
 }
 
 function renderNode(node) {
-  const isSubmap = node.device_type === 'submap';
+  const isParentShortcut = node.device_type === 'parent_map' || !!node.extra_data?.is_parent_shortcut;
+  const isSubmap = node.device_type === 'submap' || isParentShortcut;
   const { nodeWidth, nodeHeight, subLabelText } = computeNodeDimensions(node);
 
   const group = new Konva.Group({
@@ -458,20 +477,26 @@ function renderNode(node) {
     id: node.id
   });
   group.isSubmap = isSubmap;
+  group.isParentShortcut = isParentShortcut;
 
-  // Obtener color del estado del nodo (online/offline/warning)
-  const nodeStatusColor = getNodeStatusColor(node.status, isSubmap);
+  // Obtener color del estado del nodo
+  const nodeStatusColor = isParentShortcut ? '#38bdf8' : getNodeStatusColor(node.status, isSubmap);
 
-  // Caja de fondo: relleno púrpura para submapas y contorno con color de estado (Red/Yellow/Green)
+  // Caja de fondo: estilo azul profundo destacado para portal padre, púrpura para submapas, azul oscuro para equipos
+  const boxFill = isParentShortcut 
+    ? 'rgba(12, 74, 110, 0.88)' 
+    : (isSubmap ? 'rgba(74, 14, 122, 0.75)' : '#162235');
+
   const box = new Konva.Rect({
     width: nodeWidth,
     height: nodeHeight,
-    fill: isSubmap ? 'rgba(74, 14, 122, 0.75)' : '#162235',
-    stroke: nodeStatusColor,
-    strokeWidth: 1.5,
+    fill: boxFill,
+    stroke: isParentShortcut ? '#38bdf8' : nodeStatusColor,
+    strokeWidth: isParentShortcut ? 2 : 1.5,
+    dash: isParentShortcut ? [5, 3] : undefined,
     cornerRadius: 8,
-    shadowColor: 'rgba(0, 0, 0, 0.45)',
-    shadowBlur: 0,
+    shadowColor: isParentShortcut ? 'rgba(56, 189, 248, 0.4)' : 'rgba(0, 0, 0, 0.45)',
+    shadowBlur: isParentShortcut ? 8 : 0,
     shadowOpacity: 0.4,
     shadowOffset: { x: 0, y: 2 },
     shadowForStrokeEnabled: false,
@@ -484,13 +509,13 @@ function renderNode(node) {
     x: 14,
     y: isSubmap ? 16 : 15,
     radius: 4.5,
-    fill: nodeStatusColor,
+    fill: isParentShortcut ? '#38bdf8' : nodeStatusColor,
     listening: false,
     perfectDrawEnabled: false
   });
 
   // Icono
-  const iconEmoji = getRoleIcon(node.device_type);
+  const iconEmoji = getRoleIcon(node.device_type, node.extra_data);
   const iconText = new Konva.Text({
     x: 24,
     y: isSubmap ? 10 : 9,
@@ -512,13 +537,13 @@ function renderNode(node) {
     fontSize: 11,
     fontStyle: 'bold',
     fontFamily: 'system-ui, -apple-system, sans-serif',
-    fill: '#f8fafc',
+    fill: isParentShortcut ? '#bae6fd' : '#f8fafc',
     listening: false,
     perfectDrawEnabled: false,
     name: 'label'
   });
 
-  // Subtexto (cantidad de equipos o IP)
+  // Subtexto (cantidad de equipos, IP o subir nivel)
   const maxSubWidth = nodeWidth - 24;
   const ipText = new Konva.Text({
     x: 14,
@@ -530,7 +555,7 @@ function renderNode(node) {
     fontSize: 9.5,
     fontFamily: isSubmap ? 'system-ui, -apple-system, sans-serif' : 'monospace',
     fontStyle: isSubmap ? 'bold' : 'normal',
-    fill: isSubmap ? '#c084fc' : '#38bdf8',
+    fill: isParentShortcut ? '#38bdf8' : (isSubmap ? '#c084fc' : '#38bdf8'),
     listening: false,
     perfectDrawEnabled: false,
     name: 'ipText'
@@ -657,9 +682,9 @@ function renderNode(node) {
     }
   });
 
-  // Doble clic: drill-down si es submapa
+  // Doble clic: drill-down si es submapa o ascenso a mapa padre
   group.on('dblclick dbltap', () => {
-    if (isSubmap && node.extra_data && node.extra_data.target_map_id) {
+    if ((isSubmap || isParentShortcut) && node.extra_data && node.extra_data.target_map_id) {
       loadMap(node.extra_data.target_map_id);
     }
   });
@@ -675,7 +700,7 @@ function renderNode(node) {
   group.on('mouseleave', () => {
     document.body.style.cursor = 'default';
     if (!box.isHighlighted) {
-      box.stroke(getNodeStatusColor(node.status, isSubmap));
+      box.stroke(isParentShortcut ? '#38bdf8' : getNodeStatusColor(node.status, isSubmap));
       nodesLayer.batchDraw();
     }
   });
@@ -855,16 +880,19 @@ function selectNode(node) {
   document.getElementById('no-selection-msg').style.display = 'none';
   document.getElementById('node-properties-panel').style.display = 'block';
 
-  const isSubmap = node.device_type === 'submap';
   let extra = node.extra_data || {};
+  const isParentShortcut = node.device_type === 'parent_map' || !!extra.is_parent_shortcut;
+  const isSubmap = node.device_type === 'submap' || isParentShortcut;
 
   // Título y badge
   document.getElementById('prop-node-title').textContent = node.name || 'Sin Nombre';
-  document.getElementById('prop-node-type-badge').textContent = isSubmap ? 'Submapa' : (extra.role || node.device_type || 'Dispositivo');
+  document.getElementById('prop-node-type-badge').textContent = isParentShortcut ? 'Subir Nivel ⬆' : (isSubmap ? 'Submapa' : (extra.role || node.device_type || 'Dispositivo'));
 
   // Subtítulo
   const subtitleEl = document.getElementById('prop-node-subtitle');
-  if (isSubmap) {
+  if (isParentShortcut) {
+    subtitleEl.textContent = 'Portal de Navegación a Nivel Superior';
+  } else if (isSubmap) {
     subtitleEl.textContent = 'Contenedor de Topología Hija';
   } else if (extra.manufacturer || extra.model) {
     subtitleEl.textContent = `${extra.manufacturer || ''} ${extra.model || ''}`.trim();
@@ -900,22 +928,22 @@ function selectNode(node) {
       webAdminBtn.style.display = 'flex';
     }
   } else {
-    if (ipTextEl) ipTextEl.textContent = isSubmap ? 'Contenedor Virtual' : 'Sin IP configurada';
+    if (ipTextEl) ipTextEl.textContent = isParentShortcut ? 'Navegación Canvas' : (isSubmap ? 'Contenedor Virtual' : 'Sin IP configurada');
     if (ipLinkEl) {
       ipLinkEl.removeAttribute('href');
       ipLinkEl.removeAttribute('target');
-      ipLinkEl.title = 'Dispositivo sin dirección IP';
+      ipLinkEl.title = isParentShortcut ? 'Portal de Navegación' : 'Dispositivo sin dirección IP';
       ipLinkEl.classList.add('disabled');
     }
     if (webAdminBtn) {
       webAdminBtn.style.display = 'none';
     }
   }
-  document.getElementById('prop-node-site').textContent = node.site_name || 'No asignado';
-  document.getElementById('prop-node-role').textContent = isSubmap ? 'Contenedor Submapa' : (extra.role || node.device_type || 'N/A');
-  document.getElementById('prop-node-mfr').textContent = extra.manufacturer || (isSubmap ? 'Sistema' : 'Genérico');
-  document.getElementById('prop-node-model').textContent = extra.model || (isSubmap ? 'Submapa Virtual' : 'N/A');
-  document.getElementById('prop-node-serial').textContent = extra.serial || 'No registrado';
+  document.getElementById('prop-node-site').textContent = node.site_name || (isParentShortcut ? (node.extra_data?.parent_map_name || 'Mapa Superior') : 'No asignado');
+  document.getElementById('prop-node-role').textContent = isParentShortcut ? 'Acceso Directo a Mapa Padre' : (isSubmap ? 'Contenedor Submapa' : (extra.role || node.device_type || 'N/A'));
+  document.getElementById('prop-node-mfr').textContent = extra.manufacturer || (isParentShortcut ? 'NexusDude System' : (isSubmap ? 'Sistema' : 'Genérico'));
+  document.getElementById('prop-node-model').textContent = extra.model || (isParentShortcut ? 'Portal Jerárquico' : (isSubmap ? 'Submapa Virtual' : 'N/A'));
+  document.getElementById('prop-node-serial').textContent = extra.serial || (isParentShortcut ? 'N/A' : 'No registrado');
 
   const statusEl = document.getElementById('prop-node-status');
   const statusVal = extra.status || node.status || 'active';
@@ -926,8 +954,9 @@ function selectNode(node) {
 
   // Enlace directo a NetBox
   const netboxBtn = document.getElementById('btn-open-netbox');
-  if (node.device_id) {
-    netboxBtn.href = `http://10.9.8.52:8089/dcim/devices/${node.device_id}/`;
+  if (node.device_id && !isParentShortcut) {
+    const host = window.location.hostname || '10.9.1.6';
+    netboxBtn.href = `https://${host}:8443/dcim/devices/${node.device_id}/`;
     netboxBtn.style.display = 'inline-flex';
 
     // Enriquecer datos si faltan detalles de hardware
@@ -956,7 +985,7 @@ function selectNode(node) {
   // Enlace directo a Zabbix
   const zabbixBtn = document.getElementById('btn-open-zabbix');
   if (zabbixBtn) {
-    if (!isSubmap && node.name) {
+    if (!isSubmap && !isParentShortcut && node.name) {
       const zabbixBase = window.zabbixBaseUrl || 'https://10.9.1.7:8082';
       const hostName = encodeURIComponent(node.name);
       zabbixBtn.href = `${zabbixBase}/zabbix.php?action=latest.view&filter_name=${hostName}&filter_groupids[]=0`;
@@ -969,27 +998,40 @@ function selectNode(node) {
   // Acción de Convertir a Submapa vs Entrar a Submapa
   const convertSubmapBox = document.getElementById('convert-submap-action-box');
   const submapBox = document.getElementById('submap-action-box');
+  const btnEnterSubmap = document.getElementById('btn-enter-submap');
 
   if (isSubmap) {
     if (convertSubmapBox) convertSubmapBox.style.display = 'none';
-    if (submapBox) submapBox.style.display = node.extra_data?.target_map_id ? 'block' : 'none';
+    if (submapBox) {
+      submapBox.style.display = node.extra_data?.target_map_id ? 'block' : 'none';
+      if (btnEnterSubmap) {
+        if (isParentShortcut) {
+          const pName = node.extra_data?.parent_map_name || 'Mapa Padre';
+          btnEnterSubmap.innerHTML = `<i class="fas fa-level-up-alt"></i> Subir a ${pName}`;
+          btnEnterSubmap.style.background = 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)';
+          btnEnterSubmap.style.borderColor = '#38bdf8';
+        } else {
+          btnEnterSubmap.innerHTML = `<i class="fas fa-folder-open"></i> Entrar al Submapa`;
+          btnEnterSubmap.style.background = '';
+          btnEnterSubmap.style.borderColor = '';
+        }
+      }
+    }
   } else {
     if (convertSubmapBox) convertSubmapBox.style.display = 'block';
     if (submapBox) submapBox.style.display = 'none';
   }
 
   // ─── TELEMETRÍA EN TIEMPO REAL (Zabbix) ─────────────────────────────────
-  // Mostrar panel de telemetría y cargar datos reales
   const telemetryPanel = document.getElementById('telemetry-panel');
   if (telemetryPanel) {
-    // Solo mostrar para equipos reales con IP (no submapas vacíos)
-    if (!isSubmap && node.ip) {
+    if (isParentShortcut) {
+      telemetryPanel.style.display = 'none';
+    } else if (!isSubmap && node.ip) {
       telemetryPanel.style.display = 'block';
-      // Reset indicadores mientras carga
       setTelemetryLoading();
-      // Cargar datos reales en segundo plano (no bloqueante)
       loadNodeTelemetry(node.id);
-    } else if (isSubmap) {
+    } else if (isSubmap && !isParentShortcut) {
       telemetryPanel.style.display = 'block';
       setTelemetryLoading();
       loadNodeTelemetry(node.id);
@@ -1366,18 +1408,108 @@ function applyTelemetryToPanel(data) {
   const loss = data.packet_loss;
   safe('telemetry-loss', loss != null ? `${loss.toFixed(0)}%` : '—');
 
-  // Parámetros Inalámbricos (Cambium / Wireless)
+  // 1. Parámetros Inalámbricos (Cambium / Altai / Ubiquiti / Mimosa)
   const wBox = document.getElementById('telemetry-wireless-box');
   const w = data.wireless;
   if (wBox) {
-    if (w && (w.channel_width_text || w.frequency_mhz || w.rssi_dbm || w.snr_db)) {
+    if (w && (w.channel_width_text || w.frequency_mhz || w.rssi_dbm || w.snr_db || w.mode || w.channel_width_id)) {
       wBox.style.display = 'block';
       safe('telemetry-channel-bw', w.channel_width_text || (w.channel_width_id ? `ID ${w.channel_width_id}` : '—'));
       safe('telemetry-freq', w.frequency_mhz ? `${w.frequency_mhz} MHz` : '—');
       safe('telemetry-rssi', w.rssi_dbm ? `${w.rssi_dbm} dBm` : '—');
       safe('telemetry-snr', w.snr_db ? `${w.snr_db} dB` : '—');
+      safe('telemetry-radio-mode', w.mode ? (w.connected_sta_count ? `${w.mode} (${w.connected_sta_count} STAs)` : w.mode) : (w.connected_sta_count ? `AP (${w.connected_sta_count} STAs)` : 'Wireless'));
+
+      const boxMcs = document.getElementById('box-telemetry-mcs');
+      if (boxMcs) {
+        if (w.rx_mcs || w.tx_mcs) {
+          boxMcs.style.display = 'block';
+          safe('telemetry-mcs', `Rx: ${w.rx_mcs || '—'} / Tx: ${w.tx_mcs || '—'}`);
+        } else {
+          boxMcs.style.display = 'none';
+        }
+      }
+
+      const boxDist = document.getElementById('box-telemetry-distance');
+      if (boxDist) {
+        if (w.distance_km) {
+          boxDist.style.display = 'block';
+          safe('telemetry-distance', `${w.distance_km} km`);
+        } else {
+          boxDist.style.display = 'none';
+        }
+      }
+
+      const boxSsid = document.getElementById('box-telemetry-ssid');
+      if (boxSsid) {
+        if (w.ssid || w.connected_ap_mac) {
+          boxSsid.style.display = 'block';
+          safe('telemetry-ssid', w.ssid || w.connected_ap_mac || '—');
+        } else {
+          boxSsid.style.display = 'none';
+        }
+      }
     } else {
       wBox.style.display = 'none';
+    }
+  }
+
+  // 2. Recursos de Hardware & Sensores (MikroTik / Routers / Switches)
+  const hwBox = document.getElementById('telemetry-hardware-box');
+  const hw = data.hardware;
+  if (hwBox) {
+    if (hw && (hw.cpu_util_pct != null || hw.memory_util_pct != null || hw.temp_cpu_c != null || hw.voltage_v != null)) {
+      hwBox.style.display = 'block';
+      safe('telemetry-cpu-util', hw.cpu_util_pct != null ? `${parseFloat(hw.cpu_util_pct).toFixed(1)}%` : '—');
+      safe('telemetry-mem-util', hw.memory_util_pct != null ? `${parseFloat(hw.memory_util_pct).toFixed(1)}%` : '—');
+      safe('telemetry-temp-cpu', hw.temp_cpu_c != null ? `${hw.temp_cpu_c} °C` : (hw.temp_board_c != null ? `${hw.temp_board_c} °C (Board)` : '—'));
+      safe('telemetry-voltage', hw.voltage_v != null ? `${hw.voltage_v} V` : '—');
+    } else {
+      hwBox.style.display = 'none';
+    }
+  }
+
+  // 3. Sistema & Inventario
+  const sysBox = document.getElementById('telemetry-system-box');
+  const sys = data.system;
+  if (sysBox) {
+    if (sys && (sys.model || sys.serial || sys.firmware || sys.mac || (sys.uptime_text && sys.uptime_text !== '—'))) {
+      sysBox.style.display = 'block';
+      const modelFw = [sys.model, sys.firmware ? `v${sys.firmware}` : ''].filter(Boolean).join(' · ');
+      safe('telemetry-model-fw', modelFw || sys.sys_name || 'Dispositivo');
+      safe('telemetry-serial', sys.serial || '—');
+      safe('telemetry-uptime', sys.uptime_text || '—');
+
+      const boxMac = document.getElementById('box-telemetry-mac');
+      if (boxMac) {
+        if (sys.mac) {
+          boxMac.style.display = 'block';
+          safe('telemetry-mac', sys.mac);
+        } else {
+          boxMac.style.display = 'none';
+        }
+      }
+    } else {
+      sysBox.style.display = 'none';
+    }
+  }
+
+  // 4. Interfaz LAN
+  const lanBox = document.getElementById('telemetry-lan-box');
+  const lan = data.lan;
+  if (lanBox) {
+    if (lan && (lan.in_text || lan.out_text || lan.status)) {
+      lanBox.style.display = 'block';
+      const lanStatusEl = document.getElementById('telemetry-lan-status');
+      if (lanStatusEl) {
+        lanStatusEl.textContent = lan.status || 'Up';
+        lanStatusEl.style.color = lan.status === 'Up' ? '#10b981' : '#ef4444';
+        lanStatusEl.style.background = lan.status === 'Up' ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)';
+      }
+      safe('telemetry-lan-in', lan.in_text || '—');
+      safe('telemetry-lan-out', lan.out_text || '—');
+    } else {
+      lanBox.style.display = 'none';
     }
   }
 
@@ -1511,6 +1643,19 @@ function startRealtimePolling(mapId) {
   _realtimePollInterval = setInterval(poll, 45000);
 }
 
+function updateUrlHashState() {
+  const currentTab = localStorage.getItem('nexusdude_active_tab') || 'tab-maps';
+  const mapId = currentMap ? currentMap.id : (localStorage.getItem('nexusdude_last_map_id') || 'default-map');
+  const params = new URLSearchParams();
+  if (mapId) params.set('map', mapId);
+  if (currentTab) params.set('tab', currentTab);
+  if (selectedNode) params.set('node', selectedNode.id);
+  const newHash = `#${params.toString()}`;
+  if (window.location.hash !== newHash) {
+    history.replaceState(null, null, newHash);
+  }
+}
+
 async function loadMap(mapId) {
   linksLayer.destroyChildren();
   nodesLayer.destroyChildren();
@@ -1529,6 +1674,12 @@ async function loadMap(mapId) {
   if (!mapData) return;
 
   currentMap = mapData;
+
+  // Actualizar visibilidad del botón de insertar acceso a padre
+  const btnEnsureParent = document.getElementById('btn-ensure-parent-node');
+  if (btnEnsureParent) {
+    btnEnsureParent.style.display = (currentMap && currentMap.parent_map_id) ? 'inline-flex' : 'none';
+  }
 
   // Actualizar Breadcrumb
   const crumbs = await API.getMapBreadcrumb(mapId);
@@ -1549,6 +1700,10 @@ async function loadMap(mapId) {
 
   // Arrancar polling de estado en tiempo real para este mapa
   startRealtimePolling(mapId);
+
+  // Persistir mapa actual y sincronizar estado en URL
+  localStorage.setItem('nexusdude_last_map_id', mapId);
+  updateUrlHashState();
 }
 
 function renderBreadcrumbs(crumbs) {
@@ -1707,6 +1862,7 @@ function renderDeviceList(devices, total) {
 let cachedMaps = [];
 
 async function refreshMapsTabList(filterText = '') {
+  window.loadMapsTree = refreshMapsTabList;
   cachedMaps = await API.getMaps();
   const treeContainer = document.getElementById('maps-tree');
   if (!treeContainer) return;
@@ -1738,10 +1894,10 @@ async function refreshMapsTabList(filterText = '') {
     }
   });
 
-  // Raíces
-  const rootMaps = filtered.filter(m => !m.parent_map_id || !allIds.has(m.parent_map_id));
+  const isSearching = Boolean(filterText && filterText.trim());
+  const rootMaps = cachedMaps.filter(m => !m.parent_map_id || !allIds.has(m.parent_map_id));
 
-  function renderMapNode(mapObj, level = 0) {
+  function renderMapNode(mapObj, level = 0, includeChildren = true) {
     const wrapper = document.createElement('div');
     wrapper.className = 'map-node-wrapper';
 
@@ -1838,23 +1994,33 @@ async function refreshMapsTabList(filterText = '') {
 
     wrapper.appendChild(card);
 
-    // Hijos recursivos
-    const children = childrenMap.get(mapObj.id) || [];
-    if (children.length > 0) {
-      const childContainer = document.createElement('div');
-      childContainer.className = 'map-children-container';
-      children.forEach(child => {
-        childContainer.appendChild(renderMapNode(child, level + 1));
-      });
-      wrapper.appendChild(childContainer);
+    // Hijos recursivos en modo jerárquico
+    if (includeChildren) {
+      const children = childrenMap.get(mapObj.id) || [];
+      if (children.length > 0) {
+        const childContainer = document.createElement('div');
+        childContainer.className = 'map-children-container';
+        children.forEach(child => {
+          childContainer.appendChild(renderMapNode(child, level + 1, true));
+        });
+        wrapper.appendChild(childContainer);
+      }
     }
 
     return wrapper;
   }
 
-  rootMaps.forEach(root => {
-    treeContainer.appendChild(renderMapNode(root, 0));
-  });
+  if (isSearching) {
+    // Modo búsqueda: mostrar directamente todos los mapas coincidentes
+    filtered.forEach(m => {
+      treeContainer.appendChild(renderMapNode(m, 0, false));
+    });
+  } else {
+    // Modo jerárquico: mostrar desde las raíces
+    rootMaps.forEach(root => {
+      treeContainer.appendChild(renderMapNode(root, 0, true));
+    });
+  }
 }
 
 function updateParentMapSelectOptions(excludeMapId = null) {
@@ -1923,6 +2089,35 @@ async function checkMapCanPopulateFromSite() {
   }
 }
 
+function renderSiteOptionsForSubmap(filterText = '') {
+  const selectSiteSubmap = document.getElementById('select-site-for-submap');
+  const badge = document.getElementById('site-submap-count-badge');
+  if (!selectSiteSubmap) return;
+
+  const query = (filterText || '').trim().toLowerCase();
+  const filtered = cachedSitesSummary.filter(s => {
+    if (!query) return true;
+    return s.name.toLowerCase().includes(query);
+  });
+
+  selectSiteSubmap.innerHTML = '';
+  if (filtered.length === 0) {
+    selectSiteSubmap.innerHTML = '<option value="">No se encontraron sitios con ese filtro</option>';
+  } else {
+    filtered.forEach(s => {
+      const opt = document.createElement('option');
+      opt.value = s.name;
+      opt.textContent = `${s.name} (${s.device_count} equipos)`;
+      opt.dataset.count = s.device_count;
+      selectSiteSubmap.appendChild(opt);
+    });
+  }
+
+  if (badge) {
+    badge.textContent = `${filtered.length} de ${cachedSitesSummary.length} sitios`;
+  }
+}
+
 async function openCreateMapModal(isSubmap = false, parentId = null, preferSiteMode = false) {
   updateParentMapSelectOptions();
   const modal = document.getElementById('modal-map');
@@ -1947,17 +2142,9 @@ async function openCreateMapModal(isSubmap = false, parentId = null, preferSiteM
     cachedSitesSummary = await API.getSitesSummary();
   }
 
-  // Poblar select de sitios
-  if (selectSiteSubmap) {
-    selectSiteSubmap.innerHTML = '<option value="">-- Elige un Sitio de NetBox --</option>';
-    cachedSitesSummary.forEach(s => {
-      const opt = document.createElement('option');
-      opt.value = s.name;
-      opt.textContent = `${s.name} (${s.device_count} equipos)`;
-      opt.dataset.count = s.device_count;
-      selectSiteSubmap.appendChild(opt);
-    });
-  }
+  const inputFilterSite = document.getElementById('input-filter-site-submap');
+  if (inputFilterSite) inputFilterSite.value = '';
+  renderSiteOptionsForSubmap('');
 
   const parentTargetId = parentId || (isSubmap ? currentMap?.id : '') || '';
   selectParent.value = parentTargetId;
@@ -2151,6 +2338,9 @@ async function handleDeleteMap(mapId, mapName) {
 
 // ─── 11. Gestión de Pestañas (Sidebar Tabs) ──────────────────────────────────
 function switchTab(tabId) {
+  if (!tabId) tabId = 'tab-maps';
+  localStorage.setItem('nexusdude_active_tab', tabId);
+
   document.querySelectorAll('.sidebar-tab').forEach(t => {
     t.classList.toggle('active', t.dataset.tab === tabId);
   });
@@ -2160,6 +2350,7 @@ function switchTab(tabId) {
   if (tabId === 'tab-spectrum') {
     handleSpectrumTabActivated();
   }
+  updateUrlHashState();
 }
 
 // ─── 11.2. ANALIZADOR DE ESPECTRO RF & REGLA DE FRECUENCIAS (4850 - 7250 MHz) ─
@@ -3008,7 +3199,7 @@ async function handleExecuteBulkSites() {
     await refreshBulkSitesStatus();
 
     // Refrescar el árbol de mapas lateral
-    await loadMapsTree();
+    await refreshMapsTabList();
 
     // Si el mapa actual es el padre, recargar su vista para mostrar los nuevos accesos directos
     if (parentMapId && currentMap && currentMap.id === parentMapId) {
@@ -3044,10 +3235,34 @@ window.addEventListener('DOMContentLoaded', async () => {
       userBadge.classList.remove('unauthenticated');
       authOverlay.style.display = 'none';
 
-      // Cargar mapas y filtros de inventario
+      // Cargar mapas y restaurar estado de navegación persistente
       const maps = await API.getMaps();
       if (maps && maps.length > 0) {
-        await loadMap(maps[0].id);
+        const hashParams = new URLSearchParams((window.location.hash || '').replace(/^#/, ''));
+        const hashTab = hashParams.get('tab');
+        const hashMapId = hashParams.get('map');
+        const hashNodeId = hashParams.get('node');
+
+        const savedTab = hashTab || localStorage.getItem('nexusdude_active_tab') || 'tab-maps';
+        const savedMapId = hashMapId || localStorage.getItem('nexusdude_last_map_id');
+
+        let targetMapId = maps[0].id;
+        if (savedMapId && maps.some(m => m.id === savedMapId)) {
+          targetMapId = savedMapId;
+        }
+
+        await loadMap(targetMapId);
+
+        // Restaurar pestaña activa (por defecto: Mapas)
+        switchTab(savedTab);
+
+        // Si venía un nodo específico seleccionado en el hash
+        if (hashNodeId && currentMap && currentMap.nodes) {
+          const matchedNode = currentMap.nodes.find(n => n.id === hashNodeId || String(n.device_id) === hashNodeId);
+          if (matchedNode) {
+            selectNode(matchedNode);
+          }
+        }
       }
       await loadInventoryFilters();
       await triggerSearch();
@@ -3135,6 +3350,14 @@ window.addEventListener('DOMContentLoaded', async () => {
     btnModeManual.addEventListener('click', () => setModalMode('manual'));
   }
 
+  // Buscador de sitios en el modal de nuevo submapa
+  const inputFilterSiteSubmap = document.getElementById('input-filter-site-submap');
+  if (inputFilterSiteSubmap) {
+    inputFilterSiteSubmap.addEventListener('input', (e) => {
+      renderSiteOptionsForSubmap(e.target.value);
+    });
+  }
+
   // Cambio de selección de sitio en el modal
   const selectSiteSubmap = document.getElementById('select-site-for-submap');
   if (selectSiteSubmap) {
@@ -3158,6 +3381,24 @@ window.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('modal-map').style.display = 'none';
   });
   document.getElementById('btn-confirm-save-map').addEventListener('click', handleSaveMap);
+
+  // Botón Insertar Acceso a Mapa Padre en lienzo
+  const btnEnsureParent = document.getElementById('btn-ensure-parent-node');
+  if (btnEnsureParent) {
+    btnEnsureParent.addEventListener('click', async () => {
+      if (!currentMap || !currentMap.parent_map_id) {
+        alert('Este mapa no tiene un mapa padre asociado.');
+        return;
+      }
+      try {
+        const res = await API.ensureParentNode(currentMap.id);
+        alert(res.message);
+        await loadMap(currentMap.id);
+      } catch (err) {
+        alert('Error insertando acceso a mapa padre: ' + err.message);
+      }
+    });
+  }
 
   // Botón Conectar Enlace
   document.getElementById('btn-toggle-link-mode').addEventListener('click', () => {
@@ -3567,6 +3808,22 @@ window.addEventListener('DOMContentLoaded', async () => {
         clearMultiSelection();
       } else if (selectedNode) {
         deselectNode();
+      }
+    }
+  });
+
+  // Navegación con historial del navegador (Atrás / Adelante)
+  window.addEventListener('hashchange', async () => {
+    const hashParams = new URLSearchParams((window.location.hash || '').replace(/^#/, ''));
+    const hashMapId = hashParams.get('map');
+    const hashTab = hashParams.get('tab');
+    if (hashMapId && currentMap && currentMap.id !== hashMapId) {
+      await loadMap(hashMapId);
+    }
+    if (hashTab) {
+      const activeTabEl = document.querySelector('.sidebar-tab.active');
+      if (!activeTabEl || activeTabEl.dataset.tab !== hashTab) {
+        switchTab(hashTab);
       }
     }
   });
