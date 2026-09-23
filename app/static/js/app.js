@@ -4434,10 +4434,10 @@ async function autoLayoutMapAsTree() {
   });
 
   // 4. Recursive Subtree Layout with non-overlapping bounding columns / universes
-  const nodeW = 180.0;
-  const colGap = 50.0;
-  const rowSpacing = 130.0;
-  const universeGap = 80.0;
+  const nodeW = 190.0;
+  const colGap = 70.0;
+  const rowSpacing = 260.0; // Espacio vertical entre niveles duplicado para máxima claridad de enrutamiento
+  const universeGap = 100.0;
   const startX = 80.0;
   const startY = 80.0;
 
@@ -4536,8 +4536,13 @@ async function autoLayoutMapAsTree() {
           x: pos.x,
           y: pos.y,
           easing: Konva.Easings.EaseInOut,
+          onUpdate: () => {
+            updateAllLinks();
+          },
           onFinish: () => {
-            updateLinks();
+            updateAllLinks();
+            if (nodesLayer) nodesLayer.batchDraw();
+            if (linksLayer) linksLayer.batchDraw();
           }
         }).play();
       }
@@ -4547,9 +4552,10 @@ async function autoLayoutMapAsTree() {
   });
 
   setTimeout(() => {
-    updateLinks();
-    layer.batchDraw();
-  }, 360);
+    updateAllLinks();
+    if (nodesLayer) nodesLayer.batchDraw();
+    if (linksLayer) linksLayer.batchDraw();
+  }, 380);
 
   await Promise.all(updatePromises);
 }
