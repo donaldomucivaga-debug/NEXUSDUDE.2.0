@@ -975,267 +975,309 @@ function roundCorners(waypoints, radius = 8) {
 function determineNodeFace(srcCx, srcCy, tgtCx, tgtCy, halfW, halfH) {
   const dx = tgtCx - srcCx;
   const dy = tgtCy - srcCy;
-  if (dx === 0 && dy === 0) return 'bottom';
+  if (Math.abs(dx) < 1e-5 && Math.abs(dy) < 1e-5) return 'bottom';
   const scaleX = Math.abs(dx) > 1e-5 ? halfW / Math.abs(dx) : Infinity;
   const scaleY = Math.abs(dy) > 1e-5 ? halfH / Math.abs(dy) : Infinity;
-  if (scaleY < scaleX) {
-    return dy > 0 ? 'bottom' : 'top';
+  if (scaleY <= scaleX) {
+    return dy >= 0 ? 'bottom' : 'top';
   } else {
-    return dx > 0 ? 'right' : 'left';
+    return dx >= 0 ? 'right' : 'left';
   }
 }
 
-function getNodeFacePortInfo(node, otherNode, link, isSource) {
+function getNodeFaceCenter(node, face) {
   const half = getNodeHalfDimensions(node);
-  const otherHalf = getNodeHalfDimensions(otherNode);
-
   const grp = nodeGroups.get(node.id);
-  const otherGrp = nodeGroups.get(otherNode.id);
-
   const nx = grp ? grp.x() : (node.x || 0);
   const ny = grp ? grp.y() : (node.y || 0);
-  const ox = otherGrp ? otherGrp.x() : (otherNode.x || 0);
-  const oy = otherGrp ? otherGrp.y() : (otherNode.y || 0);
+  const cx = nx + half.halfW;
+  const cy = ny + half.halfH;
 
-  const nCx = nx + half.halfW;
-  const nCy = ny + half.halfH;
-  const oCx = ox + otherHalf.halfW;
-  const oCy = oy + otherHalf.halfH;
+  if (face === 'top') return { x: cx, y: ny, cx, cy, halfW: half.halfW, halfH: half.halfH };
+  if (face === 'bottom') return { x: cx, y: ny + half.halfH * 2, cx, cy, halfW: half.halfW, halfH: half.halfH };
+  if (face === 'left') return { x: nx, y: cy, cx, cy, halfW: half.halfW, halfH: half.halfH };
+  return { x: nx + half.halfW * 2, y: cy, cx, cy, halfW: half.halfW, halfH: half.halfH }; // right
+}
 
-  const face = determineNodeFace(nCx, nCy, oCx, oCy, half.halfW, half.halfH);
+function avoidObstaclesInPath(rawPath, srcId, tgtId, allNodes, margin = 16) {
+  let currentPath = [...rawPath];
 
-  // Group and sort all links connected to this face of node to avoid line crossings
-  const allLinks = (currentMap && currentMap.links) ? currentMap.links : [];
-  const nodeMap = new Map();
-  if (currentMap && currentMap.nodes) {
-    currentMap.nodes.forEach(n => nodeMap.set(n.id, n));
+  for (let passIdx = 0; passIdx < 5; passIdx++) {
+    const newPath = [currentPath[0]];
+    let modified = false;
+
+    for (let i = 0; i < currentPath.length - 1; i++) {
+      const p1 = currentPath[i];
+      const p2 = currentPath[i + 1];
+
+      let hit = null;
+      for (let j = 0; j < allNodes.length; j++) {
+        const node = allNodes[j];
+        if (node.id === srcId || node.id === tgtId) continue;
+
+        const half = getNodeHalfDimensions(node);
+        const grp = nodeGroups.get(node.id);
+        const nx = grp ? grp.x() : (node.x || 0);
+        const ny = grp ? grp.y() : (node.y || 0);
+        const cx = nx + half.halfW;
+        const cy = ny + half.halfH;
+
+        const box = {
+          left: cx - half.halfW - margin,
+          right: cx + half.halfW + margin,
+          top: cy - half.halfH - margin,
+          bottom: cy + half.halfH + margin,
+          cx: cx,
+          cy: cy
+        };
+
+        if (lineIntersectsBox(p1, p2, box)) {
+          hit = { node, box };
+          break;
+        }
+      }
+
+      if (!hit) {
+        newPath.push(p2);
+      } else {
+        modified = true;
+        const box = hit.box;
+        const isVert = Math.abs(p1.x - p2.x) < 1e-4;
+        const isHoriz = Math.abs(p1.y - p2.y) < 1e-4;
+
+        if (isVert) {
+          const x = p1.x;
+          const y1 = p1.y;
+          const y2 = p2.y;
+          const clearX = x < box.cx ? box.left : box.right;
+
+          if (y1 < y2) {
+            newPath.push({ x: x, y: box.top });
+            newPath.push({ x: clearX, y: box.top });
+            newPath.push({ x: clearX, y: box.bottom });
+            newPath.push({ x: x, y: box.bottom });
+          } else {
+            newPath.push({ x: x, y: box.bottom });
+            newPath.push({ x: clearX, y: box.bottom });
+            newPath.push({ x: clearX, y: box.top });
+            newPath.push({ x: x, y: box.top });
+          }
+          newPath.push(p2);
+        } else if (isHoriz) {
+          const y = p1.y;
+          const x1 = p1.x;
+          const x2 = p2.x;
+          const clearY = y < box.cy ? box.top : box.bottom;
+
+          if (x1 < x2) {
+            newPath.push({ x: box.left, y: y });
+            newPath.push({ x: box.left, y: clearY });
+            newPath.push({ x: box.right, y: clearY });
+            newPath.push({ x: box.right, y: y });
+          } else {
+            newPath.push({ x: box.right, y: y });
+            newPath.push({ x: box.right, y: clearY });
+            newPath.push({ x: box.left, y: clearY });
+            newPath.push({ x: box.left, y: y });
+          }
+          newPath.push(p2);
+        } else {
+          const clearY = p1.y < box.cy ? box.top : box.bottom;
+          newPath.push({ x: box.left, y: clearY });
+          newPath.push({ x: box.right, y: clearY });
+          newPath.push(p2);
+        }
+      }
+    }
+
+    currentPath = newPath;
+    if (!modified) break;
   }
 
+  // Simplify collinear / redundant points
+  const simplified = [currentPath[0]];
+  for (let i = 1; i < currentPath.length; i++) {
+    const pt = currentPath[i];
+    const prev = simplified[simplified.length - 1];
+    if (Math.hypot(pt.x - prev.x, pt.y - prev.y) < 1.0) continue;
+
+    if (simplified.length >= 2) {
+      const prev2 = simplified[simplified.length - 2];
+      if ((Math.abs(pt.x - prev.x) < 1e-4 && Math.abs(prev.x - prev2.x) < 1e-4) ||
+          (Math.abs(pt.y - prev.y) < 1e-4 && Math.abs(prev.y - prev2.y) < 1e-4)) {
+        simplified[simplified.length - 1] = pt;
+        continue;
+      }
+    }
+    simplified.push(pt);
+  }
+
+  return simplified;
+}
+
+function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
+  if (!sourceNode || !targetNode) return [0, 0, 0, 0];
+
+  const srcHalf = getNodeHalfDimensions(sourceNode);
+  const tgtHalf = getNodeHalfDimensions(targetNode);
+  const srcGrp = nodeGroups.get(sourceNode.id);
+  const tgtGrp = nodeGroups.get(targetNode.id);
+
+  const srcNx = srcGrp ? srcGrp.x() : (sourceNode.x || 0);
+  const srcNy = srcGrp ? srcGrp.y() : (sourceNode.y || 0);
+  const tgtNx = tgtGrp ? tgtGrp.x() : (targetNode.x || 0);
+  const tgtNy = tgtGrp ? tgtGrp.y() : (targetNode.y || 0);
+
+  const srcCx = srcNx + srcHalf.halfW;
+  const srcCy = srcNy + srcHalf.halfH;
+  const tgtCx = tgtNx + tgtHalf.halfW;
+  const tgtCy = tgtNy + tgtHalf.halfH;
+
+  const sFace = determineNodeFace(srcCx, srcCy, tgtCx, tgtCy, srcHalf.halfW, srcHalf.halfH);
+  const tFace = determineNodeFace(tgtCx, tgtCy, srcCx, srcCy, tgtHalf.halfW, tgtHalf.halfH);
+
+  const srcPt = getNodeFaceCenter(sourceNode, sFace);
+  const tgtPt = getNodeFaceCenter(targetNode, tFace);
+
+  const allNodes = (currentMap && currentMap.nodes) ? currentMap.nodes : [];
+  const allLinks = (currentMap && currentMap.links) ? currentMap.links : [];
+
+  const nodeMap = new Map();
+  allNodes.forEach(n => nodeMap.set(n.id, n));
+
+  // Find all sibling links leaving src on the same face
   const siblings = [];
   for (let i = 0; i < allLinks.length; i++) {
     const l = allLinks[i];
-    let neighborId = null;
-    if (l.source_node_id === node.id) neighborId = l.target_node_id;
-    else if (l.target_node_id === node.id) neighborId = l.source_node_id;
+    let otherId = null;
+    if (l.source_node_id === sourceNode.id) otherId = l.target_node_id;
+    else if (l.target_node_id === sourceNode.id) otherId = l.source_node_id;
 
-    if (neighborId) {
-      const neighbor = nodeMap.get(neighborId);
-      if (neighbor) {
-        const neighGrp = nodeGroups.get(neighbor.id);
-        const neighHalf = getNodeHalfDimensions(neighbor);
-        const neighX = neighGrp ? neighGrp.x() : (neighbor.x || 0);
-        const neighY = neighGrp ? neighGrp.y() : (neighbor.y || 0);
-        const neighCx = neighX + neighHalf.halfW;
-        const neighCy = neighY + neighHalf.halfH;
+    if (otherId) {
+      const other = nodeMap.get(otherId);
+      if (other) {
+        const oHalf = getNodeHalfDimensions(other);
+        const oGrp = nodeGroups.get(other.id);
+        const oNx = oGrp ? oGrp.x() : (other.x || 0);
+        const oNy = oGrp ? oGrp.y() : (other.y || 0);
+        const oCx = oNx + oHalf.halfW;
+        const oCy = oNy + oHalf.halfH;
 
-        const neighFace = determineNodeFace(nCx, nCy, neighCx, neighCy, half.halfW, half.halfH);
-        if (neighFace === face) {
+        const oFace = determineNodeFace(srcCx, srcCy, oCx, oCy, srcHalf.halfW, srcHalf.halfH);
+        if (oFace === sFace) {
           siblings.push({
-            linkId: l.id,
-            neighborCx: neighCx,
-            neighborCy: neighCy
+            id: other.id,
+            cx: oCx,
+            cy: oCy,
+            node: other
           });
         }
       }
     }
   }
 
-  // Sort siblings along the face to prevent crossing traces
-  if (face === 'top' || face === 'bottom') {
-    siblings.sort((a, b) => a.neighborCx - b.neighborCx);
-  } else {
-    siblings.sort((a, b) => a.neighborCy - b.neighborCy);
-  }
+  const isSVert = (sFace === 'top' || sFace === 'bottom');
+  const isTVert = (tFace === 'top' || tFace === 'bottom');
 
-  const count = siblings.length;
-  const linkId = link ? link.id : null;
-  let idx = -1;
-  for (let i = 0; i < siblings.length; i++) {
-    if (siblings[i].linkId === linkId) {
-      idx = i;
-      break;
-    }
-  }
-  if (idx === -1) idx = Math.floor(count / 2);
+  let rawPath = [];
 
-  const pitch = 14;
-  const maxExtent = (face === 'top' || face === 'bottom') ? (half.halfW - 14) : (half.halfH - 12);
-  const actualPitch = count > 1 ? Math.min(pitch, (maxExtent * 2) / Math.max(1, count - 1)) : 0;
-  const offset = count <= 1 ? 0 : (-(count - 1) / 2.0 + idx) * actualPitch;
+  if (isSVert) {
+    const leftSibs = siblings.filter(s => s.cx < srcCx);
+    const rightSibs = siblings.filter(s => s.cx > srcCx);
 
-  const stubLen = 16;
-  let px = nCx, py = nCy;
-  let stubX = nCx, stubY = nCy;
+    leftSibs.sort((a, b) => Math.abs(b.cx - srcCx) - Math.abs(a.cx - srcCx)); // Outermost first
+    rightSibs.sort((a, b) => Math.abs(b.cx - srcCx) - Math.abs(a.cx - srcCx)); // Outermost first
 
-  if (face === 'bottom') {
-    px = nCx + offset;
-    py = ny + half.halfH * 2;
-    stubX = px;
-    stubY = py + stubLen;
-  } else if (face === 'top') {
-    px = nCx + offset;
-    py = ny;
-    stubX = px;
-    stubY = py - stubLen;
-  } else if (face === 'right') {
-    px = nx + half.halfW * 2;
-    py = nCy + offset;
-    stubX = px + stubLen;
-    stubY = py;
-  } else { // left
-    px = nx;
-    py = nCy + offset;
-    stubX = px - stubLen;
-    stubY = py;
-  }
+    let rank = 0;
+    const lIdx = leftSibs.findIndex(s => s.id === targetNode.id);
+    const rIdx = rightSibs.findIndex(s => s.id === targetNode.id);
+    if (lIdx !== -1) rank = lIdx;
+    else if (rIdx !== -1) rank = rIdx;
 
-  return {
-    x: px,
-    y: py,
-    face: face,
-    stub: { x: stubX, y: stubY }
-  };
-}
+    const dirSign = sFace === 'bottom' ? 1 : -1;
+    const pitch = 12;
+    let branchY = (srcPt.y + 20 * dirSign) + rank * pitch * dirSign;
 
-function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
-  if (!sourceNode || !targetNode) return [0, 0, 0, 0];
-
-  const srcPort = getNodeFacePortInfo(sourceNode, targetNode, link, true);
-  const tgtPort = getNodeFacePortInfo(targetNode, sourceNode, link, false);
-
-  const srcPt = { x: srcPort.x, y: srcPort.y };
-  const srcStub = srcPort.stub;
-  const tgtPt = { x: tgtPort.x, y: tgtPort.y };
-  const tgtStub = tgtPort.stub;
-
-  const dx = tgtStub.x - srcStub.x;
-  const dy = tgtStub.y - srcStub.y;
-  const distSq = dx * dx + dy * dy;
-  const dist = Math.sqrt(distSq);
-
-  // Detect intermediate node obstacles between srcStub and tgtStub
-  const allNodes = (currentMap && currentMap.nodes) ? currentMap.nodes : [];
-  const obstacles = [];
-  const boxPad = 8;
-
-  if (dist > 1e-4) {
-    for (let i = 0; i < allNodes.length; i++) {
-      const n = allNodes[i];
-      if (n.id === sourceNode.id || n.id === targetNode.id) continue;
-
-      const nHalf = getNodeHalfDimensions(n);
-      const nGrp = nodeGroups.get(n.id);
-      const nx = nGrp ? nGrp.x() : (n.x || 0);
-      const ny = nGrp ? nGrp.y() : (n.y || 0);
-      const ncx = nx + nHalf.halfW;
-      const ncy = ny + nHalf.halfH;
-
-      const t = ((ncx - srcStub.x) * dx + (ncy - srcStub.y) * dy) / distSq;
-      if (t <= 0.05 || t >= 0.95) continue;
-
-      const box = {
-        left: nx - boxPad,
-        right: nx + nHalf.halfW * 2 + boxPad,
-        top: ny - boxPad,
-        bottom: ny + nHalf.halfH * 2 + boxPad
-      };
-
-      if (lineIntersectsBox(srcStub, tgtStub, box)) {
-        const side = dx * (ncy - srcStub.y) - dy * (ncx - srcStub.x);
-        obstacles.push({
-          node: n,
-          t: t,
-          cx: ncx,
-          cy: ncy,
-          x: nx,
-          y: ny,
-          w: nHalf.halfW * 2,
-          h: nHalf.halfH * 2,
-          side: side
-        });
-      }
-    }
-  }
-
-  const rawPath = [srcPt, srcStub];
-
-  if (obstacles.length === 0) {
-    const sFace = srcPort.face;
-    const tFace = tgtPort.face;
-
-    if ((sFace === 'top' || sFace === 'bottom') && (tFace === 'top' || tFace === 'bottom')) {
-      const midY = (srcStub.y + tgtStub.y) / 2.0;
-      rawPath.push({ x: srcStub.x, y: midY });
-      rawPath.push({ x: tgtStub.x, y: midY });
-    } else if ((sFace === 'left' || sFace === 'right') && (tFace === 'left' || tFace === 'right')) {
-      const midX = (srcStub.x + tgtStub.x) / 2.0;
-      rawPath.push({ x: midX, y: srcStub.y });
-      rawPath.push({ x: midX, y: tgtStub.y });
-    } else if ((sFace === 'top' || sFace === 'bottom') && (tFace === 'left' || tFace === 'right')) {
-      rawPath.push({ x: srcStub.x, y: tgtStub.y });
-    } else if ((sFace === 'left' || sFace === 'right') && (tFace === 'top' || tFace === 'bottom')) {
-      rawPath.push({ x: tgtStub.x, y: srcStub.y });
-    } else {
-      rawPath.push(tgtStub);
-    }
-  } else {
-    obstacles.sort((a, b) => a.t - b.t);
-    const isHorizontal = Math.abs(dx) >= Math.abs(dy);
-    const totalSide = obstacles.reduce((sum, o) => sum + o.side, 0);
-    const routeSide = totalSide >= 0 ? 1 : -1;
-    const margin = 16;
-
-    for (let i = 0; i < obstacles.length; i++) {
-      const o = obstacles[i];
-      const oLeft = o.x - margin;
-      const oRight = o.x + o.w + margin;
-      const oTop = o.y - margin;
-      const oBottom = o.y + o.h + margin;
-
-      if (isHorizontal) {
-        const detourY = (dx * routeSide >= 0) ? oTop : oBottom;
-        if (dx > 0) {
-          rawPath.push({ x: oLeft, y: srcStub.y + (dy / dist) * (oLeft - srcStub.x) });
-          rawPath.push({ x: oLeft, y: detourY });
-          rawPath.push({ x: oRight, y: detourY });
-          rawPath.push({ x: oRight, y: srcStub.y + (dy / dist) * (oRight - srcStub.x) });
-        } else {
-          rawPath.push({ x: oRight, y: srcStub.y + (dy / dist) * (oRight - srcStub.x) });
-          rawPath.push({ x: oRight, y: detourY });
-          rawPath.push({ x: oLeft, y: detourY });
-          rawPath.push({ x: oLeft, y: srcStub.y + (dy / dist) * (oLeft - srcStub.x) });
-        }
+    if (sFace === 'bottom') {
+      if (tgtPt.y > srcPt.y + 32) {
+        branchY = Math.min(Math.max(branchY, srcPt.y + 16), tgtPt.y - 16);
       } else {
-        const detourX = (dy * routeSide >= 0) ? oRight : oLeft;
-        if (dy > 0) {
-          rawPath.push({ x: srcStub.x + (dx / dist) * (oTop - srcStub.y), y: oTop });
-          rawPath.push({ x: detourX, y: oTop });
-          rawPath.push({ x: detourX, y: oBottom });
-          rawPath.push({ x: srcStub.x + (dx / dist) * (oBottom - srcStub.y), y: oBottom });
-        } else {
-          rawPath.push({ x: srcStub.x + (dx / dist) * (oBottom - srcStub.y), y: oBottom });
-          rawPath.push({ x: detourX, y: oBottom });
-          rawPath.push({ x: detourX, y: oTop });
-          rawPath.push({ x: srcStub.x + (dx / dist) * (oTop - srcStub.y), y: oTop });
-        }
+        branchY = (srcPt.y + tgtPt.y) / 2.0;
+      }
+    } else {
+      if (tgtPt.y < srcPt.y - 32) {
+        branchY = Math.max(Math.min(branchY, srcPt.y - 16), tgtPt.y + 16);
+      } else {
+        branchY = (srcPt.y + tgtPt.y) / 2.0;
       }
     }
-  }
 
-  rawPath.push(tgtStub);
-  rawPath.push(tgtPt);
+    if (isTVert) {
+      rawPath = [
+        { x: srcPt.x, y: srcPt.y },
+        { x: srcPt.x, y: branchY },
+        { x: tgtPt.x, y: branchY },
+        { x: tgtPt.x, y: tgtPt.y }
+      ];
+    } else {
+      rawPath = [
+        { x: srcPt.x, y: srcPt.y },
+        { x: srcPt.x, y: tgtPt.y },
+        { x: tgtPt.x, y: tgtPt.y }
+      ];
+    }
+  } else {
+    const topSibs = siblings.filter(s => s.cy < srcCy);
+    const botSibs = siblings.filter(s => s.cy > srcCy);
 
-  // Simplify collinear or very close points
-  const simplified = [rawPath[0]];
-  for (let i = 1; i < rawPath.length; i++) {
-    const p = rawPath[i];
-    const prev = simplified[simplified.length - 1];
-    if (Math.hypot(p.x - prev.x, p.y - prev.y) > 2) {
-      simplified.push(p);
+    topSibs.sort((a, b) => Math.abs(b.cy - srcCy) - Math.abs(a.cy - srcCy));
+    botSibs.sort((a, b) => Math.abs(b.cy - srcCy) - Math.abs(a.cy - srcCy));
+
+    let rank = 0;
+    const tIdx = topSibs.findIndex(s => s.id === targetNode.id);
+    const bIdx = botSibs.findIndex(s => s.id === targetNode.id);
+    if (tIdx !== -1) rank = tIdx;
+    else if (bIdx !== -1) rank = bIdx;
+
+    const dirSign = sFace === 'right' ? 1 : -1;
+    const pitch = 12;
+    let branchX = (srcPt.x + 20 * dirSign) + rank * pitch * dirSign;
+
+    if (sFace === 'right') {
+      if (tgtPt.x > srcPt.x + 32) {
+        branchX = Math.min(Math.max(branchX, srcPt.x + 16), tgtPt.x - 16);
+      } else {
+        branchX = (srcPt.x + tgtPt.x) / 2.0;
+      }
+    } else {
+      if (tgtPt.x < srcPt.x - 32) {
+        branchX = Math.max(Math.min(branchX, srcPt.x - 16), tgtPt.x + 16);
+      } else {
+        branchX = (srcPt.x + tgtPt.x) / 2.0;
+      }
+    }
+
+    if (!isTVert) {
+      rawPath = [
+        { x: srcPt.x, y: srcPt.y },
+        { x: branchX, y: srcPt.y },
+        { x: branchX, y: tgtPt.y },
+        { x: tgtPt.x, y: tgtPt.y }
+      ];
+    } else {
+      rawPath = [
+        { x: srcPt.x, y: srcPt.y },
+        { x: tgtPt.x, y: srcPt.y },
+        { x: tgtPt.x, y: tgtPt.y }
+      ];
     }
   }
 
-  const rounded = roundCorners(simplified, 8);
+  // Avoid intermediate obstacles
+  const clearPath = avoidObstaclesInPath(rawPath, sourceNode.id, targetNode.id, allNodes, 16);
+
+  // Smooth short 8px corners
+  const rounded = roundCorners(clearPath, 8);
 
   const pts = [];
   for (let i = 0; i < rounded.length; i++) {
@@ -4175,6 +4217,125 @@ async function handleExecuteBulkSites() {
   }
 }
 
+async function autoLayoutMapAsTree() {
+  if (!currentMap || !currentMap.nodes || currentMap.nodes.length === 0) return;
+
+  const nodes = currentMap.nodes;
+  const links = currentMap.links || [];
+  const nodeMap = new Map();
+  nodes.forEach(n => nodeMap.set(n.id, n));
+
+  // Build children & parents maps
+  const childrenMap = new Map();
+  const parentsMap = new Map();
+  nodes.forEach(n => {
+    childrenMap.set(n.id, []);
+    parentsMap.set(n.id, []);
+  });
+
+  links.forEach(l => {
+    if (nodeMap.has(l.source_node_id) && nodeMap.has(l.target_node_id)) {
+      childrenMap.get(l.source_node_id).push(l.target_node_id);
+      parentsMap.get(l.target_node_id).push(l.source_node_id);
+    }
+  });
+
+  // Identify root nodes:
+  // 1. Nodes with 0 incoming parent links
+  // 2. Or Core/Router/Gateway/Parent_map devices
+  let rootIds = nodes
+    .filter(n => (parentsMap.get(n.id) || []).length === 0)
+    .map(n => n.id);
+
+  if (rootIds.length === 0) {
+    rootIds = [nodes[0].id];
+  }
+
+  // BFS level assignment
+  const levelMap = new Map();
+  const visited = new Set();
+  const queue = [];
+
+  rootIds.forEach(rid => {
+    levelMap.set(rid, 0);
+    visited.add(rid);
+    queue.push(rid);
+  });
+
+  while (queue.length > 0) {
+    const currId = queue.shift();
+    const currLvl = levelMap.get(currId);
+    const kids = childrenMap.get(currId) || [];
+    kids.forEach(kidId => {
+      if (!visited.has(kidId)) {
+        visited.add(kidId);
+        levelMap.set(kidId, currLvl + 1);
+        queue.push(kidId);
+      }
+    });
+  }
+
+  // Assign any remaining disconnected nodes
+  nodes.forEach(n => {
+    if (!visited.has(n.id)) {
+      levelMap.set(n.id, 0);
+      visited.add(n.id);
+    }
+  });
+
+  // Group nodes by level
+  const levels = new Map();
+  nodes.forEach(n => {
+    const lvl = levelMap.get(n.id) || 0;
+    if (!levels.has(lvl)) levels.set(lvl, []);
+    levels.get(lvl).push(n);
+  });
+
+  const startX = 80.0;
+  const startY = 80.0;
+  const colSpacing = 220.0;
+  const rowSpacing = 130.0;
+
+  const maxLvl = Math.max(...Array.from(levels.keys()));
+  const updatePromises = [];
+
+  for (let lvl = 0; lvl <= maxLvl; lvl++) {
+    const lvlNodes = levels.get(lvl) || [];
+    const lvlY = startY + lvl * rowSpacing;
+
+    lvlNodes.forEach((n, idx) => {
+      const targetX = startX + idx * colSpacing;
+      const targetY = lvlY;
+
+      n.x = targetX;
+      n.y = targetY;
+
+      const grp = nodeGroups.get(n.id);
+      if (grp) {
+        new Konva.Tween({
+          node: grp,
+          duration: 0.35,
+          x: targetX,
+          y: targetY,
+          easing: Konva.Easings.EaseInOut,
+          onFinish: () => {
+            updateLinks();
+          }
+        }).play();
+      }
+
+      updatePromises.push(API.updateNode(n.id, { x: targetX, y: targetY }).catch(e => console.warn(e)));
+    });
+  }
+
+  setTimeout(() => {
+    updateLinks();
+    layer.batchDraw();
+  }, 360);
+
+  await Promise.all(updatePromises);
+}
+
 // ─── 12. Inicialización General ─────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', async () => {
   setupSidebarResizer();
@@ -4420,6 +4581,27 @@ window.addEventListener('DOMContentLoaded', async () => {
     btnGrid.classList.toggle('btn-active', snapToGrid);
     btnGrid.querySelector('span').textContent = snapToGrid ? 'Imantar (20px)' : 'Libre';
   });
+
+  // Botón Ordenar en Árbol / Raíces
+  const btnTreeLayout = document.getElementById('btn-auto-layout-tree');
+  if (btnTreeLayout) {
+    btnTreeLayout.addEventListener('click', async () => {
+      if (!currentMap || !currentMap.nodes || currentMap.nodes.length === 0) {
+        alert('No hay nodos en el mapa actual para ordenar.');
+        return;
+      }
+      btnTreeLayout.disabled = true;
+      btnTreeLayout.innerHTML = '<i class="fas fa-spinner fa-spin"></i> <span>Ordenando...</span>';
+      try {
+        await autoLayoutMapAsTree();
+      } catch (err) {
+        console.error('Error organizando árbol:', err);
+      } finally {
+        btnTreeLayout.disabled = false;
+        btnTreeLayout.innerHTML = '<i class="fas fa-project-diagram"></i> <span>Ordenar en Árbol</span>';
+      }
+    });
+  }
 
   // Botón Subir Nivel (Level Up)
   document.getElementById('btn-level-up').addEventListener('click', () => {
