@@ -1221,7 +1221,7 @@ function startLinkPulseAnimation() {
     const origColor = isIntermap ? '#a855f7' : (entry.link?.status === 'ok' ? '#0ea5e9' : '#ef4444');
     const origWidth = isIntermap ? 2.5 : 2;
 
-    // 1. Iluminar en Verde Neón por 300ms
+    // 1. Iluminar en Verde Neón por 180ms
     line.stroke('#22c55e');
     line.fill('#22c55e');
     line.strokeWidth(3.5);
@@ -1230,7 +1230,7 @@ function startLinkPulseAnimation() {
     line.shadowOpacity(0.8);
     linksLayer.batchDraw();
 
-    // 2. Apagar después de 300ms (dejando 100ms de pausa antes de la siguiente a los 400ms)
+    // 2. Apagar después de 180ms (dejando ~70ms de pausa antes de la siguiente a los 250ms)
     setTimeout(() => {
       if (line && line.getStage()) {
         line.stroke(origColor);
@@ -1240,9 +1240,9 @@ function startLinkPulseAnimation() {
         line.shadowOpacity(0);
         linksLayer.batchDraw();
       }
-    }, 300);
+    }, 180);
 
-  }, 400);
+  }, 250);
 }
 
 function renderLink(link, nodesDict) {
