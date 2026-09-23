@@ -932,6 +932,46 @@ function getArrowPointsForDirection(pts, direction) {
   return pts;
 }
 
+function roundCorners(waypoints, radius = 8) {
+  if (waypoints.length < 3) return waypoints;
+
+  const res = [waypoints[0]];
+  for (let i = 1; i < waypoints.length - 1; i++) {
+    const prev = waypoints[i - 1];
+    const curr = waypoints[i];
+    const nxt = waypoints[i + 1];
+
+    const vInX = curr.x - prev.x;
+    const vInY = curr.y - prev.y;
+    const vOutX = nxt.x - curr.x;
+    const vOutY = nxt.y - curr.y;
+
+    const lenIn = Math.hypot(vInX, vInY);
+    const lenOut = Math.hypot(vOutX, vOutY);
+
+    if (lenIn < 1e-5 || lenOut < 1e-5) {
+      res.push(curr);
+      continue;
+    }
+
+    const r = Math.min(radius, lenIn * 0.45, lenOut * 0.45);
+
+    const pBefore = {
+      x: curr.x - (vInX / lenIn) * r,
+      y: curr.y - (vInY / lenIn) * r
+    };
+    const pAfter = {
+      x: curr.x + (vOutX / lenOut) * r,
+      y: curr.y + (vOutY / lenOut) * r
+    };
+
+    res.push(pBefore, pAfter);
+  }
+
+  res.push(waypoints[waypoints.length - 1]);
+  return res;
+}
+
 function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
   if (!sourceNode || !targetNode) return [0, 0, 0, 0];
 
@@ -963,7 +1003,7 @@ function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
   // Detect intermediate node obstacles between source and target
   const allNodes = (currentMap && currentMap.nodes) ? currentMap.nodes : [];
   const obstacles = [];
-  const boxPad = 10;
+  const boxPad = 8;
 
   for (let i = 0; i < allNodes.length; i++) {
     const n = allNodes[i];
@@ -996,6 +1036,10 @@ function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
         cy: ncy,
         halfW: nHalf.halfW,
         halfH: nHalf.halfH,
+        x: nx,
+        y: ny,
+        w: nHalf.halfW * 2,
+        h: nHalf.halfH * 2,
         side: side
       });
     }
@@ -1008,49 +1052,76 @@ function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
     return [p1.x, p1.y, p2.x, p2.y];
   }
 
-  // Sort obstacles by projection t
+  // Sort obstacles along the path
   obstacles.sort((a, b) => a.t - b.t);
 
-  const ux = dx / dist;
-  const uy = dy / dist;
-
-  // Detour side based on obstacle positions relative to vector AB
+  const isHorizontal = Math.abs(dx) >= Math.abs(dy);
   const totalSide = obstacles.reduce((sum, o) => sum + o.side, 0);
   const routeSide = totalSide >= 0 ? 1 : -1;
-  const nxNorm = uy * routeSide;
-  const nyNorm = -ux * routeSide;
+  const margin = 16;
 
-  const clearance = 24;
-  const waypoints = [];
+  const rawPath = [{ x: srcCx, y: srcCy }];
 
   for (let i = 0; i < obstacles.length; i++) {
     const o = obstacles[i];
-    const rn = (o.halfW + clearance) * Math.abs(nxNorm) + (o.halfH + clearance) * Math.abs(nyNorm);
-    const ru = o.halfW * Math.abs(ux) + o.halfH * Math.abs(uy);
+    const oLeft = o.x - margin;
+    const oRight = o.x + o.w + margin;
+    const oTop = o.y - margin;
+    const oBottom = o.y + o.h + margin;
 
-    if (ru > 40) {
-      const w1x = o.cx - ux * (ru * 0.65) + nxNorm * rn;
-      const w1y = o.cy - uy * (ru * 0.65) + nyNorm * rn;
-      const w2x = o.cx + ux * (ru * 0.65) + nxNorm * rn;
-      const w2y = o.cy + uy * (ru * 0.65) + nyNorm * rn;
-      waypoints.push({ x: w1x, y: w1y });
-      waypoints.push({ x: w2x, y: w2y });
+    if (isHorizontal) {
+      const detourY = (dx * routeSide >= 0) ? oTop : oBottom;
+      if (dx > 0) {
+        rawPath.push({ x: oLeft, y: srcCy + (dy / dist) * (oLeft - srcCx) });
+        rawPath.push({ x: oLeft, y: detourY });
+        rawPath.push({ x: oRight, y: detourY });
+        rawPath.push({ x: oRight, y: srcCy + (dy / dist) * (oRight - srcCx) });
+      } else {
+        rawPath.push({ x: oRight, y: srcCy + (dy / dist) * (oRight - srcCx) });
+        rawPath.push({ x: oRight, y: detourY });
+        rawPath.push({ x: oLeft, y: detourY });
+        rawPath.push({ x: oLeft, y: srcCy + (dy / dist) * (oLeft - srcCx) });
+      }
     } else {
-      const wx = o.cx + nxNorm * rn;
-      const wy = o.cy + nyNorm * rn;
-      waypoints.push({ x: wx, y: wy });
+      const detourX = (dy * routeSide >= 0) ? oRight : oLeft;
+      if (dy > 0) {
+        rawPath.push({ x: srcCx + (dx / dist) * (oTop - srcCy), y: oTop });
+        rawPath.push({ x: detourX, y: oTop });
+        rawPath.push({ x: detourX, y: oBottom });
+        rawPath.push({ x: srcCx + (dx / dist) * (oBottom - srcCy), y: oBottom });
+      } else {
+        rawPath.push({ x: srcCx + (dx / dist) * (oBottom - srcCy), y: oBottom });
+        rawPath.push({ x: detourX, y: oBottom });
+        rawPath.push({ x: detourX, y: oTop });
+        rawPath.push({ x: srcCx + (dx / dist) * (oTop - srcCy), y: oTop });
+      }
     }
   }
 
-  const firstWp = waypoints[0];
-  const lastWp = waypoints[waypoints.length - 1];
+  rawPath.push({ x: tgtCx, y: tgtCy });
+
+  // Simplify close points
+  const simplified = [rawPath[0]];
+  for (let i = 1; i < rawPath.length; i++) {
+    const p = rawPath[i];
+    const prev = simplified[simplified.length - 1];
+    if (Math.hypot(p.x - prev.x, p.y - prev.y) > 2) {
+      simplified.push(p);
+    }
+  }
+
+  // Smooth short 8px corners
+  const rounded = roundCorners(simplified, 8);
+
+  const firstWp = rounded[1];
+  const lastWp = rounded[rounded.length - 2];
 
   const p1 = getNodePerimeterIntersection(srcCx, srcCy, srcHalf.halfW, srcHalf.halfH, firstWp.x, firstWp.y);
   const p2 = getNodePerimeterIntersection(tgtCx, tgtCy, tgtHalf.halfW, tgtHalf.halfH, lastWp.x, lastWp.y);
 
   const pts = [p1.x, p1.y];
-  for (let i = 0; i < waypoints.length; i++) {
-    pts.push(waypoints[i].x, waypoints[i].y);
+  for (let i = 1; i < rounded.length - 1; i++) {
+    pts.push(rounded[i].x, rounded[i].y);
   }
   pts.push(p2.x, p2.y);
 
@@ -1066,13 +1137,12 @@ function renderLink(link, nodesDict) {
   const isIntermap = !!(link.extra_data && (link.extra_data.is_intermap || link.extra_data.remote_node_id));
   const direction = link.extra_data?.direction || 'source_to_target';
   const arrowPts = getArrowPointsForDirection(pts, direction);
-  const hasObstacles = pts.length > 4;
 
   const color = isIntermap ? '#a855f7' : (link.status === 'ok' ? '#0ea5e9' : '#ef4444');
 
   const line = new Konva.Arrow({
     points: arrowPts,
-    tension: hasObstacles ? 0.35 : 0,
+    tension: 0,
     pointerLength: 9,
     pointerWidth: 8,
     stroke: color,
@@ -1197,9 +1267,8 @@ function openLinkPropertiesModal(link, sourceNode, targetNode) {
         if (linkEntry && linkEntry.line) {
           const pts = calculateLinkEndpoints(sourceNode, targetNode, link);
           const arrowPts = getArrowPointsForDirection(pts, chosenDir);
-          const hasObstacles = pts.length > 4;
           linkEntry.line.points(arrowPts);
-          linkEntry.line.tension(hasObstacles ? 0.35 : 0);
+          linkEntry.line.tension(0);
           linksLayer.batchDraw();
         }
 
@@ -1248,9 +1317,8 @@ function updateAttachedLinks(nodeId, newX, newY) {
         const pts = calculateLinkEndpoints(srcNode, tgtNode, link);
         const direction = link.extra_data?.direction || 'source_to_target';
         const arrowPts = getArrowPointsForDirection(pts, direction);
-        const hasObstacles = pts.length > 4;
         line.points(arrowPts);
-        line.tension(hasObstacles ? 0.35 : 0);
+        line.tension(0);
         hasUpdated = true;
       }
     }
@@ -1274,9 +1342,8 @@ function updateAllLinks() {
       const pts = calculateLinkEndpoints(srcNode, tgtNode, link);
       const direction = link.extra_data?.direction || 'source_to_target';
       const arrowPts = getArrowPointsForDirection(pts, direction);
-      const hasObstacles = pts.length > 4;
       line.points(arrowPts);
-      line.tension(hasObstacles ? 0.35 : 0);
+      line.tension(0);
     }
   });
   linksLayer.batchDraw();
