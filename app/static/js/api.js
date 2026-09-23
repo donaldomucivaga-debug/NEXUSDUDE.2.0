@@ -198,6 +198,22 @@ const API = {
     throw new Error(await res.text());
   },
 
+  async syncMapNetboxNodes(mapId) {
+    const res = await this.fetch(`/api/maps/${mapId}/sync-netbox-nodes`, {
+      method: 'POST'
+    });
+    if (res.ok) return await res.json();
+    throw new Error(await res.text());
+  },
+
+  async syncAllNetboxNodes() {
+    const res = await this.fetch('/api/maps/sync-all-netbox-nodes', {
+      method: 'POST'
+    });
+    if (res.ok) return await res.json();
+    throw new Error(await res.text());
+  },
+
 
   // --- Enlaces ---
   async createLink(linkData) {

@@ -980,3 +980,129 @@ async def delete_link(link_id: str, user: Dict[str, Any] = Depends(get_current_u
         await db.execute("DELETE FROM links WHERE id = ?", (link_id,))
         await db.commit()
         return {"status": "success", "message": f"Enlace {link_id} eliminado"}
+
+
+# --- Sincronización Masiva de Nodos con NetBox ---
+
+@router.post("/sync-all-netbox-nodes")
+async def sync_all_maps_nodes_from_netbox(user: Dict[str, Any] = Depends(get_current_user)):
+    """
+    Sincroniza masivamente las propiedades (nombre, ip, rol, color de rol, modelo, fabricante, serial, status)
+    de todos los nodos de todos los mapas contra la información más reciente de NetBox.
+    """
+    await inventory_service.refresh_cache(force=True)
+
+    dev_by_id = {d["id"]: d for d in inventory_service._devices_cache}
+    dev_by_name = {d["name"].strip().lower(): d for d in inventory_service._devices_cache}
+
+    updated_count = 0
+    async with get_db_connection() as db:
+        c_nodes = await db.execute("SELECT id, map_id, device_id, name, ip, device_type, site_name, extra_data FROM nodes")
+        nodes_rows = await c_nodes.fetchall()
+
+        for nr in nodes_rows:
+            nid = nr["id"]
+            did = nr["device_id"]
+            name = nr["name"]
+
+            matched_dev = None
+            if did and did in dev_by_id:
+                matched_dev = dev_by_id[did]
+            elif name and name.strip().lower() in dev_by_name:
+                matched_dev = dev_by_name[name.strip().lower()]
+
+            if matched_dev:
+                try:
+                    edata = json.loads(nr["extra_data"]) if nr["extra_data"] else {}
+                except Exception:
+                    edata = {}
+
+                edata["manufacturer"] = matched_dev.get("manufacturer") or edata.get("manufacturer", "Genérico")
+                edata["model"] = matched_dev.get("model") or edata.get("model", "")
+                edata["serial"] = matched_dev.get("serial") or edata.get("serial", "")
+                edata["role"] = matched_dev.get("role") or matched_dev.get("device_type") or edata.get("role", "Dispositivo")
+                edata["role_color"] = matched_dev.get("role_color") or edata.get("role_color", "")
+                edata["status"] = matched_dev.get("status") or edata.get("status", "active")
+
+                new_device_type = matched_dev.get("role") or nr["device_type"]
+                new_name = matched_dev.get("name") or name
+                new_ip = matched_dev.get("ip") or nr["ip"]
+                new_did = matched_dev.get("id") or did
+                new_site = matched_dev.get("site") or nr["site_name"]
+
+                await db.execute("""
+                    UPDATE nodes
+                    SET device_id = ?, name = ?, ip = ?, device_type = ?, site_name = ?, extra_data = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                """, (new_did, new_name, new_ip, new_device_type, new_site, json.dumps(edata), nid))
+                updated_count += 1
+
+        await db.commit()
+
+    return {
+        "status": "success",
+        "total_nodes_updated": updated_count,
+        "message": f"Se sincronizaron {updated_count} nodos con los datos oficiales de NetBox."
+    }
+
+
+@router.post("/{map_id}/sync-netbox-nodes")
+async def sync_map_nodes_from_netbox(map_id: str, user: Dict[str, Any] = Depends(get_current_user)):
+    """
+    Sincroniza las propiedades de los nodos de un mapa específico contra la información más reciente de NetBox.
+    """
+    await inventory_service.refresh_cache(force=True)
+
+    dev_by_id = {d["id"]: d for d in inventory_service._devices_cache}
+    dev_by_name = {d["name"].strip().lower(): d for d in inventory_service._devices_cache}
+
+    updated_count = 0
+    async with get_db_connection() as db:
+        c_nodes = await db.execute("SELECT id, map_id, device_id, name, ip, device_type, site_name, extra_data FROM nodes WHERE map_id = ?", (map_id,))
+        nodes_rows = await c_nodes.fetchall()
+
+        for nr in nodes_rows:
+            nid = nr["id"]
+            did = nr["device_id"]
+            name = nr["name"]
+
+            matched_dev = None
+            if did and did in dev_by_id:
+                matched_dev = dev_by_id[did]
+            elif name and name.strip().lower() in dev_by_name:
+                matched_dev = dev_by_name[name.strip().lower()]
+
+            if matched_dev:
+                try:
+                    edata = json.loads(nr["extra_data"]) if nr["extra_data"] else {}
+                except Exception:
+                    edata = {}
+
+                edata["manufacturer"] = matched_dev.get("manufacturer") or edata.get("manufacturer", "Genérico")
+                edata["model"] = matched_dev.get("model") or edata.get("model", "")
+                edata["serial"] = matched_dev.get("serial") or edata.get("serial", "")
+                edata["role"] = matched_dev.get("role") or matched_dev.get("device_type") or edata.get("role", "Dispositivo")
+                edata["role_color"] = matched_dev.get("role_color") or edata.get("role_color", "")
+                edata["status"] = matched_dev.get("status") or edata.get("status", "active")
+
+                new_device_type = matched_dev.get("role") or nr["device_type"]
+                new_name = matched_dev.get("name") or name
+                new_ip = matched_dev.get("ip") or nr["ip"]
+                new_did = matched_dev.get("id") or did
+                new_site = matched_dev.get("site") or nr["site_name"]
+
+                await db.execute("""
+                    UPDATE nodes
+                    SET device_id = ?, name = ?, ip = ?, device_type = ?, site_name = ?, extra_data = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                """, (new_did, new_name, new_ip, new_device_type, new_site, json.dumps(edata), nid))
+                updated_count += 1
+
+        await db.commit()
+
+    return {
+        "status": "success",
+        "map_id": map_id,
+        "total_nodes_updated": updated_count,
+        "message": f"Se sincronizaron {updated_count} nodos del mapa con NetBox."
+    }

@@ -441,17 +441,17 @@ function getNodeRoleColor(node) {
   if (node.device_type === 'submap') {
     return '#7c3aed';
   }
-  // 1. Color explícito en extra_data de NetBox
+  const roleName = (node.extra_data?.role || node.device_type || '').toLowerCase().trim();
+  // 1. Buscar por nombre de rol en cache dinámico de NetBox (prioridad alta para reflejar cambios de NetBox en vivo)
+  if (roleName && netboxRoleColorsMap.has(roleName)) {
+    const c = netboxRoleColorsMap.get(roleName);
+    if (c) return c.startsWith('#') ? c : `#${c}`;
+  }
+  // 2. Color explícito en extra_data de NetBox
   const explicitColor = node.extra_data?.role_color;
   if (explicitColor && String(explicitColor).trim()) {
     const c = String(explicitColor).trim();
     return c.startsWith('#') ? c : `#${c}`;
-  }
-  // 2. Buscar por nombre de rol en cache dinámico de NetBox
-  const roleName = (node.extra_data?.role || node.device_type || '').toLowerCase().trim();
-  if (roleName && netboxRoleColorsMap.has(roleName)) {
-    const c = netboxRoleColorsMap.get(roleName);
-    if (c) return c.startsWith('#') ? c : `#${c}`;
   }
   // 3. Buscar en tabla de correspondencia predeterminada
   for (const [key, color] of Object.entries(DEFAULT_NETBOX_ROLE_COLORS)) {
@@ -3397,10 +3397,49 @@ window.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('select-site').addEventListener('change', triggerSearch);
   document.getElementById('select-role').addEventListener('change', triggerSearch);
   document.getElementById('btn-refresh-inventory').addEventListener('click', async () => {
-    await API.refreshInventory();
-    await loadInventoryFilters();
-    await triggerSearch();
+    const btn = document.getElementById('btn-refresh-inventory');
+    const origHtml = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+    try {
+      await API.refreshInventory();
+      await loadInventoryFilters();
+      if (currentMap && currentMap.id) {
+        await API.syncMapNetboxNodes(currentMap.id);
+        await loadMap(currentMap.id);
+      }
+      await triggerSearch();
+    } catch (e) {
+      console.error('Error refrescando inventario:', e);
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = origHtml;
+    }
   });
+
+  // Botón Sincronizar Nodos del mapa actual con NetBox en Toolbar
+  const btnSyncNetbox = document.getElementById('btn-sync-netbox-nodes');
+  if (btnSyncNetbox) {
+    btnSyncNetbox.addEventListener('click', async () => {
+      if (!currentMap) return;
+      const origHtml = btnSyncNetbox.innerHTML;
+      btnSyncNetbox.disabled = true;
+      btnSyncNetbox.innerHTML = '<i class="fas fa-spinner fa-spin"></i> <span>Sincronizando...</span>';
+
+      try {
+        await API.refreshInventory();
+        await loadInventoryFilters();
+        const res = await API.syncMapNetboxNodes(currentMap.id);
+        await loadMap(currentMap.id);
+        alert(res.message || 'Nodos actualizados con éxito desde NetBox');
+      } catch (err) {
+        alert('Error sincronizando con NetBox: ' + err.message);
+      } finally {
+        btnSyncNetbox.disabled = false;
+        btnSyncNetbox.innerHTML = origHtml;
+      }
+    });
+  }
 
   // Buscador de mapas en la pestaña de mapas
   let mapSearchTimeout = null;
