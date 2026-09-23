@@ -431,9 +431,12 @@ class ZabbixService:
 
     async def sync_to_zabbix(self, map_id: Optional[str] = None, scope: str = "global", clear_first: bool = True) -> Dict[str, Any]:
         """
-        Sincroniza la arquitectura de NexusDude a Zabbix Services (BSM):
-        - scope="global": Sincroniza todos los mapas y nodos del sistema.
-        - scope="branch": Sincroniza únicamente el mapa especificado (map_id) y todos sus submapas descendientes.
+        Sincroniza la arquitectura de NexusDude a Zabbix Services (BSM) como un árbol puro Host-a-Host:
+        - Cada nodo dispositivo es un Servicio en Zabbix.
+        - Las aristas direccionales (flechas Padre ➔ Hijo) definen quién es el padre/proveedor y quién es el hijo/consumidor.
+        - No se crean contenedores de mapas ni submapas; la jerarquía es 100% de dispositivos de red.
+        - scope="global": Sincroniza todos los nodos del sistema.
+        - scope="branch": Sincroniza los nodos del mapa actual y sus submapas descendientes.
         """
         await self.login()
         await self.refresh_zabbix_hosts_cache(force=True)
@@ -443,7 +446,7 @@ class ZabbixService:
             all_maps_rows = [dict(r) for r in await c_maps.fetchall()]
 
         if not all_maps_rows:
-            return {"error": "No hay mapas configurados", "maps_synced": 0}
+            return {"error": "No hay mapas configurados", "nodes_synced": 0}
 
         all_maps_dict = {m["id"]: m for m in all_maps_rows}
 
@@ -460,315 +463,226 @@ class ZabbixService:
             if clear_first:
                 await self.clear_nexus_services()
 
-        target_map_ids_set = {m["id"] for m in target_maps}
+        target_map_ids = [m["id"] for m in target_maps]
+        target_map_ids_set = set(target_map_ids)
 
-        # Mapa ID -> Zabbix Service ID
-        map_service_ids: Dict[str, str] = {}
-        # Node ID -> Zabbix Service ID
+        # ─── Paso 1: Obtener todos los nodos y enlaces de los mapas seleccionados ───
+        async with get_db_connection() as db:
+            map_ids_ph = ",".join(["?"] * len(target_map_ids))
+            c_nodes = await db.execute(f"SELECT * FROM nodes WHERE map_id IN ({map_ids_ph})", target_map_ids)
+            all_node_rows = [dict(r) for r in await c_nodes.fetchall()]
+
+            c_links = await db.execute(f"SELECT * FROM links WHERE map_id IN ({map_ids_ph})", target_map_ids)
+            all_link_rows = [dict(r) for r in await c_links.fetchall()]
+
+        devices_dict: Dict[str, Dict[str, Any]] = {}
+        portals_dict: Dict[str, Dict[str, Any]] = {}
+        for n in all_node_rows:
+            dtype = n.get("device_type")
+            if dtype in ("submap", "parent_map"):
+                portals_dict[n["id"]] = n
+            else:
+                devices_dict[n["id"]] = n
+
+        # ─── Paso 2: Construir Grafo Dirigido (Padre/Proveedor ➔ Hijo/Consumidor) ───
+        uplink_parents: Dict[str, Set[str]] = {nid: set() for nid in devices_dict}
+        downlink_children: Dict[str, Set[str]] = {nid: set() for nid in devices_dict}
+
+        for l in all_link_rows:
+            s_id = l["source_node_id"]
+            t_id = l["target_node_id"]
+
+            l_extra = {}
+            if l.get("extra_data"):
+                try:
+                    l_extra = json.loads(l["extra_data"]) if isinstance(l["extra_data"], str) else l["extra_data"]
+                except Exception:
+                    l_extra = {}
+
+            direction = l_extra.get("direction", "source_to_target")
+
+            is_s_portal = s_id in portals_dict
+            is_t_portal = t_id in portals_dict
+
+            if is_s_portal or is_t_portal:
+                # Enlace inter-mapa a través de un portal de navegación
+                local_dev_id = t_id if is_s_portal else s_id
+                nav_node = portals_dict.get(s_id if is_s_portal else t_id, {})
+                is_parent_portal = nav_node.get("device_type") == "parent_map"
+                remote_node_id = l_extra.get("remote_node_id")
+
+                if local_dev_id in devices_dict and remote_node_id:
+                    if is_parent_portal:
+                        # Portal a mapa padre: el remoto alimenta al local por defecto
+                        p_id, c_id = (local_dev_id, remote_node_id) if direction == "target_to_source" else (remote_node_id, local_dev_id)
+                    else:
+                        # Portal a submapa: el local alimenta al remoto por defecto
+                        p_id, c_id = (remote_node_id, local_dev_id) if direction == "target_to_source" else (local_dev_id, remote_node_id)
+
+                    if c_id in uplink_parents:
+                        uplink_parents[c_id].add(p_id)
+                    if p_id in downlink_children:
+                        downlink_children[p_id].add(c_id)
+
+            elif s_id in devices_dict and t_id in devices_dict:
+                # Enlace directo dentro del mapa
+                if direction == "target_to_source":
+                    p_id, c_id = t_id, s_id
+                else:
+                    p_id, c_id = s_id, t_id
+
+                uplink_parents[c_id].add(p_id)
+                downlink_children[p_id].add(c_id)
+
+        # ─── Paso 3: Ordenación Topológica (Padres/Proveedores primero) ─────────────
+        sorted_device_ids = []
+        visited_ids = set()
+
+        # Raíces: nodos sin padres dentro del conjunto de dispositivos
+        for nid in devices_dict:
+            parents_in_scope = [pid for pid in uplink_parents[nid] if pid in devices_dict]
+            if not parents_in_scope:
+                sorted_device_ids.append(nid)
+                visited_ids.add(nid)
+
+        # Nodos dependientes iterativamente
+        remaining = [nid for nid in devices_dict if nid not in visited_ids]
+        iterations = 0
+        while remaining and iterations < 100:
+            iterations += 1
+            progress = False
+            next_remaining = []
+            for nid in remaining:
+                parents_in_scope = [pid for pid in uplink_parents[nid] if pid in devices_dict]
+                if all(pid in visited_ids for pid in parents_in_scope):
+                    sorted_device_ids.append(nid)
+                    visited_ids.add(nid)
+                    progress = True
+                else:
+                    next_remaining.append(nid)
+            remaining = next_remaining
+            if not progress:
+                sorted_device_ids.extend(remaining)
+                break
+
+        # ─── Paso 4: Crear Servicios Puros Host ➔ Host en Zabbix BSM ──────────────
         node_service_ids: Dict[str, str] = {}
-
         report = {
             "scope": scope,
             "root_map_id": map_id if scope == "branch" else None,
-            "maps_synced": 0,
-            "submaps_synced": 0,
+            "maps_processed": len(target_maps),
+            "root_devices_count": 0,
             "nodes_synced": 0,
             "nodes_matched_zabbix": 0,
             "direct_dependencies_created": 0,
             "details": []
         }
 
-        # ─── Paso 1: Crear Servicios para Mapas Raíz y Submapas ─────────────
-        if scope == "branch" and target_maps:
-            root_map = target_maps[0]
-            root_parent_map_id = root_map.get("parent_map_id")
-            external_parent_service_id = None
+        for nid in sorted_device_ids:
+            n_info = devices_dict[nid]
+            node_name = n_info["name"]
+            node_map_id = n_info["map_id"]
 
-            if root_parent_map_id:
-                try:
-                    existing_services = await self._call_api("service.get", {
-                        "output": ["serviceid", "name"],
-                        "tags": [
-                            {"tag": "managed_by", "value": "nexusdude"},
-                            {"tag": "map_id", "value": root_parent_map_id}
-                        ]
-                    })
-                    if existing_services:
-                        for es in existing_services:
-                            if es.get("name", "").startswith("[MAP]") or es.get("name", "").startswith("[SUBMAP]"):
-                                external_parent_service_id = es["serviceid"]
-                                break
-                        if not external_parent_service_id:
-                            external_parent_service_id = existing_services[0]["serviceid"]
-                except Exception as e:
-                    logger.warning(f"No se pudo consultar servicio del mapa padre {root_parent_map_id}: {e}")
+            matched = self.find_zabbix_host(node_name, n_info.get("ip"))
+            z_name = matched["name"] if matched else None
+            z_hostid = matched["hostid"] if matched else None
 
-            is_sub = bool(root_parent_map_id)
-            p_list = [{"serviceid": external_parent_service_id}] if external_parent_service_id else []
-            tag_type = "submap" if is_sub else "map"
-            prefix = "[SUBMAP]" if is_sub else "[MAP]"
+            # Problem tags
+            problem_tags = []
+            if matched and z_name:
+                problem_tags.append({"tag": "host", "operator": 0, "value": z_name})
+                if z_hostid:
+                    await self.ensure_host_tag(str(z_hostid), z_name)
+                report["nodes_matched_zabbix"] += 1
 
-            s_res = await self._call_api("service.create", {
-                "name": f"{prefix} {root_map['name']}",
-                "algorithm": 2,
+            # Determinar padres del servicio en Zabbix
+            parent_node_ids = uplink_parents[nid]
+            parents = []
+
+            for p_id in parent_node_ids:
+                if p_id in node_service_ids:
+                    parents.append({"serviceid": node_service_ids[p_id]})
+                    report["direct_dependencies_created"] += 1
+                elif scope == "branch":
+                    # Si el padre está fuera de la rama, buscar si ya existe en Zabbix
+                    try:
+                        ext_srv = await self._call_api("service.get", {
+                            "output": ["serviceid", "name"],
+                            "tags": [
+                                {"tag": "managed_by", "value": "nexusdude"},
+                                {"tag": "node_id", "value": p_id}
+                            ]
+                        })
+                        if ext_srv:
+                            parents.append({"serviceid": ext_srv[0]["serviceid"]})
+                            report["direct_dependencies_created"] += 1
+                    except Exception as p_err:
+                        logger.warning(f"Error buscando servicio externo de nodo padre {p_id}: {p_err}")
+
+            is_root = len(parents) == 0
+            if is_root:
+                report["root_devices_count"] += 1
+
+            has_children = len(downlink_children[nid]) > 0
+            algorithm = 2 if has_children else 0
+            service_problem_tags = [] if has_children else problem_tags
+
+            service_payload = {
+                "name": f"[DEV] {node_name}",
+                "algorithm": algorithm,
                 "sortorder": 0,
-                "parents": p_list,
+                "parents": parents,
+                "problem_tags": service_problem_tags,
                 "tags": [
                     {"tag": "managed_by", "value": "nexusdude"},
-                    {"tag": "nexus_type", "value": tag_type},
-                    {"tag": "map_id", "value": root_map["id"]},
-                    {"tag": "parent_map_id", "value": root_parent_map_id or ""}
+                    {"tag": "nexus_type", "value": "device"},
+                    {"tag": "node_id", "value": nid},
+                    {"tag": "map_id", "value": node_map_id},
+                    {"tag": "relation_type", "value": "root" if is_root else "direct"},
+                    {"tag": "zabbix_matched", "value": "true" if matched else "false"}
                 ]
-            })
-            map_service_ids[root_map["id"]] = s_res["serviceids"][0]
-            if is_sub:
-                report["submaps_synced"] += 1
-            else:
-                report["maps_synced"] += 1
+            }
 
-            remaining_maps = [m for m in target_maps if m["id"] != root_map["id"]]
-            while remaining_maps:
-                progress = False
-                next_remaining = []
-                for sm in remaining_maps:
-                    p_mid = sm.get("parent_map_id")
-                    if p_mid in map_service_ids:
-                        parent_service_id = map_service_ids[p_mid]
-                        s_res = await self._call_api("service.create", {
-                            "name": f"[SUBMAP] {sm['name']}",
-                            "algorithm": 2,
+            try:
+                s_res = await self._call_api("service.create", service_payload)
+                node_s_id = s_res["serviceids"][0]
+                node_service_ids[nid] = node_s_id
+                report["nodes_synced"] += 1
+
+                # Si tiene hijos y está vinculado a Zabbix, crear el servicio hoja [HOST]
+                # para que las alarmas del propio equipo se propaguen al contenedor
+                if has_children and problem_tags:
+                    try:
+                        host_leaf_payload = {
+                            "name": f"[HOST] {node_name}",
+                            "algorithm": 0,
                             "sortorder": 0,
-                            "parents": [{"serviceid": parent_service_id}],
+                            "parents": [{"serviceid": node_s_id}],
+                            "problem_tags": problem_tags,
                             "tags": [
                                 {"tag": "managed_by", "value": "nexusdude"},
-                                {"tag": "nexus_type", "value": "submap"},
-                                {"tag": "map_id", "value": sm["id"]},
-                                {"tag": "parent_map_id", "value": p_mid or ""}
+                                {"tag": "nexus_type", "value": "host_status"},
+                                {"tag": "node_id", "value": nid},
+                                {"tag": "map_id", "value": node_map_id}
                             ]
-                        })
-                        map_service_ids[sm["id"]] = s_res["serviceids"][0]
-                        report["submaps_synced"] += 1
-                        progress = True
-                    else:
-                        next_remaining.append(sm)
-                if not progress:
-                    for sm in next_remaining:
-                        s_res = await self._call_api("service.create", {
-                            "name": f"[SUBMAP] {sm['name']}",
-                            "algorithm": 2,
-                            "sortorder": 0,
-                            "tags": [
-                                {"tag": "managed_by", "value": "nexusdude"},
-                                {"tag": "nexus_type", "value": "submap"},
-                                {"tag": "map_id", "value": sm["id"]}
-                            ]
-                        })
-                        map_service_ids[sm["id"]] = s_res["serviceids"][0]
-                        report["submaps_synced"] += 1
-                    break
-                remaining_maps = next_remaining
+                        }
+                        await self._call_api("service.create", host_leaf_payload)
+                    except Exception as h_err:
+                        logger.warning(f"Error creando servicio hoja [HOST] para {node_name}: {h_err}")
 
-        else:
-            root_maps = [m for m in target_maps if not m.get("parent_map_id") or m.get("parent_map_id") not in target_map_ids_set]
-            sub_maps = [m for m in target_maps if m.get("parent_map_id") and m.get("parent_map_id") in target_map_ids_set]
-
-            for m in root_maps:
-                s_res = await self._call_api("service.create", {
-                    "name": f"[MAP] {m['name']}",
-                    "algorithm": 2,
-                    "sortorder": 0,
-                    "tags": [
-                        {"tag": "managed_by", "value": "nexusdude"},
-                        {"tag": "nexus_type", "value": "map"},
-                        {"tag": "map_id", "value": m["id"]}
-                    ]
+                report["details"].append({
+                    "node_id": nid,
+                    "node_name": node_name,
+                    "service_id": node_s_id,
+                    "is_root": is_root,
+                    "parents_count": len(parents),
+                    "children_count": len(downlink_children[nid]),
+                    "zabbix_matched": matched is not None
                 })
-                s_id = s_res["serviceids"][0]
-                map_service_ids[m["id"]] = s_id
-                report["maps_synced"] += 1
+            except Exception as err:
+                logger.error(f"Error creando servicio Zabbix para nodo {node_name}: {err}")
 
-            remaining_submaps = list(sub_maps)
-            while remaining_submaps:
-                progress = False
-                next_rem = []
-                for sm in remaining_submaps:
-                    p_mid = sm.get("parent_map_id")
-                    if p_mid in map_service_ids:
-                        parent_service_id = map_service_ids[p_mid]
-                        s_res = await self._call_api("service.create", {
-                            "name": f"[SUBMAP] {sm['name']}",
-                            "algorithm": 2,
-                            "sortorder": 0,
-                            "parents": [{"serviceid": parent_service_id}],
-                            "tags": [
-                                {"tag": "managed_by", "value": "nexusdude"},
-                                {"tag": "nexus_type", "value": "submap"},
-                                {"tag": "map_id", "value": sm["id"]},
-                                {"tag": "parent_map_id", "value": p_mid or ""}
-                            ]
-                        })
-                        map_service_ids[sm["id"]] = s_res["serviceids"][0]
-                        report["submaps_synced"] += 1
-                        progress = True
-                    else:
-                        next_rem.append(sm)
-                if not progress:
-                    for sm in next_rem:
-                        s_res = await self._call_api("service.create", {
-                            "name": f"[SUBMAP] {sm['name']}",
-                            "algorithm": 2,
-                            "sortorder": 0,
-                            "tags": [
-                                {"tag": "managed_by", "value": "nexusdude"},
-                                {"tag": "nexus_type", "value": "submap"},
-                                {"tag": "map_id", "value": sm["id"]}
-                            ]
-                        })
-                        map_service_ids[sm["id"]] = s_res["serviceids"][0]
-                        report["submaps_synced"] += 1
-                    break
-                remaining_submaps = next_rem
-
-        # ─── Paso 2: Procesar Nodos y Aristas por cada Mapa ──────────────────
-        for m in target_maps:
-            cur_map_id = m["id"]
-            cur_map_service_id = map_service_ids.get(cur_map_id)
-            analysis = await self.analyze_topology(cur_map_id)
-
-            map_nodes_details = []
-
-            # Filtrar y ordenar nodos en orden topológico (Proveedores/Padres primero)
-            candidate_nodes = [n for n in analysis["nodes"] if n.get("device_type") not in ("submap", "parent_map")]
-
-            sorted_nodes = []
-            visited_ids = set()
-
-            # Nodos raíz (sin uplinks) primero
-            for n in candidate_nodes:
-                if not n.get("uplink_ids"):
-                    sorted_nodes.append(n)
-                    visited_ids.add(n["node_id"])
-
-            # Nodos dependientes iterativamente
-            remaining = [n for n in candidate_nodes if n["node_id"] not in visited_ids]
-            iterations = 0
-            while remaining and iterations < 50:
-                iterations += 1
-                progress = False
-                next_remaining = []
-                for n in remaining:
-                    if all(u_id in visited_ids or u_id in node_service_ids for u_id in n.get("uplink_ids", [])):
-                        sorted_nodes.append(n)
-                        visited_ids.add(n["node_id"])
-                        progress = True
-                    else:
-                        next_remaining.append(n)
-                remaining = next_remaining
-                if not progress:
-                    sorted_nodes.extend(remaining)
-                    break
-
-            # Crear servicios para cada nodo del mapa en orden de flujo de servicio
-            for n_info in sorted_nodes:
-                nid = n_info["node_id"]
-                node_name = n_info["name"]
-
-                matched = n_info.get("zabbix_matched")
-                z_name = n_info.get("zabbix_hostname") or node_name
-                z_hostid = n_info.get("zabbix_hostid")
-
-                # Problem tags para vincular alarmas de ping / disponibilidad de Zabbix
-                problem_tags = []
-                if matched and z_name:
-                    problem_tags.append({"tag": "host", "operator": 0, "value": z_name})
-                    if z_hostid:
-                        await self.ensure_host_tag(str(z_hostid), z_name)
-                    report["nodes_matched_zabbix"] += 1
-
-                # Determinar padres del servicio en función de las aristas directas
-                relation_type = n_info["relation_type"]
-                uplink_ids = n_info["uplink_ids"]
-                parents = []
-
-                if uplink_ids:
-                    for p_nid in uplink_ids:
-                        if p_nid in node_service_ids:
-                            parents.append({"serviceid": node_service_ids[p_nid]})
-                            report["direct_dependencies_created"] += 1
-
-                if not parents and cur_map_service_id:
-                    parents.append({"serviceid": cur_map_service_id})
-
-                has_children = len(n_info.get("downlink_ids", [])) > 0
-
-                # Algoritmo de cálculo:
-                # 2 = Most critical of child services (para propagar fallas hacia arriba)
-                algorithm = 2 if has_children else 0
-
-                # En Zabbix 7.0, un servicio con hijos NO puede tener problem_tags directamente
-                service_problem_tags = [] if has_children else problem_tags
-
-                service_payload = {
-                    "name": f"[DEVICE] {node_name}",
-                    "algorithm": algorithm,
-                    "sortorder": 0,
-                    "parents": parents,
-                    "problem_tags": service_problem_tags,
-                    "tags": [
-                        {"tag": "managed_by", "value": "nexusdude"},
-                        {"tag": "nexus_type", "value": "device"},
-                        {"tag": "node_id", "value": nid},
-                        {"tag": "map_id", "value": cur_map_id},
-                        {"tag": "relation_type", "value": relation_type},
-                        {"tag": "zabbix_matched", "value": "true" if matched else "false"}
-                    ]
-                }
-
-                try:
-                    s_res = await self._call_api("service.create", service_payload)
-                    node_s_id = s_res["serviceids"][0]
-                    node_service_ids[nid] = node_s_id
-                    report["nodes_synced"] += 1
-
-                    # Si tiene hijos y está vinculado a Zabbix, crear un servicio hoja [HOST]
-                    # para que las alarmas del propio equipo se propaguen al contenedor
-                    if has_children and problem_tags:
-                        try:
-                            host_leaf_payload = {
-                                "name": f"[HOST] {node_name}",
-                                "algorithm": 0,
-                                "sortorder": 0,
-                                "parents": [{"serviceid": node_s_id}],
-                                "problem_tags": problem_tags,
-                                "tags": [
-                                    {"tag": "managed_by", "value": "nexusdude"},
-                                    {"tag": "nexus_type", "value": "host_status"},
-                                    {"tag": "node_id", "value": nid},
-                                    {"tag": "map_id", "value": cur_map_id}
-                                ]
-                            }
-                            await self._call_api("service.create", host_leaf_payload)
-                        except Exception as h_err:
-                            logger.warning(f"Error creando servicio hoja [HOST] para {node_name}: {h_err}")
-
-                    map_nodes_details.append({
-                        "node_name": node_name,
-                        "service_id": node_s_id,
-                        "relation_type": relation_type,
-                        "parents_count": len(parents),
-                        "zabbix_matched": matched
-                    })
-                except Exception as err:
-                    logger.error(f"Error creando servicio Zabbix para nodo {node_name}: {err}")
-
-            report["details"].append({
-                "map_id": cur_map_id,
-                "map_name": m["name"],
-                "nodes_processed": len(map_nodes_details),
-                "nodes": map_nodes_details
-            })
-
-        logger.info(f"Sincronización NexusDude -> Zabbix ({scope}) completada exitosamente: {report}")
+        logger.info(f"Sincronización NexusDude -> Zabbix Host-a-Host ({scope}) completada exitosamente: {report}")
         return report
 
     async def get_map_realtime_status(self, map_id: str) -> Dict[str, Any]:
