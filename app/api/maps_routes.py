@@ -322,6 +322,7 @@ async def create_map_from_site(req: CreateMapFromSiteRequest, user: Dict[str, An
                     "model": d.get("model") or "",
                     "serial": d.get("serial") or "",
                     "role": d.get("role") or d.get("device_type") or "Dispositivo",
+                    "role_color": d.get("role_color") or "",
                     "status": d.get("status") or "active"
                 })
                 await db.execute("""
@@ -488,6 +489,7 @@ async def bulk_create_maps_from_sites(
                         "model": d.get("model") or "",
                         "serial": d.get("serial") or "",
                         "role": d.get("role") or d.get("device_type") or "Dispositivo",
+                        "role_color": d.get("role_color") or "",
                         "status": d.get("status") or "active"
                     })
                     await db.execute("""
@@ -620,6 +622,7 @@ async def populate_map_from_site(map_id: str, req: PopulateMapFromSiteRequest, u
                 "model": d.get("model") or "",
                 "serial": d.get("serial") or "",
                 "role": d.get("role") or d.get("device_type") or "Dispositivo",
+                "role_color": d.get("role_color") or "",
                 "status": d.get("status") or "active"
             })
             await db.execute("""

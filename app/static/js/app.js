@@ -302,6 +302,7 @@ function setupDragAndDrop() {
           model: device.model || '',
           serial: device.serial || '',
           role: device.role || device.device_type || 'Dispositivo',
+          role_color: device.role_color || '',
           status: device.status || 'active'
         }
       });
@@ -391,6 +392,76 @@ function setupSidebarResizer() {
 }
 
 // ─── 4. Renderizado de Nodos y Enlaces en Konva ──────────────────────────────
+// Colores base predeterminados según funciones/roles de NetBox
+const DEFAULT_NETBOX_ROLE_COLORS = {
+  'router': '#8bc34a',
+  'core': '#8bc34a',
+  'gateway': '#8bc34a',
+  'borde': '#8bc34a',
+  'switch': '#4caf50',
+  'distribucion': '#4caf50',
+  'olt': '#e91e63',
+  'ap': '#2196f3',
+  'access point': '#2196f3',
+  'sector access point': '#ff9800',
+  'sector': '#ff9800',
+  'cpe': '#f44336',
+  'radio': '#2196f3',
+  'ptp': '#ff9800',
+  'zona wifi': '#ff5722',
+  'hotspot': '#ffeb3b',
+  'site monitor': '#ff66ff',
+  'bridge': '#9e9e9e',
+  'submap': '#9333ea',
+  'parent_map': '#0284c7'
+};
+
+// Mapa en memoria sincronizado en tiempo real desde NetBox API
+const netboxRoleColorsMap = new Map();
+
+function hexToRgba(hex, alpha = 0.22) {
+  if (!hex) return null;
+  let clean = String(hex).replace('#', '').trim();
+  if (clean.length === 3) {
+    clean = clean.split('').map(c => c + c).join('');
+  }
+  if (clean.length !== 6) return null;
+  const num = parseInt(clean, 16);
+  const r = (num >> 16) & 255;
+  const g = (num >> 8) & 255;
+  const b = num & 255;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function getNodeRoleColor(node) {
+  if (!node) return null;
+  if (node.device_type === 'parent_map' || node.extra_data?.is_parent_shortcut) {
+    return '#0284c7';
+  }
+  if (node.device_type === 'submap') {
+    return '#7c3aed';
+  }
+  // 1. Color explícito en extra_data de NetBox
+  const explicitColor = node.extra_data?.role_color;
+  if (explicitColor && String(explicitColor).trim()) {
+    const c = String(explicitColor).trim();
+    return c.startsWith('#') ? c : `#${c}`;
+  }
+  // 2. Buscar por nombre de rol en cache dinámico de NetBox
+  const roleName = (node.extra_data?.role || node.device_type || '').toLowerCase().trim();
+  if (roleName && netboxRoleColorsMap.has(roleName)) {
+    const c = netboxRoleColorsMap.get(roleName);
+    if (c) return c.startsWith('#') ? c : `#${c}`;
+  }
+  // 3. Buscar en tabla de correspondencia predeterminada
+  for (const [key, color] of Object.entries(DEFAULT_NETBOX_ROLE_COLORS)) {
+    if (roleName.includes(key)) {
+      return color;
+    }
+  }
+  return '#475569';
+}
+
 function getRoleIcon(deviceType = '', extraData = null) {
   if (deviceType === 'parent_map' || extraData?.is_parent_shortcut) return '⬆️';
   const t = (deviceType || '').toLowerCase();
@@ -479,13 +550,19 @@ function renderNode(node) {
   group.isSubmap = isSubmap;
   group.isParentShortcut = isParentShortcut;
 
-  // Obtener color del estado del nodo
+  // Obtener color del estado del nodo (Zabbix) y rol oficial de NetBox
   const nodeStatusColor = isParentShortcut ? '#38bdf8' : getNodeStatusColor(node.status, isSubmap);
+  const roleHex = getNodeRoleColor(node);
 
-  // Caja de fondo: estilo azul profundo destacado para portal padre, púrpura para submapas, azul oscuro para equipos
-  const boxFill = isParentShortcut 
-    ? 'rgba(12, 74, 110, 0.88)' 
-    : (isSubmap ? 'rgba(74, 14, 122, 0.75)' : '#162235');
+  // Caja de fondo: relleno translúcido con el color del rol/función de NetBox (22-26% alpha)
+  let boxFill = '#162235';
+  if (isParentShortcut) {
+    boxFill = 'rgba(12, 74, 110, 0.88)';
+  } else if (node.device_type === 'submap') {
+    boxFill = 'rgba(74, 14, 122, 0.78)';
+  } else if (roleHex) {
+    boxFill = hexToRgba(roleHex, 0.24) || '#162235';
+  }
 
   const box = new Konva.Rect({
     width: nodeWidth,
@@ -495,8 +572,8 @@ function renderNode(node) {
     strokeWidth: isParentShortcut ? 2 : 1.5,
     dash: isParentShortcut ? [5, 3] : undefined,
     cornerRadius: 8,
-    shadowColor: isParentShortcut ? 'rgba(56, 189, 248, 0.4)' : 'rgba(0, 0, 0, 0.45)',
-    shadowBlur: isParentShortcut ? 8 : 0,
+    shadowColor: isParentShortcut ? 'rgba(56, 189, 248, 0.4)' : (roleHex ? hexToRgba(roleHex, 0.25) : 'rgba(0, 0, 0, 0.45)'),
+    shadowBlur: isParentShortcut ? 8 : (roleHex ? 4 : 0),
     shadowOpacity: 0.4,
     shadowOffset: { x: 0, y: 2 },
     shadowForStrokeEnabled: false,
@@ -886,7 +963,20 @@ function selectNode(node) {
 
   // Título y badge
   document.getElementById('prop-node-title').textContent = node.name || 'Sin Nombre';
-  document.getElementById('prop-node-type-badge').textContent = isParentShortcut ? 'Subir Nivel ⬆' : (isSubmap ? 'Submapa' : (extra.role || node.device_type || 'Dispositivo'));
+  const badgeEl = document.getElementById('prop-node-type-badge');
+  if (badgeEl) {
+    const roleHex = getNodeRoleColor(node);
+    badgeEl.textContent = isParentShortcut ? 'Subir Nivel ⬆' : (isSubmap ? 'Submapa' : (extra.role || node.device_type || 'Dispositivo'));
+    if (roleHex && !isParentShortcut && !isSubmap) {
+      badgeEl.style.backgroundColor = hexToRgba(roleHex, 0.22) || '';
+      badgeEl.style.borderColor = roleHex;
+      badgeEl.style.color = roleHex;
+    } else {
+      badgeEl.style.backgroundColor = '';
+      badgeEl.style.borderColor = '';
+      badgeEl.style.color = '';
+    }
+  }
 
   // Subtítulo
   const subtitleEl = document.getElementById('prop-node-subtitle');
@@ -1744,6 +1834,18 @@ async function loadInventoryFilters() {
     API.getInventoryRoles()
   ]);
 
+  // Cargar mapa dinámico de colores de roles oficiales de NetBox
+  if (Array.isArray(roles)) {
+    roles.forEach(r => {
+      if (r.name && r.color) {
+        netboxRoleColorsMap.set(r.name.toLowerCase().trim(), r.color.startsWith('#') ? r.color : `#${r.color}`);
+      }
+      if (r.slug && r.color) {
+        netboxRoleColorsMap.set(r.slug.toLowerCase().trim(), r.color.startsWith('#') ? r.color : `#${r.color}`);
+      }
+    });
+  }
+
   const selectSite = document.getElementById('select-site');
   selectSite.innerHTML = '<option value="">🏢 Todos los Sitios</option>';
   sites.forEach(s => {
@@ -1795,6 +1897,11 @@ function renderDeviceList(devices, total) {
     item.className = 'device-item';
     item.draggable = true;
 
+    const roleNameLower = (dev.role || '').toLowerCase().trim();
+    const rColor = dev.role_color || netboxRoleColorsMap.get(roleNameLower) || DEFAULT_NETBOX_ROLE_COLORS[roleNameLower] || '';
+    const rHex = rColor ? (rColor.startsWith('#') ? rColor : `#${rColor}`) : '';
+    const rStyle = rHex ? `style="background: ${hexToRgba(rHex, 0.22)}; border: 1px solid ${rHex}; color: ${rHex};"` : '';
+
     item.innerHTML = `
       <div class="device-head">
         <span class="device-title" title="${dev.name}">${dev.name}</span>
@@ -1804,7 +1911,7 @@ function renderDeviceList(devices, total) {
       </div>
       <div class="device-ip">${dev.ip || 'Sin IP'}</div>
       <div class="device-meta">
-        <span class="meta-pill role">${dev.role}</span>
+        <span class="meta-pill role" ${rStyle}>${dev.role}</span>
         <span class="meta-pill site">${dev.site}</span>
         ${dev.model ? `<span class="meta-pill">${dev.model}</span>` : ''}
       </div>
@@ -1812,7 +1919,7 @@ function renderDeviceList(devices, total) {
 
     // Soporte Drag & Drop
     item.addEventListener('dragstart', (e) => {
-      e.dataTransfer.setData('application/json', JSON.stringify(dev));
+      e.dataTransfer.setData('application/json', JSON.stringify({ ...dev, role_color: rHex }));
       e.dataTransfer.effectAllowed = 'copy';
     });
 
@@ -1842,6 +1949,7 @@ function renderDeviceList(devices, total) {
             model: dev.model || '',
             serial: dev.serial || '',
             role: dev.role || dev.device_type || 'Dispositivo',
+            role_color: rHex,
             status: dev.status || 'active'
           }
         });
@@ -3235,6 +3343,9 @@ window.addEventListener('DOMContentLoaded', async () => {
       userBadge.classList.remove('unauthenticated');
       authOverlay.style.display = 'none';
 
+      // Cargar roles y filtros de inventario antes de renderizar mapas para tener la paleta oficial
+      await loadInventoryFilters();
+
       // Cargar mapas y restaurar estado de navegación persistente
       const maps = await API.getMaps();
       if (maps && maps.length > 0) {
@@ -3264,7 +3375,6 @@ window.addEventListener('DOMContentLoaded', async () => {
           }
         }
       }
-      await loadInventoryFilters();
       await triggerSearch();
 
     } else {

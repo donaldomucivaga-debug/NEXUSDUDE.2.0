@@ -49,14 +49,24 @@ class InventoryService:
                 except Exception as e:
                     logger.warning(f"Error cargando sitios: {e}")
 
-                # 2. Cargar Roles
+                # 2. Cargar Roles con sus Colores oficiales de NetBox
+                roles_color_map = {}
                 try:
                     res_roles = await client.get(f"{settings.NETBOX_URL}/api/dcim/device-roles/?limit=100", headers=headers)
                     if res_roles.status_code == 200:
                         self._roles_cache = sorted(
-                            [{"id": r["id"], "name": r["name"], "slug": r["slug"]} for r in res_roles.json().get("results", [])],
+                            [
+                                {
+                                    "id": r["id"],
+                                    "name": r["name"],
+                                    "slug": r["slug"],
+                                    "color": (r.get("color") or "").strip()
+                                }
+                                for r in res_roles.json().get("results", [])
+                            ],
                             key=lambda x: x["name"]
                         )
+                        roles_color_map = {r["name"].lower(): (r.get("color") or "").strip() for r in self._roles_cache}
                 except Exception as e:
                     logger.warning(f"Error cargando roles: {e}")
 
@@ -94,6 +104,8 @@ class InventoryService:
 
                         site_obj = d.get("site") or {}
                         role_obj = d.get("device_role") or d.get("role") or {}
+                        role_name = role_obj.get("name", "Desconocido")
+                        role_color = roles_color_map.get(role_name.lower(), "")
                         type_obj = d.get("device_type") or {}
                         mfr_obj = type_obj.get("manufacturer") or {}
 
@@ -104,8 +116,9 @@ class InventoryService:
                             "raw_ip": raw_ip,
                             "site": site_obj.get("name", "Desconocido"),
                             "site_id": site_obj.get("id"),
-                            "role": role_obj.get("name", "Desconocido"),
+                            "role": role_name,
                             "role_slug": role_obj.get("slug", ""),
+                            "role_color": role_color,
                             "manufacturer": mfr_obj.get("name", "Genérico"),
                             "model": type_obj.get("model", ""),
                             "status": d.get("status", {}).get("value", "active") if isinstance(d.get("status"), dict) else str(d.get("status", "active")),
