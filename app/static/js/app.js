@@ -1164,7 +1164,7 @@ function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
   const isSVert = (sFace === 'top' || sFace === 'bottom');
   const isTVert = (tFace === 'top' || tFace === 'bottom');
 
-  // 1. Distribuir pines de origen dividiendo el abanico en dos (Izquierda y Derecha)
+  // 1. Recolectar todas las conexiones que salen por la cara de origen (Source Face)
   const allSrcSiblings = [];
   for (let i = 0; i < allLinks.length; i++) {
     const l = allLinks[i];
@@ -1195,67 +1195,23 @@ function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
     }
   }
 
-  let srcPinOffset = 0;
-  let corridorOffset = 0;
-  const pitch = 12;
-
+  // Ordenar TODOS los enlaces de la cara de origen de izquierda a derecha (o de arriba a abajo)
   if (isSVert) {
-    const leftSibs = allSrcSiblings.filter(s => s.cx < srcCx - 1);
-    const centerSibs = allSrcSiblings.filter(s => Math.abs(s.cx - srcCx) <= 1);
-    const rightSibs = allSrcSiblings.filter(s => s.cx > srcCx + 1);
-
-    // Ordenar desde el centro hacia afuera
-    leftSibs.sort((a, b) => Math.abs(srcCx - a.cx) - Math.abs(srcCx - b.cx));
-    rightSibs.sort((a, b) => Math.abs(a.cx - srcCx) - Math.abs(b.cx - srcCx));
-
-    const curLeftIdx = leftSibs.findIndex(s => (link && s.linkId === link.id) || s.id === targetNode.id);
-    const curRightIdx = rightSibs.findIndex(s => (link && s.linkId === link.id) || s.id === targetNode.id);
-
-    if (curLeftIdx !== -1) {
-      const numL = leftSibs.length;
-      const actualPitch = Math.min(pitch, (srcHalf.halfW - 10) / Math.max(1, numL));
-      srcPinOffset = -(curLeftIdx + 1) * actualPitch;
-      // Abanico izquierdo: desde el centro abajo hacia arriba (los más cercanos al centro van más abajo)
-      const level = (numL - 1 - curLeftIdx) * 12;
-      corridorOffset = (sFace === 'bottom') ? level : -level;
-    } else if (curRightIdx !== -1) {
-      const numR = rightSibs.length;
-      const actualPitch = Math.min(pitch, (srcHalf.halfW - 10) / Math.max(1, numR));
-      srcPinOffset = +(curRightIdx + 1) * actualPitch;
-      // Abanico derecho: igual de abajo hacia arriba abriendo hacia su lado
-      const level = (numR - 1 - curRightIdx) * 12;
-      corridorOffset = (sFace === 'bottom') ? level : -level;
-    } else {
-      srcPinOffset = 0;
-      corridorOffset = 0;
-    }
+    allSrcSiblings.sort((a, b) => a.cx !== b.cx ? (a.cx - b.cx) : String(a.linkId).localeCompare(String(b.linkId)));
   } else {
-    const topSibs = allSrcSiblings.filter(s => s.cy < srcCy - 1);
-    const centerSibs = allSrcSiblings.filter(s => Math.abs(s.cy - srcCy) <= 1);
-    const botSibs = allSrcSiblings.filter(s => s.cy > srcCy + 1);
+    allSrcSiblings.sort((a, b) => a.cy !== b.cy ? (a.cy - b.cy) : String(a.linkId).localeCompare(String(b.linkId)));
+  }
 
-    topSibs.sort((a, b) => Math.abs(srcCy - a.cy) - Math.abs(srcCy - b.cy));
-    botSibs.sort((a, b) => Math.abs(a.cy - srcCy) - Math.abs(b.cy - srcCy));
+  const srcN = allSrcSiblings.length;
+  let srcIdx = allSrcSiblings.findIndex(s => (link && s.linkId === link.id) || s.id === targetNode.id);
+  if (srcIdx === -1) srcIdx = 0;
 
-    const curTopIdx = topSibs.findIndex(s => (link && s.linkId === link.id) || s.id === targetNode.id);
-    const curBotIdx = botSibs.findIndex(s => (link && s.linkId === link.id) || s.id === targetNode.id);
-
-    if (curTopIdx !== -1) {
-      const numT = topSibs.length;
-      const actualPitch = Math.min(pitch, (srcHalf.halfH - 10) / Math.max(1, numT));
-      srcPinOffset = -(curTopIdx + 1) * actualPitch;
-      const level = (numT - 1 - curTopIdx) * 12;
-      corridorOffset = (sFace === 'right') ? level : -level;
-    } else if (curBotIdx !== -1) {
-      const numB = botSibs.length;
-      const actualPitch = Math.min(pitch, (srcHalf.halfH - 10) / Math.max(1, numB));
-      srcPinOffset = +(curBotIdx + 1) * actualPitch;
-      const level = (numB - 1 - curBotIdx) * 12;
-      corridorOffset = (sFace === 'right') ? level : -level;
-    } else {
-      srcPinOffset = 0;
-      corridorOffset = 0;
-    }
+  // Distribuir pines uniformemente a lo largo de la cara: CADA ENLACE TIENE SU PROPIO PIN EXCLUSIVO
+  let srcPinOffset = 0;
+  if (srcN > 1) {
+    const maxSpan = isSVert ? ((srcHalf.halfW - 8) * 2) : ((srcHalf.halfH - 8) * 2);
+    const step = Math.min(14, maxSpan / srcN);
+    srcPinOffset = (-(srcN - 1) / 2.0 + srcIdx) * step;
   }
 
   let srcPt = { x: srcCx, y: srcCy };
@@ -1269,7 +1225,7 @@ function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
     srcPt = { x: srcNx, y: srcCy + srcPinOffset };
   }
 
-  // 2. Distribuir pines de destino (Target Face) dividiendo bilateralmente
+  // 2. Recolectar y distribuir pines en la cara de destino (Target Face)
   const allTgtSiblings = [];
   for (let i = 0; i < allLinks.length; i++) {
     const l = allLinks[i];
@@ -1300,41 +1256,21 @@ function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
     }
   }
 
-  let tgtPinOffset = 0;
   if (isTVert) {
-    const leftParents = allTgtSiblings.filter(s => s.cx < tgtCx - 1);
-    const rightParents = allTgtSiblings.filter(s => s.cx > tgtCx + 1);
-
-    leftParents.sort((a, b) => Math.abs(tgtCx - a.cx) - Math.abs(tgtCx - b.cx));
-    rightParents.sort((a, b) => Math.abs(a.cx - tgtCx) - Math.abs(b.cx - tgtCx));
-
-    const curPLeft = leftParents.findIndex(s => (link && s.linkId === link.id) || s.id === sourceNode.id);
-    const curPRight = rightParents.findIndex(s => (link && s.linkId === link.id) || s.id === sourceNode.id);
-
-    if (curPLeft !== -1) {
-      const actualPitch = Math.min(pitch, (tgtHalf.halfW - 10) / Math.max(1, leftParents.length));
-      tgtPinOffset = -(curPLeft + 1) * actualPitch;
-    } else if (curPRight !== -1) {
-      const actualPitch = Math.min(pitch, (tgtHalf.halfW - 10) / Math.max(1, rightParents.length));
-      tgtPinOffset = +(curPRight + 1) * actualPitch;
-    }
+    allTgtSiblings.sort((a, b) => a.cx !== b.cx ? (a.cx - b.cx) : String(a.linkId).localeCompare(String(b.linkId)));
   } else {
-    const topParents = allTgtSiblings.filter(s => s.cy < tgtCy - 1);
-    const botParents = allTgtSiblings.filter(s => s.cy > tgtCy + 1);
+    allTgtSiblings.sort((a, b) => a.cy !== b.cy ? (a.cy - b.cy) : String(a.linkId).localeCompare(String(b.linkId)));
+  }
 
-    topParents.sort((a, b) => Math.abs(tgtCy - a.cy) - Math.abs(tgtCy - b.cy));
-    botParents.sort((a, b) => Math.abs(a.cy - tgtCy) - Math.abs(b.cy - tgtCy));
+  const tgtN = allTgtSiblings.length;
+  let tgtIdx = allTgtSiblings.findIndex(s => (link && s.linkId === link.id) || s.id === sourceNode.id);
+  if (tgtIdx === -1) tgtIdx = 0;
 
-    const curPTop = topParents.findIndex(s => (link && s.linkId === link.id) || s.id === sourceNode.id);
-    const curPBot = botParents.findIndex(s => (link && s.linkId === link.id) || s.id === sourceNode.id);
-
-    if (curPTop !== -1) {
-      const actualPitch = Math.min(pitch, (tgtHalf.halfH - 10) / Math.max(1, topParents.length));
-      tgtPinOffset = -(curPTop + 1) * actualPitch;
-    } else if (curPBot !== -1) {
-      const actualPitch = Math.min(pitch, (tgtHalf.halfH - 10) / Math.max(1, botParents.length));
-      tgtPinOffset = +(curPBot + 1) * actualPitch;
-    }
+  let tgtPinOffset = 0;
+  if (tgtN > 1) {
+    const maxSpan = isTVert ? ((tgtHalf.halfW - 8) * 2) : ((tgtHalf.halfH - 8) * 2);
+    const step = Math.min(14, maxSpan / tgtN);
+    tgtPinOffset = (-(tgtN - 1) / 2.0 + tgtIdx) * step;
   }
 
   let tgtPt = { x: tgtCx, y: tgtCy };
@@ -1348,21 +1284,28 @@ function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
     tgtPt = { x: tgtNx + tgtHalf.halfW * 2, y: tgtCy + tgtPinOffset };
   }
 
-  // 3. Enrutamiento Ortogonal Limpio y Separado por Niveles
+  // 3. Enrutamiento del corredor con Abanico Bilateral Adaptativo (sin cruces y proporcional a la distancia)
   let rawPath = [];
 
   if (isSVert) {
-    let baseMidY = (srcPt.y + tgtPt.y) / 2.0;
-    if (sFace === 'bottom') {
-      if (tgtPt.y > srcPt.y + 36) {
-        baseMidY = Math.min(Math.max(baseMidY, srcPt.y + 16), tgtPt.y - 18);
-      }
-    } else {
-      if (tgtPt.y < srcPt.y - 36) {
-        baseMidY = Math.max(Math.min(baseMidY, srcPt.y - 16), tgtPt.y + 18);
-      }
+    const gapY = Math.abs(tgtPt.y - srcPt.y);
+    const stub = Math.min(14, gapY * 0.22);
+    const usable = Math.max(0, gapY - 2 * stub);
+
+    // Fracción según abanico bilateral: centro -> abajo (más cerca del destino), extremos -> arriba (más cerca del origen)
+    let fraction = 0.5;
+    if (srcN > 1) {
+      const midIdx = (srcN - 1) / 2.0;
+      const distFromCenter = Math.abs(srcIdx - midIdx);
+      fraction = 1.0 - (distFromCenter / Math.max(0.5, midIdx));
     }
-    const midY = baseMidY + corridorOffset;
+
+    let midY = (srcPt.y + tgtPt.y) / 2.0;
+    if (sFace === 'bottom') {
+      midY = (srcPt.y + stub) + fraction * usable;
+    } else {
+      midY = (srcPt.y - stub) - fraction * usable;
+    }
 
     if (isTVert) {
       rawPath = [
@@ -1379,17 +1322,23 @@ function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
       ];
     }
   } else {
-    let baseMidX = (srcPt.x + tgtPt.x) / 2.0;
-    if (sFace === 'right') {
-      if (tgtPt.x > srcPt.x + 36) {
-        baseMidX = Math.min(Math.max(baseMidX, srcPt.x + 16), tgtPt.x - 18);
-      }
-    } else {
-      if (tgtPt.x < srcPt.x - 36) {
-        baseMidX = Math.max(Math.min(baseMidX, srcPt.x - 16), tgtPt.x + 18);
-      }
+    const gapX = Math.abs(tgtPt.x - srcPt.x);
+    const stubX = Math.min(14, gapX * 0.22);
+    const usableX = Math.max(0, gapX - 2 * stubX);
+
+    let fraction = 0.5;
+    if (srcN > 1) {
+      const midIdx = (srcN - 1) / 2.0;
+      const distFromCenter = Math.abs(srcIdx - midIdx);
+      fraction = 1.0 - (distFromCenter / Math.max(0.5, midIdx));
     }
-    const midX = baseMidX + corridorOffset;
+
+    let midX = (srcPt.x + tgtPt.x) / 2.0;
+    if (sFace === 'right') {
+      midX = (srcPt.x + stubX) + fraction * usableX;
+    } else {
+      midX = (srcPt.x - stubX) - fraction * usableX;
+    }
 
     if (!isTVert) {
       rawPath = [
