@@ -4368,7 +4368,8 @@ async function handleExecuteBulkSites() {
   }
 }
 
-async function autoLayoutMapAsTree() {
+// ─── Auto-Diseño PCB: Terminales y Buses de Conexión ──────────────────────────
+async function autoLayoutMapAsPCB() {
   if (!currentMap || !currentMap.nodes || currentMap.nodes.length === 0) return;
 
   const nodes = currentMap.nodes;
@@ -4376,7 +4377,7 @@ async function autoLayoutMapAsTree() {
   const nodeMap = new Map();
   nodes.forEach(n => nodeMap.set(n.id, n));
 
-  // 1. Build directed hierarchy (parent -> children) respecting link direction
+  // 1. Construir jerarquía de buses (Controlador Maestro -> Distribución -> Periféricos)
   const childrenMap = new Map();
   const parentsMap = new Map();
   nodes.forEach(n => {
@@ -4399,7 +4400,7 @@ async function autoLayoutMapAsTree() {
     }
   });
 
-  // 2. Identify root nodes (nodes with 0 incoming parent links, or highest priority)
+  // 2. Identificar terminales maestras / cabeceras de bus
   let rootIds = nodes
     .filter(n => (parentsMap.get(n.id) || []).length === 0)
     .map(n => n.id);
@@ -4408,8 +4409,7 @@ async function autoLayoutMapAsTree() {
     rootIds = [nodes[0].id];
   }
 
-  // 3. Strict generational level calculation (Longest Path DAG relaxation)
-  // Guarantees level(child) >= max(level(parent)) + 1 so all same-generation siblings share the same horizontal Y row!
+  // 3. Cálculo de estratos de bus PCB (Nivel de componente en el esquema)
   const levelMap = new Map();
   rootIds.forEach(rid => levelMap.set(rid, 0));
 
@@ -4433,24 +4433,24 @@ async function autoLayoutMapAsTree() {
     if (!levelMap.has(n.id)) levelMap.set(n.id, 0);
   });
 
-  // 4. Recursive Subtree Layout with non-overlapping bounding columns / universes
-  const nodeW = 190.0;
-  const colGap = 70.0;
-  const rowSpacing = 260.0; // Espacio vertical entre niveles duplicado para máxima claridad de enrutamiento
-  const universeGap = 100.0;
-  const startX = 80.0;
-  const startY = 80.0;
+  // 4. Ubicación de Bloques de Componentes en Cuadrícula PCB (Bancos y Corredores de Bus)
+  const compW = 190.0;
+  const colGap = 80.0;
+  const rowSpacing = 260.0; // Corredor amplio para paso de pistas de bus paralelas
+  const moduleGap = 120.0;  // Separación entre subsistemas/módulos independientes
+  const startX = 100.0;
+  const startY = 100.0;
 
   const visited = new Set();
   const nodePositions = new Map();
 
-  function layoutSubtree(nodeId) {
+  function layoutPCBModule(nodeId) {
     visited.add(nodeId);
     const rawKids = childrenMap.get(nodeId) || [];
     const kids = rawKids.filter(kid => !visited.has(kid));
 
     if (kids.length === 0) {
-      const singleWidth = nodeW + colGap;
+      const singleWidth = compW + colGap;
       const nodePos = new Map();
       nodePos.set(nodeId, { relX: 0.0, depth: levelMap.get(nodeId) || 0 });
       return {
@@ -4462,15 +4462,15 @@ async function autoLayoutMapAsTree() {
 
     const childLayouts = [];
     let currentOffset = 0.0;
-    const subtreeNodes = new Map();
-    subtreeNodes.set(nodeId, { relX: 0.0, depth: levelMap.get(nodeId) || 0 });
+    const moduleNodes = new Map();
+    moduleNodes.set(nodeId, { relX: 0.0, depth: levelMap.get(nodeId) || 0 });
 
     for (let i = 0; i < kids.length; i++) {
-      const kLayout = layoutSubtree(kids[i]);
+      const kLayout = layoutPCBModule(kids[i]);
       childLayouts.push({ layout: kLayout, offset: currentOffset });
 
       kLayout.nodes.forEach((kPos, kId) => {
-        subtreeNodes.set(kId, {
+        moduleNodes.set(kId, {
           relX: kPos.relX + currentOffset,
           depth: kPos.depth
         });
@@ -4484,43 +4484,48 @@ async function autoLayoutMapAsTree() {
     const lastKidRelX = childLayouts[childLayouts.length - 1].layout.relX + childLayouts[childLayouts.length - 1].offset;
     const parentRelX = (firstKidRelX + lastKidRelX) / 2.0;
 
-    subtreeNodes.get(nodeId).relX = parentRelX;
-    const totalWidth = Math.max(nodeW + colGap, totalChildrenWidth);
+    moduleNodes.get(nodeId).relX = parentRelX;
+    const totalWidth = Math.max(compW + colGap, totalChildrenWidth);
 
     return {
       width: totalWidth,
       relX: parentRelX,
-      nodes: subtreeNodes
+      nodes: moduleNodes
     };
   }
 
-  let currentTreeX = startX;
+  let currentModuleX = startX;
 
-  // Process each root component as its own delimited universe
+  // Procesar cada módulo/subsistema de componentes
   rootIds.forEach(rootId => {
     if (visited.has(rootId)) return;
-    const treeLayout = layoutSubtree(rootId);
+    const pcbLayout = layoutPCBModule(rootId);
 
-    treeLayout.nodes.forEach((pos, nid) => {
-      const absX = Math.round(currentTreeX + pos.relX);
-      const absY = Math.round(startY + pos.depth * rowSpacing);
-      nodePositions.set(nid, { x: absX, y: absY, level: pos.depth });
+    pcbLayout.nodes.forEach((pos, nid) => {
+      // Ajuste exacto a la cuadrícula PCB de 20px
+      const rawX = currentModuleX + pos.relX;
+      const rawY = startY + pos.depth * rowSpacing;
+      const snapX = Math.round(rawX / 20.0) * 20;
+      const snapY = Math.round(rawY / 20.0) * 20;
+      nodePositions.set(nid, { x: snapX, y: snapY, level: pos.depth });
     });
 
-    currentTreeX += treeLayout.width + universeGap;
+    currentModuleX += pcbLayout.width + moduleGap;
   });
 
-  // Position any disconnected nodes
+  // Ubicar terminales periféricas o aisladas
   nodes.forEach(n => {
     if (!nodePositions.has(n.id)) {
-      const absX = Math.round(currentTreeX);
-      const absY = Math.round(startY + (levelMap.get(n.id) || 0) * rowSpacing);
-      nodePositions.set(n.id, { x: absX, y: absY, level: levelMap.get(n.id) || 0 });
-      currentTreeX += nodeW + colGap;
+      const rawX = currentModuleX;
+      const rawY = startY + (levelMap.get(n.id) || 0) * rowSpacing;
+      const snapX = Math.round(rawX / 20.0) * 20;
+      const snapY = Math.round(rawY / 20.0) * 20;
+      nodePositions.set(n.id, { x: snapX, y: snapY, level: levelMap.get(n.id) || 0 });
+      currentModuleX += compW + colGap;
     }
   });
 
-  // Apply positions to Konva canvas with tween animations and update backend
+  // 5. Aplicar animación de posicionamiento de componentes y actualización de pistas de bus
   const updatePromises = [];
   nodes.forEach(n => {
     const pos = nodePositions.get(n.id);
@@ -4559,6 +4564,8 @@ async function autoLayoutMapAsTree() {
 
   await Promise.all(updatePromises);
 }
+
+const autoLayoutMapAsTree = autoLayoutMapAsPCB; // Alias para compatibilidad inversa
 
 // ─── 12. Inicialización General ─────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', async () => {
@@ -4806,23 +4813,23 @@ window.addEventListener('DOMContentLoaded', async () => {
     btnGrid.querySelector('span').textContent = snapToGrid ? 'Imantar (20px)' : 'Libre';
   });
 
-  // Botón Ordenar en Árbol / Raíces
+  // Botón Auto-Diseño PCB (Terminales y Buses)
   const btnTreeLayout = document.getElementById('btn-auto-layout-tree');
   if (btnTreeLayout) {
     btnTreeLayout.addEventListener('click', async () => {
       if (!currentMap || !currentMap.nodes || currentMap.nodes.length === 0) {
-        alert('No hay nodos en el mapa actual para ordenar.');
+        alert('No hay terminales en el mapa actual para ordenar.');
         return;
       }
       btnTreeLayout.disabled = true;
-      btnTreeLayout.innerHTML = '<i class="fas fa-spinner fa-spin"></i> <span>Ordenando...</span>';
+      btnTreeLayout.innerHTML = '<i class="fas fa-spinner fa-spin"></i> <span>Diseñando PCB...</span>';
       try {
-        await autoLayoutMapAsTree();
+        await autoLayoutMapAsPCB();
       } catch (err) {
-        console.error('Error organizando árbol:', err);
+        console.error('Error organizando diseño PCB:', err);
       } finally {
         btnTreeLayout.disabled = false;
-        btnTreeLayout.innerHTML = '<i class="fas fa-project-diagram"></i> <span>Ordenar en Árbol</span>';
+        btnTreeLayout.innerHTML = '<i class="fas fa-microchip"></i> <span>Diseño PCB</span>';
       }
     });
   }
