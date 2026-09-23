@@ -726,28 +726,45 @@
 
   <!-- Modal Interconexión de Enlace Inter-Mapa -->
   <div class="modal-overlay" id="modal-intermap-link" style="display: none;">
-    <div class="modal-card" style="width: 460px;">
+    <div class="modal-card" style="width: 520px;">
       <div class="modal-header">
         <div style="display: flex; align-items: center; gap: 8px;">
           <i class="fas fa-plug" style="color: #a855f7; font-size: 1.2rem;"></i>
-          <h3 class="modal-title" style="font-size: 1rem;">Interconexión Inter-Mapa</h3>
+          <h3 class="modal-title" style="font-size: 1rem;">Conectar Arista de Servicio Inter-Mapa</h3>
         </div>
         <button class="modal-close" id="btn-close-intermap-modal">&times;</button>
       </div>
-      <div class="modal-form" style="padding: 14px 18px;">
-        <p style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 12px; line-height: 1.4;">
-          Estás conectando un nodo a un <strong>Portal de Navegación</strong>. Selecciona el equipo remoto al que se enlaza este túnel:
-        </p>
-        <div style="margin-bottom: 14px;">
-          <label style="font-size: 0.75rem; font-weight: 600; color: #cbd5e1; display: block; margin-bottom: 6px;">
-            Equipo Remoto en <span id="intermap-target-name" style="color: #c084fc;">Submapa</span>:
-          </label>
-          <select id="select-intermap-remote-node" class="input-text" style="width: 100%; padding: 8px 10px; font-size: 0.82rem;"></select>
+      <div class="modal-form" style="padding: 14px 18px; gap: 10px;">
+        <!-- Resumen de Conexión Origen ➔ Portal -->
+        <div style="background: rgba(15, 23, 42, 0.7); border: 1px solid var(--border-color); border-radius: 8px; padding: 10px 12px; display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <div style="font-size: 0.68rem; text-transform: uppercase; color: var(--text-muted); font-weight: 700;">Equipo Local (Origen)</div>
+            <div style="font-size: 0.88rem; font-weight: 800; color: #38bdf8;" id="intermap-local-name">Router Local</div>
+          </div>
+          <div style="font-size: 1.2rem; color: #a855f7;">➔</div>
+          <div style="text-align: right;">
+            <div style="font-size: 0.68rem; text-transform: uppercase; color: var(--text-muted); font-weight: 700;">Mapa / Submapa Destino</div>
+            <div style="font-size: 0.88rem; font-weight: 800; color: #c084fc;" id="intermap-target-name">Submapa Destino</div>
+          </div>
         </div>
-        <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 8px;">
+
+        <div style="margin-top: 4px;">
+          <label style="font-size: 0.75rem; font-weight: 700; color: #f8fafc; display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <span><i class="fas fa-microchip" style="color: #a855f7;"></i> Selecciona el Dispositivo a Enlazar:</span>
+            <span style="font-size: 0.7rem; color: var(--text-muted);" id="intermap-candidate-count">0 equipos</span>
+          </label>
+          <input type="text" class="input-text" id="input-search-intermap-remote" placeholder="🔍 Filtrar por nombre, IP, rol o modelo..." style="width: 100%; margin-bottom: 8px; font-size: 0.78rem; padding: 6px 10px;">
+          <select id="select-intermap-remote-node" class="select-filter" size="8" style="width: 100%; height: 180px; overflow-y: auto; font-family: monospace; font-size: 0.82rem; padding: 4px;"></select>
+        </div>
+
+        <div id="intermap-empty-notice" style="display: none; background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.3); border-radius: 6px; padding: 8px 10px; font-size: 0.75rem; color: #fbbf24;">
+          <i class="fas fa-exclamation-triangle"></i> Este submapa aún no tiene dispositivos agregados. Puedes poblarlo primero desde NetBox.
+        </div>
+
+        <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px;">
           <button type="button" class="btn" id="btn-cancel-intermap-link">Cancelar</button>
           <button type="button" class="btn btn-purple" id="btn-confirm-intermap-link">
-            <i class="fas fa-check"></i> Vincular Enlace
+            <i class="fas fa-link"></i> Crear Enlace de Servicio
           </button>
         </div>
       </div>
@@ -1074,7 +1091,7 @@
   </div>
 
   <!-- Scripts -->
-  <script src="/static/js/api.js?v=2.1"></script>
-  <script src="/static/js/app.js?v=2.1"></script>
+  <script src="/static/js/api.js?v=2.2"></script>
+  <script src="/static/js/app.js?v=2.2"></script>
 </body>
 </html>

@@ -992,7 +992,11 @@ function promptIntermapLink(sourceNode, targetNode, targetMapId, remoteNodes, is
   return new Promise((resolve) => {
     const modal = document.getElementById('modal-intermap-link');
     const select = document.getElementById('select-intermap-remote-node');
+    const searchInput = document.getElementById('input-search-intermap-remote');
+    const localNameEl = document.getElementById('intermap-local-name');
     const targetNameEl = document.getElementById('intermap-target-name');
+    const countEl = document.getElementById('intermap-candidate-count');
+    const emptyNotice = document.getElementById('intermap-empty-notice');
     const btnConfirm = document.getElementById('btn-confirm-intermap-link');
     const btnCancel = document.getElementById('btn-cancel-intermap-link');
     const btnClose = document.getElementById('btn-close-intermap-modal');
@@ -1002,22 +1006,68 @@ function promptIntermapLink(sourceNode, targetNode, targetMapId, remoteNodes, is
       return;
     }
 
-    targetNameEl.textContent = (isSourceNav ? sourceNode.name : targetNode.name) || 'Submapa';
-    select.innerHTML = '';
-    remoteNodes.forEach(rn => {
-      const opt = document.createElement('option');
-      opt.value = rn.id;
-      opt.textContent = `${rn.name} (${rn.ip || rn.device_type || 'Dispositivo'})`;
-      select.appendChild(opt);
-    });
+    const deviceNode = isSourceNav ? targetNode : sourceNode;
+    const navNode = isSourceNav ? sourceNode : targetNode;
+
+    if (localNameEl) localNameEl.textContent = `${deviceNode.name} (${deviceNode.ip || deviceNode.device_type || 'Local'})`;
+    if (targetNameEl) targetNameEl.textContent = navNode.name || 'Submapa';
+
+    if (searchInput) searchInput.value = '';
+
+    const renderOptions = (filterText = '') => {
+      select.innerHTML = '';
+      const q = filterText.toLowerCase().trim();
+      const filtered = remoteNodes.filter(rn => {
+        if (!q) return true;
+        const txt = `${rn.name} ${rn.ip || ''} ${rn.device_type || ''} ${rn.extra_data?.model || ''} ${rn.extra_data?.role || ''}`.toLowerCase();
+        return txt.includes(q);
+      });
+
+      if (countEl) countEl.textContent = `${filtered.length} de ${remoteNodes.length} equipos`;
+
+      if (filtered.length === 0) {
+        if (remoteNodes.length === 0) {
+          if (emptyNotice) emptyNotice.style.display = 'block';
+        } else {
+          select.innerHTML = '<option value="" disabled>Sin coincidencias con la búsqueda</option>';
+        }
+      } else {
+        if (emptyNotice) emptyNotice.style.display = 'none';
+        filtered.forEach((rn, idx) => {
+          const opt = document.createElement('option');
+          opt.value = rn.id;
+          const ipStr = rn.ip ? ` [${rn.ip}]` : '';
+          const roleStr = rn.device_type || rn.extra_data?.role || 'Dispositivo';
+          opt.textContent = `🖥️ ${rn.name}${ipStr} — (${roleStr})`;
+          if (idx === 0) opt.selected = true;
+          select.appendChild(opt);
+        });
+      }
+    };
+
+    renderOptions('');
+
+    if (searchInput) {
+      searchInput.oninput = (e) => renderOptions(e.target.value);
+    }
 
     modal.style.display = 'flex';
+
+    // Doble clic en una opción para confirmar inmediatamente
+    select.ondblclick = () => {
+      const chosenId = select.value;
+      const chosenNode = remoteNodes.find(n => n.id === chosenId) || remoteNodes[0];
+      cleanUp();
+      resolve(chosenNode);
+    };
 
     const cleanUp = () => {
       modal.style.display = 'none';
       btnConfirm.onclick = null;
       btnCancel.onclick = null;
       btnClose.onclick = null;
+      if (searchInput) searchInput.oninput = null;
+      select.ondblclick = null;
     };
 
     btnConfirm.onclick = () => {
@@ -1067,7 +1117,15 @@ async function handleLinkNodeClick(node) {
       const navNode = isTargetNav ? node : linkSourceNode;
       const deviceNode = isTargetNav ? linkSourceNode : node;
       
-      const targetMapId = navNode.extra_data?.target_map_id || (navNode.device_type === 'parent_map' || navNode.extra_data?.is_parent_shortcut ? currentMap.parent_map_id : null);
+      let targetMapId = navNode.extra_data?.target_map_id;
+      if (!targetMapId) {
+        if (navNode.device_type === 'parent_map' || navNode.extra_data?.is_parent_shortcut) {
+          targetMapId = currentMap.parent_map_id;
+        } else if (navNode.device_type === 'submap' && Array.isArray(allMaps)) {
+          const matchedMap = allMaps.find(m => m.name.toLowerCase().trim() === navNode.name.toLowerCase().trim());
+          if (matchedMap) targetMapId = matchedMap.id;
+        }
+      }
 
       if (targetMapId) {
         try {
