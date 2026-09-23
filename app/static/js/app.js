@@ -1164,8 +1164,8 @@ function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
   const isSVert = (sFace === 'top' || sFace === 'bottom');
   const isTVert = (tFace === 'top' || tFace === 'bottom');
 
-  // 1. Distribuir pines de origen (Source Face)
-  const srcSiblings = [];
+  // 1. Distribuir pines de origen dividiendo el abanico en dos (Izquierda y Derecha)
+  const allSrcSiblings = [];
   for (let i = 0; i < allLinks.length; i++) {
     const l = allLinks[i];
     let otherId = null;
@@ -1184,7 +1184,7 @@ function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
 
         const oFace = determineNodeFace(srcCx, srcCy, oCx, oCy, srcHalf.halfW, srcHalf.halfH);
         if (oFace === sFace) {
-          srcSiblings.push({
+          allSrcSiblings.push({
             linkId: l.id,
             id: other.id,
             cx: oCx,
@@ -1195,20 +1195,68 @@ function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
     }
   }
 
+  let srcPinOffset = 0;
+  let corridorOffset = 0;
+  const pitch = 12;
+
   if (isSVert) {
-    srcSiblings.sort((a, b) => a.cx !== b.cx ? (a.cx - b.cx) : String(a.linkId).localeCompare(String(b.linkId)));
+    const leftSibs = allSrcSiblings.filter(s => s.cx < srcCx - 1);
+    const centerSibs = allSrcSiblings.filter(s => Math.abs(s.cx - srcCx) <= 1);
+    const rightSibs = allSrcSiblings.filter(s => s.cx > srcCx + 1);
+
+    // Ordenar desde el centro hacia afuera
+    leftSibs.sort((a, b) => Math.abs(srcCx - a.cx) - Math.abs(srcCx - b.cx));
+    rightSibs.sort((a, b) => Math.abs(a.cx - srcCx) - Math.abs(b.cx - srcCx));
+
+    const curLeftIdx = leftSibs.findIndex(s => (link && s.linkId === link.id) || s.id === targetNode.id);
+    const curRightIdx = rightSibs.findIndex(s => (link && s.linkId === link.id) || s.id === targetNode.id);
+
+    if (curLeftIdx !== -1) {
+      const numL = leftSibs.length;
+      const actualPitch = Math.min(pitch, (srcHalf.halfW - 10) / Math.max(1, numL));
+      srcPinOffset = -(curLeftIdx + 1) * actualPitch;
+      // Abanico izquierdo: desde el centro abajo hacia arriba (los más cercanos al centro van más abajo)
+      const level = (numL - 1 - curLeftIdx) * 12;
+      corridorOffset = (sFace === 'bottom') ? level : -level;
+    } else if (curRightIdx !== -1) {
+      const numR = rightSibs.length;
+      const actualPitch = Math.min(pitch, (srcHalf.halfW - 10) / Math.max(1, numR));
+      srcPinOffset = +(curRightIdx + 1) * actualPitch;
+      // Abanico derecho: igual de abajo hacia arriba abriendo hacia su lado
+      const level = (numR - 1 - curRightIdx) * 12;
+      corridorOffset = (sFace === 'bottom') ? level : -level;
+    } else {
+      srcPinOffset = 0;
+      corridorOffset = 0;
+    }
   } else {
-    srcSiblings.sort((a, b) => a.cy !== b.cy ? (a.cy - b.cy) : String(a.linkId).localeCompare(String(b.linkId)));
+    const topSibs = allSrcSiblings.filter(s => s.cy < srcCy - 1);
+    const centerSibs = allSrcSiblings.filter(s => Math.abs(s.cy - srcCy) <= 1);
+    const botSibs = allSrcSiblings.filter(s => s.cy > srcCy + 1);
+
+    topSibs.sort((a, b) => Math.abs(srcCy - a.cy) - Math.abs(srcCy - b.cy));
+    botSibs.sort((a, b) => Math.abs(a.cy - srcCy) - Math.abs(b.cy - srcCy));
+
+    const curTopIdx = topSibs.findIndex(s => (link && s.linkId === link.id) || s.id === targetNode.id);
+    const curBotIdx = botSibs.findIndex(s => (link && s.linkId === link.id) || s.id === targetNode.id);
+
+    if (curTopIdx !== -1) {
+      const numT = topSibs.length;
+      const actualPitch = Math.min(pitch, (srcHalf.halfH - 10) / Math.max(1, numT));
+      srcPinOffset = -(curTopIdx + 1) * actualPitch;
+      const level = (numT - 1 - curTopIdx) * 12;
+      corridorOffset = (sFace === 'right') ? level : -level;
+    } else if (curBotIdx !== -1) {
+      const numB = botSibs.length;
+      const actualPitch = Math.min(pitch, (srcHalf.halfH - 10) / Math.max(1, numB));
+      srcPinOffset = +(curBotIdx + 1) * actualPitch;
+      const level = (numB - 1 - curBotIdx) * 12;
+      corridorOffset = (sFace === 'right') ? level : -level;
+    } else {
+      srcPinOffset = 0;
+      corridorOffset = 0;
+    }
   }
-
-  const srcK = srcSiblings.length;
-  let srcIdx = srcSiblings.findIndex(s => (link && s.linkId === link.id) || s.id === targetNode.id);
-  if (srcIdx === -1) srcIdx = 0;
-
-  const pitch = 14;
-  const srcMaxExtent = isSVert ? (srcHalf.halfW - 12) : (srcHalf.halfH - 10);
-  const actualSrcPitch = srcK > 1 ? Math.min(pitch, (srcMaxExtent * 2) / Math.max(1, srcK - 1)) : 0;
-  const srcPinOffset = srcK > 1 ? (-(srcK - 1) / 2.0 + srcIdx) * actualSrcPitch : 0;
 
   let srcPt = { x: srcCx, y: srcCy };
   if (sFace === 'bottom') {
@@ -1221,8 +1269,8 @@ function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
     srcPt = { x: srcNx, y: srcCy + srcPinOffset };
   }
 
-  // 2. Distribuir pines de destino (Target Face)
-  const tgtSiblings = [];
+  // 2. Distribuir pines de destino (Target Face) dividiendo bilateralmente
+  const allTgtSiblings = [];
   for (let i = 0; i < allLinks.length; i++) {
     const l = allLinks[i];
     let otherId = null;
@@ -1241,7 +1289,7 @@ function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
 
         const oFace = determineNodeFace(tgtCx, tgtCy, oCx, oCy, tgtHalf.halfW, tgtHalf.halfH);
         if (oFace === tFace) {
-          tgtSiblings.push({
+          allTgtSiblings.push({
             linkId: l.id,
             id: other.id,
             cx: oCx,
@@ -1252,19 +1300,42 @@ function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
     }
   }
 
+  let tgtPinOffset = 0;
   if (isTVert) {
-    tgtSiblings.sort((a, b) => a.cx !== b.cx ? (a.cx - b.cx) : String(a.linkId).localeCompare(String(b.linkId)));
+    const leftParents = allTgtSiblings.filter(s => s.cx < tgtCx - 1);
+    const rightParents = allTgtSiblings.filter(s => s.cx > tgtCx + 1);
+
+    leftParents.sort((a, b) => Math.abs(tgtCx - a.cx) - Math.abs(tgtCx - b.cx));
+    rightParents.sort((a, b) => Math.abs(a.cx - tgtCx) - Math.abs(b.cx - tgtCx));
+
+    const curPLeft = leftParents.findIndex(s => (link && s.linkId === link.id) || s.id === sourceNode.id);
+    const curPRight = rightParents.findIndex(s => (link && s.linkId === link.id) || s.id === sourceNode.id);
+
+    if (curPLeft !== -1) {
+      const actualPitch = Math.min(pitch, (tgtHalf.halfW - 10) / Math.max(1, leftParents.length));
+      tgtPinOffset = -(curPLeft + 1) * actualPitch;
+    } else if (curPRight !== -1) {
+      const actualPitch = Math.min(pitch, (tgtHalf.halfW - 10) / Math.max(1, rightParents.length));
+      tgtPinOffset = +(curPRight + 1) * actualPitch;
+    }
   } else {
-    tgtSiblings.sort((a, b) => a.cy !== b.cy ? (a.cy - b.cy) : String(a.linkId).localeCompare(String(b.linkId)));
+    const topParents = allTgtSiblings.filter(s => s.cy < tgtCy - 1);
+    const botParents = allTgtSiblings.filter(s => s.cy > tgtCy + 1);
+
+    topParents.sort((a, b) => Math.abs(tgtCy - a.cy) - Math.abs(tgtCy - b.cy));
+    botParents.sort((a, b) => Math.abs(a.cy - tgtCy) - Math.abs(b.cy - tgtCy));
+
+    const curPTop = topParents.findIndex(s => (link && s.linkId === link.id) || s.id === sourceNode.id);
+    const curPBot = botParents.findIndex(s => (link && s.linkId === link.id) || s.id === sourceNode.id);
+
+    if (curPTop !== -1) {
+      const actualPitch = Math.min(pitch, (tgtHalf.halfH - 10) / Math.max(1, topParents.length));
+      tgtPinOffset = -(curPTop + 1) * actualPitch;
+    } else if (curPBot !== -1) {
+      const actualPitch = Math.min(pitch, (tgtHalf.halfH - 10) / Math.max(1, botParents.length));
+      tgtPinOffset = +(curPBot + 1) * actualPitch;
+    }
   }
-
-  const tgtK = tgtSiblings.length;
-  let tgtIdx = tgtSiblings.findIndex(s => (link && s.linkId === link.id) || s.id === sourceNode.id);
-  if (tgtIdx === -1) tgtIdx = 0;
-
-  const tgtMaxExtent = isTVert ? (tgtHalf.halfW - 12) : (tgtHalf.halfH - 10);
-  const actualTgtPitch = tgtK > 1 ? Math.min(pitch, (tgtMaxExtent * 2) / Math.max(1, tgtK - 1)) : 0;
-  const tgtPinOffset = tgtK > 1 ? (-(tgtK - 1) / 2.0 + tgtIdx) * actualTgtPitch : 0;
 
   let tgtPt = { x: tgtCx, y: tgtCy };
   if (tFace === 'top') {
@@ -1277,28 +1348,21 @@ function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
     tgtPt = { x: tgtNx + tgtHalf.halfW * 2, y: tgtCy + tgtPinOffset };
   }
 
-  // 3. Canales Paralelos en el corredor para que ninguna línea se monte sobre otra
-  const maxK = Math.max(srcK, tgtK);
-  const chosenIdx = srcK >= tgtK ? srcIdx : tgtIdx;
-  const channelOffset = maxK > 1 ? (-(maxK - 1) / 2.0 + chosenIdx) * 12 : 0;
-
+  // 3. Enrutamiento Ortogonal Limpio y Separado por Niveles
   let rawPath = [];
 
   if (isSVert) {
-    let midY = (srcPt.y + tgtPt.y) / 2.0 + channelOffset;
+    let baseMidY = (srcPt.y + tgtPt.y) / 2.0;
     if (sFace === 'bottom') {
-      if (tgtPt.y > srcPt.y + 28) {
-        midY = Math.min(Math.max(midY, srcPt.y + 14), tgtPt.y - 14);
-      } else {
-        midY = (srcPt.y + tgtPt.y) / 2.0;
+      if (tgtPt.y > srcPt.y + 36) {
+        baseMidY = Math.min(Math.max(baseMidY, srcPt.y + 16), tgtPt.y - 18);
       }
     } else {
-      if (tgtPt.y < srcPt.y - 28) {
-        midY = Math.max(Math.min(midY, srcPt.y - 14), tgtPt.y + 14);
-      } else {
-        midY = (srcPt.y + tgtPt.y) / 2.0;
+      if (tgtPt.y < srcPt.y - 36) {
+        baseMidY = Math.max(Math.min(baseMidY, srcPt.y - 16), tgtPt.y + 18);
       }
     }
+    const midY = baseMidY + corridorOffset;
 
     if (isTVert) {
       rawPath = [
@@ -1315,20 +1379,17 @@ function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
       ];
     }
   } else {
-    let midX = (srcPt.x + tgtPt.x) / 2.0 + channelOffset;
+    let baseMidX = (srcPt.x + tgtPt.x) / 2.0;
     if (sFace === 'right') {
-      if (tgtPt.x > srcPt.x + 28) {
-        midX = Math.min(Math.max(midX, srcPt.x + 14), tgtPt.x - 14);
-      } else {
-        midX = (srcPt.x + tgtPt.x) / 2.0;
+      if (tgtPt.x > srcPt.x + 36) {
+        baseMidX = Math.min(Math.max(baseMidX, srcPt.x + 16), tgtPt.x - 18);
       }
     } else {
-      if (tgtPt.x < srcPt.x - 28) {
-        midX = Math.max(Math.min(midX, srcPt.x - 14), tgtPt.x + 14);
-      } else {
-        midX = (srcPt.x + tgtPt.x) / 2.0;
+      if (tgtPt.x < srcPt.x - 36) {
+        baseMidX = Math.max(Math.min(baseMidX, srcPt.x - 16), tgtPt.x + 18);
       }
     }
+    const midX = baseMidX + corridorOffset;
 
     if (!isTVert) {
       rawPath = [
