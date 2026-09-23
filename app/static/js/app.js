@@ -16,6 +16,7 @@ const GRID_SIZE = 20;
 // Estado de modo conexión de enlaces
 let linkMode = false;
 let linkSourceNode = null;
+const linkTargetNodes = new Set(); // Conjunto de nodos destino seleccionados en Paso 2 de Modo Enlace
 
 // Referencias de shapes en Konva
 const nodeGroups = new Map();
@@ -25,7 +26,8 @@ const linkLines = new Map();
 let selectedNode = null;
 const selectedNodes = new Set(); // Conjunto de nodos en selección múltiple
 let selectionRect = null;
-let isSelectingWithRightClick = false;
+let isAreaSelecting = false;
+let wasDragSelecting = false;
 let selectionStartPos = { x: 0, y: 0 };
 
 // Helper para obtener el color del estado de un nodo o submapa (reglas Red, Yellow, Green)
@@ -139,11 +141,15 @@ function initCanvas() {
     stage.batchDraw();
   });
 
-  // Evento Mousedown: Iniciar rectángulo de selección con Clic Derecho (button 2)
+  // Evento Mousedown: Iniciar rectángulo de selección (Clic Derecho, Shift+Clic Izquierdo o Arrastre en Paso 2 de Enlaces)
   stage.on('mousedown touchstart', (e) => {
-    if (e.evt && e.evt.button === 2) {
-      e.evt.preventDefault();
-      isSelectingWithRightClick = true;
+    const isRightBtn = e.evt && e.evt.button === 2;
+    const isShiftLeftBtn = e.evt && e.evt.button === 0 && (e.evt.shiftKey || e.evt.ctrlKey || e.evt.metaKey);
+    const isLinkStep2 = linkMode && !!linkSourceNode;
+
+    if (isRightBtn || isShiftLeftBtn || isLinkStep2) {
+      if (e.evt && (isRightBtn || isLinkStep2)) e.evt.preventDefault();
+      isAreaSelecting = true;
       stage.draggable(false);
 
       const pointer = stage.getPointerPosition();
@@ -164,7 +170,7 @@ function initCanvas() {
 
   // Evento Mousemove: Redimensionar rectángulo de selección
   stage.on('mousemove touchmove', (e) => {
-    if (!isSelectingWithRightClick) return;
+    if (!isAreaSelecting) return;
     const pointer = stage.getPointerPosition();
     if (!pointer) return;
 
@@ -185,10 +191,10 @@ function initCanvas() {
     uiLayer.batchDraw();
   });
 
-  // Evento Mouseup: Finalizar selección de área y marcar nodos encerrados
-  const finishSelection = (e) => {
-    if (isSelectingWithRightClick) {
-      isSelectingWithRightClick = false;
+  // Evento Mouseup: Finalizar selección de área y marcar o conectar nodos encerrados
+  const finishSelection = async (e) => {
+    if (isAreaSelecting) {
+      isAreaSelecting = false;
       const selW = selectionRect.width();
       const selH = selectionRect.height();
       const selX = selectionRect.x();
@@ -196,13 +202,16 @@ function initCanvas() {
 
       selectionRect.visible(false);
       uiLayer.batchDraw();
-      stage.draggable(true);
+      if (!linkMode) {
+        stage.draggable(true);
+      }
 
-      if (selW > 5 && selH > 5) {
-        deselectNode();
-        clearMultiSelection();
+      if (selW > 6 && selH > 6) {
+        wasDragSelecting = true;
+        setTimeout(() => { wasDragSelecting = false; }, 150);
 
         // Recorrer todos los nodos del mapa actual y verificar intersección por coordenadas
+        const enclosedNodes = [];
         if (currentMap && currentMap.nodes) {
           currentMap.nodes.forEach(node => {
             const grp = nodeGroups.get(node.id);
@@ -214,16 +223,28 @@ function initCanvas() {
               // Colisión AABB en coordenadas mundiales
               if (nx < selX + selW && nx + nodeWidth > selX &&
                   ny < selY + selH && ny + nodeHeight > selY) {
-                addNodeToMultiSelection(node);
+                enclosedNodes.push(node);
               }
             }
           });
         }
 
-        if (selectedNodes.size > 0) {
-          showMultiSelectionNotice(selectedNodes.size);
+        if (linkMode && linkSourceNode) {
+          // Conectar por arrastre en Modo Enlace (Paso 2)
+          const targetCandidates = enclosedNodes.filter(n => n.id !== linkSourceNode.id);
+          if (targetCandidates.length > 0) {
+            await connectMultipleTargetNodes(linkSourceNode, targetCandidates);
+          }
         } else {
-          hideMultiSelectionNotice();
+          deselectNode();
+          clearMultiSelection();
+          enclosedNodes.forEach(node => addNodeToMultiSelection(node));
+
+          if (selectedNodes.size > 0) {
+            showMultiSelectionNotice(selectedNodes.size);
+          } else {
+            hideMultiSelectionNotice();
+          }
         }
       }
     }
@@ -231,11 +252,12 @@ function initCanvas() {
 
   stage.on('mouseup touchend', finishSelection);
   window.addEventListener('mouseup', (e) => {
-    if (isSelectingWithRightClick) finishSelection(e);
+    if (isAreaSelecting) finishSelection(e);
   });
 
   // Deseleccionar al hacer clic izquierdo en fondo vacío
   stage.on('click tap', (e) => {
+    if (wasDragSelecting) return;
     if (e.target === stage && (!e.evt || e.evt.button === 0)) {
       if (linkMode) {
         cancelLinkMode();
@@ -794,7 +816,7 @@ function renderNode(node) {
   group.on('click tap', (e) => {
     e.cancelBubble = true;
     if (linkMode) {
-      handleLinkNodeClick(node);
+      handleLinkNodeClick(node, e.evt);
     } else {
       const evt = e.evt || {};
       if (evt.shiftKey || evt.ctrlKey || evt.metaKey) {
@@ -844,6 +866,9 @@ function renderNode(node) {
   group.on('mouseenter', () => {
     document.body.style.cursor = linkMode ? 'crosshair' : 'pointer';
     if (!box.isHighlighted) {
+      if (linkMode && linkSourceNode && linkSourceNode.id === node.id) {
+        return; // Mantener resaltado de origen
+      }
       box.stroke('#38bdf8');
       nodesLayer.batchDraw();
     }
@@ -851,8 +876,23 @@ function renderNode(node) {
   group.on('mouseleave', () => {
     document.body.style.cursor = 'default';
     if (!box.isHighlighted) {
-      const curPingStatus = node.ping_status || node.status;
-      box.stroke(isParentShortcut ? '#38bdf8' : getNodeStatusColor(curPingStatus, isSubmap));
+      if (linkMode && linkSourceNode && linkSourceNode.id === node.id) {
+        box.stroke('#10b981');
+        box.strokeWidth(3);
+      } else if (linkMode && linkTargetNodes.has(node)) {
+        box.stroke('#38bdf8');
+        box.strokeWidth(2.5);
+      } else if (selectedNodes.has(node)) {
+        box.stroke('#a855f7');
+        box.strokeWidth(2);
+      } else if (selectedNode && selectedNode.id === node.id) {
+        box.stroke('#38bdf8');
+        box.strokeWidth(2);
+      } else {
+        const curPingStatus = node.ping_status || node.status;
+        box.stroke(isParentShortcut ? '#38bdf8' : getNodeStatusColor(curPingStatus, isSubmap));
+        box.strokeWidth(isSubmap ? 2 : 1.5);
+      }
       nodesLayer.batchDraw();
     }
   });
@@ -1671,24 +1711,51 @@ function updateAllLinks() {
 function startLinkMode() {
   linkMode = true;
   linkSourceNode = null;
+  linkTargetNodes.clear();
+  nodeGroups.forEach(grp => grp.draggable(false));
   document.getElementById('btn-toggle-link-mode').classList.add('btn-active');
-  document.getElementById('link-mode-banner').style.display = 'flex';
-  document.getElementById('link-mode-text').textContent = 'Paso 1: Haz clic en el nodo origen';
+  const banner = document.getElementById('link-mode-banner');
+  if (banner) banner.style.display = 'flex';
+  const bannerText = document.getElementById('link-mode-text');
+  if (bannerText) bannerText.textContent = 'Paso 1: Haz clic en el nodo origen';
+  const btnMulti = document.getElementById('btn-confirm-multi-link');
+  if (btnMulti) btnMulti.style.display = 'none';
 }
 
 function cancelLinkMode() {
   linkMode = false;
+  nodeGroups.forEach(grp => grp.draggable(true));
+  if (stage) stage.draggable(true);
+
   if (linkSourceNode) {
     const grp = nodeGroups.get(linkSourceNode.id);
     if (grp) {
       const isParentShortcut = linkSourceNode.device_type === 'parent_map' || !!linkSourceNode.extra_data?.is_parent_shortcut;
       const isSubmap = linkSourceNode.device_type === 'submap' || isParentShortcut;
-      grp.findOne('.box').stroke(isParentShortcut ? '#38bdf8' : getNodeStatusColor(linkSourceNode.status, isSubmap));
+      const curPingStatus = linkSourceNode.ping_status || linkSourceNode.status;
+      grp.findOne('.box').stroke(isParentShortcut ? '#38bdf8' : getNodeStatusColor(curPingStatus, isSubmap));
+      grp.findOne('.box').strokeWidth(isSubmap ? 2 : 1.5);
     }
   }
+
+  linkTargetNodes.forEach(tgtNode => {
+    const grp = nodeGroups.get(tgtNode.id);
+    if (grp) {
+      const isParentShortcut = tgtNode.device_type === 'parent_map' || !!tgtNode.extra_data?.is_parent_shortcut;
+      const isSubmap = tgtNode.device_type === 'submap' || isParentShortcut;
+      const curPingStatus = tgtNode.ping_status || tgtNode.status;
+      grp.findOne('.box').stroke(isParentShortcut ? '#38bdf8' : getNodeStatusColor(curPingStatus, isSubmap));
+      grp.findOne('.box').strokeWidth(isSubmap ? 2 : 1.5);
+    }
+  });
+
   linkSourceNode = null;
+  linkTargetNodes.clear();
   document.getElementById('btn-toggle-link-mode').classList.remove('btn-active');
-  document.getElementById('link-mode-banner').style.display = 'none';
+  const banner = document.getElementById('link-mode-banner');
+  if (banner) banner.style.display = 'none';
+  const btnMulti = document.getElementById('btn-confirm-multi-link');
+  if (btnMulti) btnMulti.style.display = 'none';
   nodesLayer.batchDraw();
 }
 
@@ -1802,164 +1869,282 @@ function promptIntermapLink(sourceNode, targetNode, targetMapId, remoteNodes, is
   });
 }
 
-async function handleLinkNodeClick(node) {
+async function handleLinkNodeClick(node, evt = {}) {
   if (!linkSourceNode) {
-    // Primer clic: Origen
+    // ── PASO 1: Selección de Origen ──
     linkSourceNode = node;
+    linkTargetNodes.clear();
     const grp = nodeGroups.get(node.id);
     if (grp) {
       grp.findOne('.box').stroke('#10b981');
+      grp.findOne('.box').strokeWidth(3);
       nodesLayer.batchDraw();
     }
-    document.getElementById('link-mode-text').textContent = `Conectando desde "${node.name}". Haz clic en el nodo destino.`;
+    const bannerText = document.getElementById('link-mode-text');
+    if (bannerText) {
+      bannerText.textContent = `Paso 2: Haz clic en el destino o arrastra el mouse para seleccionar múltiples nodos (desde "${node.name}")`;
+    }
+    const btnMulti = document.getElementById('btn-confirm-multi-link');
+    if (btnMulti) btnMulti.style.display = 'none';
   } else {
-    // Segundo clic: Destino
+    // ── PASO 2: Selección de Destino(s) ──
     if (linkSourceNode.id === node.id) {
       alert('No puedes conectar un nodo consigo mismo.');
-      cancelLinkMode();
       return;
     }
 
-    const isSourceNav = linkSourceNode.device_type === 'submap' || linkSourceNode.device_type === 'parent_map' || !!linkSourceNode.extra_data?.is_parent_shortcut;
-    const isTargetNav = node.device_type === 'submap' || node.device_type === 'parent_map' || !!node.extra_data?.is_parent_shortcut;
+    const isMultiModifier = !!(evt && (evt.shiftKey || evt.ctrlKey || evt.metaKey));
 
-    let linkExtra = {};
+    if (isMultiModifier) {
+      // Toggle en el conjunto de destinos seleccionados
+      const grp = nodeGroups.get(node.id);
+      const isParentShortcut = node.device_type === 'parent_map' || !!node.extra_data?.is_parent_shortcut;
+      const isSubmap = node.device_type === 'submap' || isParentShortcut;
 
-    // ── Interconexión Inter-Mapa a través de Portal de Navegación ──
+      if (linkTargetNodes.has(node)) {
+        linkTargetNodes.delete(node);
+        if (grp) {
+          const curPingStatus = node.ping_status || node.status;
+          grp.findOne('.box').stroke(isParentShortcut ? '#38bdf8' : getNodeStatusColor(curPingStatus, isSubmap));
+          grp.findOne('.box').strokeWidth(isSubmap ? 2 : 1.5);
+        }
+      } else {
+        linkTargetNodes.add(node);
+        if (grp) {
+          grp.findOne('.box').stroke('#38bdf8');
+          grp.findOne('.box').strokeWidth(2.5);
+        }
+      }
+      nodesLayer.batchDraw();
+
+      const btnMulti = document.getElementById('btn-confirm-multi-link');
+      const countSpan = document.getElementById('multi-link-count');
+      const bannerText = document.getElementById('link-mode-text');
+
+      if (linkTargetNodes.size > 0) {
+        if (btnMulti) btnMulti.style.display = 'inline-flex';
+        if (countSpan) countSpan.textContent = linkTargetNodes.size;
+        if (bannerText) {
+          bannerText.textContent = `Origen: "${linkSourceNode.name}" ➔ ${linkTargetNodes.size} destino(s) seleccionado(s). Pulsa Conectar o Enter.`;
+        }
+      } else {
+        if (btnMulti) btnMulti.style.display = 'none';
+        if (bannerText) {
+          bannerText.textContent = `Paso 2: Haz clic en el destino o arrastra el mouse para seleccionar múltiples nodos (desde "${linkSourceNode.name}")`;
+        }
+      }
+      return;
+    }
+
+    // Si ya teníamos nodos en linkTargetNodes acumulados y se hace clic normal, conectar todos incluyendo este
+    if (linkTargetNodes.size > 0) {
+      linkTargetNodes.add(node);
+      await connectMultipleTargetNodes(linkSourceNode, Array.from(linkTargetNodes));
+      return;
+    }
+
+    // Clic simple en un solo nodo destino
+    await connectSingleTargetNode(linkSourceNode, node);
+  }
+}
+
+async function connectMultipleTargetNodes(sourceNode, targetNodes) {
+  if (!sourceNode || !targetNodes || targetNodes.length === 0) return;
+
+  const validTargets = targetNodes.filter(t => t.id !== sourceNode.id);
+  if (validTargets.length === 0) return;
+
+  let createdCount = 0;
+  const dict = new Map();
+  if (currentMap && currentMap.nodes) {
+    currentMap.nodes.forEach(n => dict.set(n.id, n));
+  }
+
+  for (const tgtNode of validTargets) {
+    // Evitar enlaces duplicados entre el mismo par de nodos
+    const alreadyLinked = currentMap.links && currentMap.links.some(l => 
+      (l.source_node_id === sourceNode.id && l.target_node_id === tgtNode.id) ||
+      (l.source_node_id === tgtNode.id && l.target_node_id === sourceNode.id)
+    );
+    if (alreadyLinked) continue;
+
+    const isSourceNav = sourceNode.device_type === 'submap' || sourceNode.device_type === 'parent_map' || !!sourceNode.extra_data?.is_parent_shortcut;
+    const isTargetNav = tgtNode.device_type === 'submap' || tgtNode.device_type === 'parent_map' || !!tgtNode.extra_data?.is_parent_shortcut;
+
+    let linkExtra = {
+      direction: 'source_to_target'
+    };
+
     if (isSourceNav || isTargetNav) {
-      const navNode = isTargetNav ? node : linkSourceNode;
-      const deviceNode = isTargetNav ? linkSourceNode : node;
-      
-      let targetMapId = navNode.extra_data?.target_map_id;
-      if (!targetMapId) {
-        if (navNode.device_type === 'parent_map' || navNode.extra_data?.is_parent_shortcut) {
-          targetMapId = currentMap.parent_map_id;
-        } else if (navNode.device_type === 'submap' && Array.isArray(allMaps)) {
-          const matchedMap = allMaps.find(m => m.name.toLowerCase().trim() === navNode.name.toLowerCase().trim());
-          if (matchedMap) targetMapId = matchedMap.id;
-        }
-      }
-
-      if (targetMapId) {
-        try {
-          const targetMapDetail = await API.getMapDetail(targetMapId);
-          if (targetMapDetail && targetMapDetail.nodes && targetMapDetail.nodes.length > 0) {
-            const remoteCandidates = targetMapDetail.nodes.filter(n => n.device_type !== 'parent_map' && !n.extra_data?.is_parent_shortcut && n.device_type !== 'submap');
-            
-            const remoteNode = await promptIntermapLink(linkSourceNode, node, targetMapId, remoteCandidates, isSourceNav);
-            if (!remoteNode) {
-              cancelLinkMode();
-              return;
-            }
-
-            if (remoteNode.is_simple) {
-              // Enlace Simple (Visual): Solo flecha visual directa, sin crear pines ni alimentar Zabbix BSM
-              linkExtra = {
-                is_visual_only: true,
-                is_simple_link: true,
-                sync_zabbix: false,
-                direction: 'source_to_target'
-              };
-            } else {
-              const pinId = 'pin-' + Date.now().toString(36);
-              const isParentNav = navNode.device_type === 'parent_map' || !!navNode.extra_data?.is_parent_shortcut;
-
-              // 1. Agregar Pin al nodo de navegación local
-              if (!navNode.extra_data) navNode.extra_data = {};
-              if (!navNode.extra_data.pins) navNode.extra_data.pins = [];
-              navNode.extra_data.pins.push({
-                pin_id: pinId,
-                remote_node_id: remoteNode.id,
-                remote_node_name: remoteNode.name,
-                remote_map_id: targetMapId,
-                label: isParentNav ? `⬅ ${remoteNode.name}` : `➔ ${remoteNode.name}`
-              });
-              await API.updateNode(navNode.id, { extra_data: navNode.extra_data });
-
-              // 2. Agregar Pin recíproco al nodo de navegación complementario en el mapa destino
-              const complementaryNav = targetMapDetail.nodes.find(n => (isParentNav ? n.device_type === 'submap' : (n.device_type === 'parent_map' || n.extra_data?.is_parent_shortcut)));
-              if (complementaryNav) {
-                if (!complementaryNav.extra_data) complementaryNav.extra_data = {};
-                if (!complementaryNav.extra_data.pins) complementaryNav.extra_data.pins = [];
-                complementaryNav.extra_data.pins.push({
-                  pin_id: pinId,
-                  remote_node_id: deviceNode.id,
-                  remote_node_name: deviceNode.name,
-                  remote_map_id: currentMap.id,
-                  label: isParentNav ? `➔ ${deviceNode.name}` : `⬅ ${deviceNode.name}`
-                });
-                await API.updateNode(complementaryNav.id, { extra_data: complementaryNav.extra_data });
-
-                // Crear enlace en el submapa/padre si aún no existe
-                try {
-                  await API.createLink({
-                    map_id: targetMapId,
-                    source_node_id: isParentNav ? remoteNode.id : complementaryNav.id,
-                    target_node_id: isParentNav ? complementaryNav.id : remoteNode.id,
-                    status: 'ok',
-                    extra_data: {
-                      is_intermap: true,
-                      pin_id: pinId,
-                      local_node_id: remoteNode.id,
-                      local_node_name: remoteNode.name,
-                      remote_node_id: deviceNode.id,
-                      remote_node_name: deviceNode.name,
-                      remote_map_id: currentMap.id
-                    }
-                  });
-                } catch (cErr) {
-                  console.warn('Enlace complementario ya existía o error:', cErr);
-                }
-              }
-
-              linkExtra = {
-                is_intermap: true,
-                pin_id: pinId,
-                local_node_id: deviceNode.id,
-                local_node_name: deviceNode.name,
-                remote_node_id: remoteNode.id,
-                remote_node_name: remoteNode.name,
-                remote_map_id: targetMapId
-              };
-
-              // Re-renderizar el nodo de navegación local para mostrar el nuevo pin
-              const grpNav = nodeGroups.get(navNode.id);
-              if (grpNav) grpNav.destroy();
-              renderNode(navNode);
-              nodesLayer.batchDraw();
-            }
-          }
-        } catch (mErr) {
-          console.error('Error procesando enlace inter-mapa:', mErr);
-        }
-      }
+      // Para conexiones múltiples hacia submapas se aplica enlace visual directo
+      linkExtra.is_visual_only = true;
+      linkExtra.is_simple_link = true;
+      linkExtra.sync_zabbix = false;
     }
 
     try {
-      if (!linkExtra.direction) {
-        linkExtra.direction = 'source_to_target';
-      }
-
       const newLink = await API.createLink({
         map_id: currentMap.id,
-        source_node_id: linkSourceNode.id,
-        target_node_id: node.id,
+        source_node_id: sourceNode.id,
+        target_node_id: tgtNode.id,
         status: 'ok',
         extra_data: linkExtra
       });
 
+      if (!currentMap.links) currentMap.links = [];
       currentMap.links.push(newLink);
-      const dict = new Map();
-      currentMap.nodes.forEach(n => dict.set(n.id, n));
       renderLink(newLink, dict);
-
-      linksLayer.batchDraw();
-
+      createdCount++;
     } catch (err) {
-      alert('Error creando enlace: ' + err.message);
-    } finally {
-      cancelLinkMode();
+      console.warn(`Error al conectar ${sourceNode.name} con ${tgtNode.name}:`, err);
     }
+  }
+
+  if (linksLayer) linksLayer.batchDraw();
+  cancelLinkMode();
+}
+
+async function connectSingleTargetNode(sourceNode, node) {
+  const isSourceNav = sourceNode.device_type === 'submap' || sourceNode.device_type === 'parent_map' || !!sourceNode.extra_data?.is_parent_shortcut;
+  const isTargetNav = node.device_type === 'submap' || node.device_type === 'parent_map' || !!node.extra_data?.is_parent_shortcut;
+
+  let linkExtra = {};
+
+  // ── Interconexión Inter-Mapa a través de Portal de Navegación ──
+  if (isSourceNav || isTargetNav) {
+    const navNode = isTargetNav ? node : sourceNode;
+    const deviceNode = isTargetNav ? sourceNode : node;
+    
+    let targetMapId = navNode.extra_data?.target_map_id;
+    if (!targetMapId) {
+      if (navNode.device_type === 'parent_map' || navNode.extra_data?.is_parent_shortcut) {
+        targetMapId = currentMap.parent_map_id;
+      } else if (navNode.device_type === 'submap' && Array.isArray(allMaps)) {
+        const matchedMap = allMaps.find(m => m.name.toLowerCase().trim() === navNode.name.toLowerCase().trim());
+        if (matchedMap) targetMapId = matchedMap.id;
+      }
+    }
+
+    if (targetMapId) {
+      try {
+        const targetMapDetail = await API.getMapDetail(targetMapId);
+        if (targetMapDetail && targetMapDetail.nodes && targetMapDetail.nodes.length > 0) {
+          const remoteCandidates = targetMapDetail.nodes.filter(n => n.device_type !== 'parent_map' && !n.extra_data?.is_parent_shortcut && n.device_type !== 'submap');
+          
+          const remoteNode = await promptIntermapLink(sourceNode, node, targetMapId, remoteCandidates, isSourceNav);
+          if (!remoteNode) {
+            cancelLinkMode();
+            return;
+          }
+
+          if (remoteNode.is_simple) {
+            // Enlace Simple (Visual): Solo flecha visual directa, sin crear pines ni alimentar Zabbix BSM
+            linkExtra = {
+              is_visual_only: true,
+              is_simple_link: true,
+              sync_zabbix: false,
+              direction: 'source_to_target'
+            };
+          } else {
+            const pinId = 'pin-' + Date.now().toString(36);
+            const isParentNav = navNode.device_type === 'parent_map' || !!navNode.extra_data?.is_parent_shortcut;
+
+            // 1. Agregar Pin al nodo de navegación local
+            if (!navNode.extra_data) navNode.extra_data = {};
+            if (!navNode.extra_data.pins) navNode.extra_data.pins = [];
+            navNode.extra_data.pins.push({
+              pin_id: pinId,
+              remote_node_id: remoteNode.id,
+              remote_node_name: remoteNode.name,
+              remote_map_id: targetMapId,
+              label: isParentNav ? `⬅ ${remoteNode.name}` : `➔ ${remoteNode.name}`
+            });
+            await API.updateNode(navNode.id, { extra_data: navNode.extra_data });
+
+            // 2. Agregar Pin recíproco al nodo de navegación complementario en el mapa destino
+            const complementaryNav = targetMapDetail.nodes.find(n => (isParentNav ? n.device_type === 'submap' : (n.device_type === 'parent_map' || n.extra_data?.is_parent_shortcut)));
+            if (complementaryNav) {
+              if (!complementaryNav.extra_data) complementaryNav.extra_data = {};
+              if (!complementaryNav.extra_data.pins) complementaryNav.extra_data.pins = [];
+              complementaryNav.extra_data.pins.push({
+                pin_id: pinId,
+                remote_node_id: deviceNode.id,
+                remote_node_name: deviceNode.name,
+                remote_map_id: currentMap.id,
+                label: isParentNav ? `➔ ${deviceNode.name}` : `⬅ ${deviceNode.name}`
+              });
+              await API.updateNode(complementaryNav.id, { extra_data: complementaryNav.extra_data });
+
+              // Crear enlace en el submapa/padre si aún no existe
+              try {
+                await API.createLink({
+                  map_id: targetMapId,
+                  source_node_id: isParentNav ? remoteNode.id : complementaryNav.id,
+                  target_node_id: isParentNav ? complementaryNav.id : remoteNode.id,
+                  status: 'ok',
+                  extra_data: {
+                    is_intermap: true,
+                    pin_id: pinId,
+                    local_node_id: remoteNode.id,
+                    local_node_name: remoteNode.name,
+                    remote_node_id: deviceNode.id,
+                    remote_node_name: deviceNode.name,
+                    remote_map_id: currentMap.id
+                  }
+                });
+              } catch (cErr) {
+                console.warn('Enlace complementario ya existía o error:', cErr);
+              }
+            }
+
+            linkExtra = {
+              is_intermap: true,
+              pin_id: pinId,
+              local_node_id: deviceNode.id,
+              local_node_name: deviceNode.name,
+              remote_node_id: remoteNode.id,
+              remote_node_name: remoteNode.name,
+              remote_map_id: targetMapId
+            };
+
+            // Re-renderizar el nodo de navegación local para mostrar el nuevo pin
+            const grpNav = nodeGroups.get(navNode.id);
+            if (grpNav) grpNav.destroy();
+            renderNode(navNode);
+            nodesLayer.batchDraw();
+          }
+        }
+      } catch (mErr) {
+        console.error('Error procesando enlace inter-mapa:', mErr);
+      }
+    }
+  }
+
+  try {
+    if (!linkExtra.direction) {
+      linkExtra.direction = 'source_to_target';
+    }
+
+    const newLink = await API.createLink({
+      map_id: currentMap.id,
+      source_node_id: sourceNode.id,
+      target_node_id: node.id,
+      status: 'ok',
+      extra_data: linkExtra
+    });
+
+    if (!currentMap.links) currentMap.links = [];
+    currentMap.links.push(newLink);
+    const dict = new Map();
+    if (currentMap.nodes) currentMap.nodes.forEach(n => dict.set(n.id, n));
+    renderLink(newLink, dict);
+
+    linksLayer.batchDraw();
+
+  } catch (err) {
+    alert('Error creando enlace: ' + err.message);
+  } finally {
+    cancelLinkMode();
   }
 }
 
@@ -4833,6 +5018,15 @@ window.addEventListener('DOMContentLoaded', async () => {
   });
   document.getElementById('btn-cancel-link').addEventListener('click', cancelLinkMode);
 
+  const btnConfirmMultiLink = document.getElementById('btn-confirm-multi-link');
+  if (btnConfirmMultiLink) {
+    btnConfirmMultiLink.addEventListener('click', async () => {
+      if (linkSourceNode && linkTargetNodes.size > 0) {
+        await connectMultipleTargetNodes(linkSourceNode, Array.from(linkTargetNodes));
+      }
+    });
+  }
+
   // Botón Imantar Cuadrícula
   const btnGrid = document.getElementById('btn-toggle-grid');
   btnGrid.addEventListener('click', () => {
@@ -5253,6 +5447,12 @@ window.addEventListener('DOMContentLoaded', async () => {
         clearMultiSelection();
       } else if (selectedNode) {
         deselectNode();
+      }
+    } else if (e.key === 'Enter') {
+      if (linkMode && linkSourceNode && linkTargetNodes.size > 0) {
+        e.preventDefault();
+        const btnMulti = document.getElementById('btn-confirm-multi-link');
+        if (btnMulti) btnMulti.click();
       }
     }
   });
