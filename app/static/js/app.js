@@ -972,135 +972,260 @@ function roundCorners(waypoints, radius = 8) {
   return res;
 }
 
+function determineNodeFace(srcCx, srcCy, tgtCx, tgtCy, halfW, halfH) {
+  const dx = tgtCx - srcCx;
+  const dy = tgtCy - srcCy;
+  if (dx === 0 && dy === 0) return 'bottom';
+  const scaleX = Math.abs(dx) > 1e-5 ? halfW / Math.abs(dx) : Infinity;
+  const scaleY = Math.abs(dy) > 1e-5 ? halfH / Math.abs(dy) : Infinity;
+  if (scaleY < scaleX) {
+    return dy > 0 ? 'bottom' : 'top';
+  } else {
+    return dx > 0 ? 'right' : 'left';
+  }
+}
+
+function getNodeFacePortInfo(node, otherNode, link, isSource) {
+  const half = getNodeHalfDimensions(node);
+  const otherHalf = getNodeHalfDimensions(otherNode);
+
+  const grp = nodeGroups.get(node.id);
+  const otherGrp = nodeGroups.get(otherNode.id);
+
+  const nx = grp ? grp.x() : (node.x || 0);
+  const ny = grp ? grp.y() : (node.y || 0);
+  const ox = otherGrp ? otherGrp.x() : (otherNode.x || 0);
+  const oy = otherGrp ? otherGrp.y() : (otherNode.y || 0);
+
+  const nCx = nx + half.halfW;
+  const nCy = ny + half.halfH;
+  const oCx = ox + otherHalf.halfW;
+  const oCy = oy + otherHalf.halfH;
+
+  const face = determineNodeFace(nCx, nCy, oCx, oCy, half.halfW, half.halfH);
+
+  // Group and sort all links connected to this face of node to avoid line crossings
+  const allLinks = (currentMap && currentMap.links) ? currentMap.links : [];
+  const nodeMap = new Map();
+  if (currentMap && currentMap.nodes) {
+    currentMap.nodes.forEach(n => nodeMap.set(n.id, n));
+  }
+
+  const siblings = [];
+  for (let i = 0; i < allLinks.length; i++) {
+    const l = allLinks[i];
+    let neighborId = null;
+    if (l.source_node_id === node.id) neighborId = l.target_node_id;
+    else if (l.target_node_id === node.id) neighborId = l.source_node_id;
+
+    if (neighborId) {
+      const neighbor = nodeMap.get(neighborId);
+      if (neighbor) {
+        const neighGrp = nodeGroups.get(neighbor.id);
+        const neighHalf = getNodeHalfDimensions(neighbor);
+        const neighX = neighGrp ? neighGrp.x() : (neighbor.x || 0);
+        const neighY = neighGrp ? neighGrp.y() : (neighbor.y || 0);
+        const neighCx = neighX + neighHalf.halfW;
+        const neighCy = neighY + neighHalf.halfH;
+
+        const neighFace = determineNodeFace(nCx, nCy, neighCx, neighCy, half.halfW, half.halfH);
+        if (neighFace === face) {
+          siblings.push({
+            linkId: l.id,
+            neighborCx: neighCx,
+            neighborCy: neighCy
+          });
+        }
+      }
+    }
+  }
+
+  // Sort siblings along the face to prevent crossing traces
+  if (face === 'top' || face === 'bottom') {
+    siblings.sort((a, b) => a.neighborCx - b.neighborCx);
+  } else {
+    siblings.sort((a, b) => a.neighborCy - b.neighborCy);
+  }
+
+  const count = siblings.length;
+  const linkId = link ? link.id : null;
+  let idx = -1;
+  for (let i = 0; i < siblings.length; i++) {
+    if (siblings[i].linkId === linkId) {
+      idx = i;
+      break;
+    }
+  }
+  if (idx === -1) idx = Math.floor(count / 2);
+
+  const pitch = 14;
+  const maxExtent = (face === 'top' || face === 'bottom') ? (half.halfW - 14) : (half.halfH - 12);
+  const actualPitch = count > 1 ? Math.min(pitch, (maxExtent * 2) / Math.max(1, count - 1)) : 0;
+  const offset = count <= 1 ? 0 : (-(count - 1) / 2.0 + idx) * actualPitch;
+
+  const stubLen = 16;
+  let px = nCx, py = nCy;
+  let stubX = nCx, stubY = nCy;
+
+  if (face === 'bottom') {
+    px = nCx + offset;
+    py = ny + half.halfH * 2;
+    stubX = px;
+    stubY = py + stubLen;
+  } else if (face === 'top') {
+    px = nCx + offset;
+    py = ny;
+    stubX = px;
+    stubY = py - stubLen;
+  } else if (face === 'right') {
+    px = nx + half.halfW * 2;
+    py = nCy + offset;
+    stubX = px + stubLen;
+    stubY = py;
+  } else { // left
+    px = nx;
+    py = nCy + offset;
+    stubX = px - stubLen;
+    stubY = py;
+  }
+
+  return {
+    x: px,
+    y: py,
+    face: face,
+    stub: { x: stubX, y: stubY }
+  };
+}
+
 function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
   if (!sourceNode || !targetNode) return [0, 0, 0, 0];
 
-  const srcHalf = getNodeHalfDimensions(sourceNode);
-  const tgtHalf = getNodeHalfDimensions(targetNode);
+  const srcPort = getNodeFacePortInfo(sourceNode, targetNode, link, true);
+  const tgtPort = getNodeFacePortInfo(targetNode, sourceNode, link, false);
 
-  const srcGroup = nodeGroups.get(sourceNode.id);
-  const tgtGroup = nodeGroups.get(targetNode.id);
+  const srcPt = { x: srcPort.x, y: srcPort.y };
+  const srcStub = srcPort.stub;
+  const tgtPt = { x: tgtPort.x, y: tgtPort.y };
+  const tgtStub = tgtPort.stub;
 
-  const srcX = srcGroup ? srcGroup.x() : (sourceNode.x || 0);
-  const srcY = srcGroup ? srcGroup.y() : (sourceNode.y || 0);
-  const tgtX = tgtGroup ? tgtGroup.x() : (targetNode.x || 0);
-  const tgtY = tgtGroup ? tgtGroup.y() : (targetNode.y || 0);
-
-  const srcCx = srcX + srcHalf.halfW;
-  const srcCy = srcY + srcHalf.halfH;
-  const tgtCx = tgtX + tgtHalf.halfW;
-  const tgtCy = tgtY + tgtHalf.halfH;
-
-  const dx = tgtCx - srcCx;
-  const dy = tgtCy - srcCy;
+  const dx = tgtStub.x - srcStub.x;
+  const dy = tgtStub.y - srcStub.y;
   const distSq = dx * dx + dy * dy;
   const dist = Math.sqrt(distSq);
 
-  if (dist < 1e-5) {
-    return [srcCx, srcCy, tgtCx, tgtCy];
-  }
-
-  // Detect intermediate node obstacles between source and target
+  // Detect intermediate node obstacles between srcStub and tgtStub
   const allNodes = (currentMap && currentMap.nodes) ? currentMap.nodes : [];
   const obstacles = [];
   const boxPad = 8;
 
-  for (let i = 0; i < allNodes.length; i++) {
-    const n = allNodes[i];
-    if (n.id === sourceNode.id || n.id === targetNode.id) continue;
+  if (dist > 1e-4) {
+    for (let i = 0; i < allNodes.length; i++) {
+      const n = allNodes[i];
+      if (n.id === sourceNode.id || n.id === targetNode.id) continue;
 
-    const nHalf = getNodeHalfDimensions(n);
-    const nGrp = nodeGroups.get(n.id);
-    const nx = nGrp ? nGrp.x() : (n.x || 0);
-    const ny = nGrp ? nGrp.y() : (n.y || 0);
-    const ncx = nx + nHalf.halfW;
-    const ncy = ny + nHalf.halfH;
+      const nHalf = getNodeHalfDimensions(n);
+      const nGrp = nodeGroups.get(n.id);
+      const nx = nGrp ? nGrp.x() : (n.x || 0);
+      const ny = nGrp ? nGrp.y() : (n.y || 0);
+      const ncx = nx + nHalf.halfW;
+      const ncy = ny + nHalf.halfH;
 
-    // Must be intermediate along the segment direction
-    const t = ((ncx - srcCx) * dx + (ncy - srcCy) * dy) / distSq;
-    if (t <= 0.08 || t >= 0.92) continue;
+      const t = ((ncx - srcStub.x) * dx + (ncy - srcStub.y) * dy) / distSq;
+      if (t <= 0.05 || t >= 0.95) continue;
 
-    const box = {
-      left: nx - boxPad,
-      right: nx + nHalf.halfW * 2 + boxPad,
-      top: ny - boxPad,
-      bottom: ny + nHalf.halfH * 2 + boxPad
-    };
+      const box = {
+        left: nx - boxPad,
+        right: nx + nHalf.halfW * 2 + boxPad,
+        top: ny - boxPad,
+        bottom: ny + nHalf.halfH * 2 + boxPad
+      };
 
-    if (lineIntersectsBox({ x: srcCx, y: srcCy }, { x: tgtCx, y: tgtCy }, box)) {
-      const side = dx * (ncy - srcCy) - dy * (ncx - srcCx);
-      obstacles.push({
-        node: n,
-        t: t,
-        cx: ncx,
-        cy: ncy,
-        halfW: nHalf.halfW,
-        halfH: nHalf.halfH,
-        x: nx,
-        y: ny,
-        w: nHalf.halfW * 2,
-        h: nHalf.halfH * 2,
-        side: side
-      });
+      if (lineIntersectsBox(srcStub, tgtStub, box)) {
+        const side = dx * (ncy - srcStub.y) - dy * (ncx - srcStub.x);
+        obstacles.push({
+          node: n,
+          t: t,
+          cx: ncx,
+          cy: ncy,
+          x: nx,
+          y: ny,
+          w: nHalf.halfW * 2,
+          h: nHalf.halfH * 2,
+          side: side
+        });
+      }
     }
   }
 
-  // If no intermediate obstacles, return direct perimeter-clipped segment
+  const rawPath = [srcPt, srcStub];
+
   if (obstacles.length === 0) {
-    const p1 = getNodePerimeterIntersection(srcCx, srcCy, srcHalf.halfW, srcHalf.halfH, tgtCx, tgtCy);
-    const p2 = getNodePerimeterIntersection(tgtCx, tgtCy, tgtHalf.halfW, tgtHalf.halfH, srcCx, srcCy);
-    return [p1.x, p1.y, p2.x, p2.y];
-  }
+    const sFace = srcPort.face;
+    const tFace = tgtPort.face;
 
-  // Sort obstacles along the path
-  obstacles.sort((a, b) => a.t - b.t);
-
-  const isHorizontal = Math.abs(dx) >= Math.abs(dy);
-  const totalSide = obstacles.reduce((sum, o) => sum + o.side, 0);
-  const routeSide = totalSide >= 0 ? 1 : -1;
-  const margin = 16;
-
-  const rawPath = [{ x: srcCx, y: srcCy }];
-
-  for (let i = 0; i < obstacles.length; i++) {
-    const o = obstacles[i];
-    const oLeft = o.x - margin;
-    const oRight = o.x + o.w + margin;
-    const oTop = o.y - margin;
-    const oBottom = o.y + o.h + margin;
-
-    if (isHorizontal) {
-      const detourY = (dx * routeSide >= 0) ? oTop : oBottom;
-      if (dx > 0) {
-        rawPath.push({ x: oLeft, y: srcCy + (dy / dist) * (oLeft - srcCx) });
-        rawPath.push({ x: oLeft, y: detourY });
-        rawPath.push({ x: oRight, y: detourY });
-        rawPath.push({ x: oRight, y: srcCy + (dy / dist) * (oRight - srcCx) });
-      } else {
-        rawPath.push({ x: oRight, y: srcCy + (dy / dist) * (oRight - srcCx) });
-        rawPath.push({ x: oRight, y: detourY });
-        rawPath.push({ x: oLeft, y: detourY });
-        rawPath.push({ x: oLeft, y: srcCy + (dy / dist) * (oLeft - srcCx) });
-      }
+    if ((sFace === 'top' || sFace === 'bottom') && (tFace === 'top' || tFace === 'bottom')) {
+      const midY = (srcStub.y + tgtStub.y) / 2.0;
+      rawPath.push({ x: srcStub.x, y: midY });
+      rawPath.push({ x: tgtStub.x, y: midY });
+    } else if ((sFace === 'left' || sFace === 'right') && (tFace === 'left' || tFace === 'right')) {
+      const midX = (srcStub.x + tgtStub.x) / 2.0;
+      rawPath.push({ x: midX, y: srcStub.y });
+      rawPath.push({ x: midX, y: tgtStub.y });
+    } else if ((sFace === 'top' || sFace === 'bottom') && (tFace === 'left' || tFace === 'right')) {
+      rawPath.push({ x: srcStub.x, y: tgtStub.y });
+    } else if ((sFace === 'left' || sFace === 'right') && (tFace === 'top' || tFace === 'bottom')) {
+      rawPath.push({ x: tgtStub.x, y: srcStub.y });
     } else {
-      const detourX = (dy * routeSide >= 0) ? oRight : oLeft;
-      if (dy > 0) {
-        rawPath.push({ x: srcCx + (dx / dist) * (oTop - srcCy), y: oTop });
-        rawPath.push({ x: detourX, y: oTop });
-        rawPath.push({ x: detourX, y: oBottom });
-        rawPath.push({ x: srcCx + (dx / dist) * (oBottom - srcCy), y: oBottom });
+      rawPath.push(tgtStub);
+    }
+  } else {
+    obstacles.sort((a, b) => a.t - b.t);
+    const isHorizontal = Math.abs(dx) >= Math.abs(dy);
+    const totalSide = obstacles.reduce((sum, o) => sum + o.side, 0);
+    const routeSide = totalSide >= 0 ? 1 : -1;
+    const margin = 16;
+
+    for (let i = 0; i < obstacles.length; i++) {
+      const o = obstacles[i];
+      const oLeft = o.x - margin;
+      const oRight = o.x + o.w + margin;
+      const oTop = o.y - margin;
+      const oBottom = o.y + o.h + margin;
+
+      if (isHorizontal) {
+        const detourY = (dx * routeSide >= 0) ? oTop : oBottom;
+        if (dx > 0) {
+          rawPath.push({ x: oLeft, y: srcStub.y + (dy / dist) * (oLeft - srcStub.x) });
+          rawPath.push({ x: oLeft, y: detourY });
+          rawPath.push({ x: oRight, y: detourY });
+          rawPath.push({ x: oRight, y: srcStub.y + (dy / dist) * (oRight - srcStub.x) });
+        } else {
+          rawPath.push({ x: oRight, y: srcStub.y + (dy / dist) * (oRight - srcStub.x) });
+          rawPath.push({ x: oRight, y: detourY });
+          rawPath.push({ x: oLeft, y: detourY });
+          rawPath.push({ x: oLeft, y: srcStub.y + (dy / dist) * (oLeft - srcStub.x) });
+        }
       } else {
-        rawPath.push({ x: srcCx + (dx / dist) * (oBottom - srcCy), y: oBottom });
-        rawPath.push({ x: detourX, y: oBottom });
-        rawPath.push({ x: detourX, y: oTop });
-        rawPath.push({ x: srcCx + (dx / dist) * (oTop - srcCy), y: oTop });
+        const detourX = (dy * routeSide >= 0) ? oRight : oLeft;
+        if (dy > 0) {
+          rawPath.push({ x: srcStub.x + (dx / dist) * (oTop - srcStub.y), y: oTop });
+          rawPath.push({ x: detourX, y: oTop });
+          rawPath.push({ x: detourX, y: oBottom });
+          rawPath.push({ x: srcStub.x + (dx / dist) * (oBottom - srcStub.y), y: oBottom });
+        } else {
+          rawPath.push({ x: srcStub.x + (dx / dist) * (oBottom - srcStub.y), y: oBottom });
+          rawPath.push({ x: detourX, y: oBottom });
+          rawPath.push({ x: detourX, y: oTop });
+          rawPath.push({ x: srcStub.x + (dx / dist) * (oTop - srcStub.y), y: oTop });
+        }
       }
     }
   }
 
-  rawPath.push({ x: tgtCx, y: tgtCy });
+  rawPath.push(tgtStub);
+  rawPath.push(tgtPt);
 
-  // Simplify close points
+  // Simplify collinear or very close points
   const simplified = [rawPath[0]];
   for (let i = 1; i < rawPath.length; i++) {
     const p = rawPath[i];
@@ -1110,21 +1235,12 @@ function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
     }
   }
 
-  // Smooth short 8px corners
   const rounded = roundCorners(simplified, 8);
 
-  const firstWp = rounded[1];
-  const lastWp = rounded[rounded.length - 2];
-
-  const p1 = getNodePerimeterIntersection(srcCx, srcCy, srcHalf.halfW, srcHalf.halfH, firstWp.x, firstWp.y);
-  const p2 = getNodePerimeterIntersection(tgtCx, tgtCy, tgtHalf.halfW, tgtHalf.halfH, lastWp.x, lastWp.y);
-
-  const pts = [p1.x, p1.y];
-  for (let i = 1; i < rounded.length - 1; i++) {
+  const pts = [];
+  for (let i = 0; i < rounded.length; i++) {
     pts.push(rounded[i].x, rounded[i].y);
   }
-  pts.push(p2.x, p2.y);
-
   return pts;
 }
 
