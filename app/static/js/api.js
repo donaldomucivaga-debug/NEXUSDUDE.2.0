@@ -304,16 +304,20 @@ const API = {
     return null;
   },
 
-  async syncZabbix(clearFirst = true) {
-    const res = await this.fetch(`/api/zabbix/sync?clear_first=${clearFirst}`, {
-      method: 'POST'
+  async syncZabbix(payload = { scope: 'global', clear_first: true }) {
+    const res = await this.fetch('/api/zabbix/sync', {
+      method: 'POST',
+      body: JSON.stringify(payload)
     });
     if (res.ok) return await res.json();
     throw new Error(await res.text());
   },
 
-  async clearZabbixServices() {
-    const res = await this.fetch('/api/zabbix/services', {
+  async clearZabbixServices(mapId = null, scope = 'global') {
+    const query = new URLSearchParams();
+    if (mapId) query.set('map_id', mapId);
+    if (scope) query.set('scope', scope);
+    const res = await this.fetch(`/api/zabbix/services?${query.toString()}`, {
       method: 'DELETE'
     });
     if (res.ok) return await res.json();

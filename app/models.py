@@ -168,3 +168,8 @@ class BulkCreateMapsFromSitesRequest(BaseModel):
 class BulkDeleteNodesRequest(BaseModel):
     node_ids: List[str]
 
+class ZabbixSyncRequest(BaseModel):
+    scope: Optional[str] = "global"  # "global" o "branch"
+    map_id: Optional[str] = None
+    clear_first: Optional[bool] = True
+

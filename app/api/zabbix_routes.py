@@ -1,6 +1,7 @@
 from typing import Dict, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from app.auth import get_current_user
+from app.models import ZabbixSyncRequest
 from app.services.zabbix_service import zabbix_service
 
 router = APIRouter(prefix="/zabbix", tags=["Zabbix BSM Integration"])
@@ -15,7 +16,7 @@ async def get_zabbix_status(user: Dict[str, Any] = Depends(get_current_user)):
 async def get_topology_analysis(map_id: str, user: Dict[str, Any] = Depends(get_current_user)):
     """
     Analiza la topología del mapa:
-    - Clasificación de relaciones Directas vs Indirectas/Redundantes.
+    - Clasificación de relaciones Directas de Servicio (flujo Padre -> Hijo).
     - Detección de nodos raíz (Gateways / Uplinks).
     - Estado de coincidencia de cada nodo con los hosts de Zabbix.
     """
@@ -26,32 +27,59 @@ async def get_topology_analysis(map_id: str, user: Dict[str, Any] = Depends(get_
         raise HTTPException(status_code=400, detail=f"Error analizando topología: {str(e)}")
 
 @router.post("/sync")
-async def sync_all_to_zabbix(clear_first: bool = True, user: Dict[str, Any] = Depends(get_current_user)):
+async def sync_to_zabbix(
+    payload: Optional[ZabbixSyncRequest] = None,
+    clear_first: Optional[bool] = None,
+    user: Dict[str, Any] = Depends(get_current_user)
+):
     """
-    Sincroniza toda la arquitectura de NexusDude hacia Zabbix Services (BSM):
+    Sincroniza la arquitectura de NexusDude hacia Zabbix Services (BSM):
+    - Permite alcance 'global' (todo el sistema) o 'branch' (mapa activo y descendientes).
     - Mapas y Submapas como servicios contenedores con jerarquía padre/hijo.
-    - Nodos como servicios de dispositivos, asociando etiquetas de problemas.
-    - Aristas modeladas como dependencias directas o redundantes para alimentar el motor de alertas y SLA.
+    - Nodos como servicios de dispositivos con propagación de fallas y causas raíz.
     """
     try:
-        report = await zabbix_service.sync_all_to_zabbix(clear_first=clear_first)
+        scope = "global"
+        map_id = None
+        should_clear = True
+
+        if payload:
+            scope = payload.scope or "global"
+            map_id = payload.map_id
+            if payload.clear_first is not None:
+                should_clear = payload.clear_first
+        elif clear_first is not None:
+            should_clear = clear_first
+
+        report = await zabbix_service.sync_to_zabbix(map_id=map_id, scope=scope, clear_first=should_clear)
         return {
             "status": "success",
-            "message": "Topología sincronizada exitosamente con Zabbix Services",
+            "message": f"Topología ({'Rama Actual' if scope == 'branch' else 'Todo el Sistema'}) sincronizada exitosamente con Zabbix Services",
             "report": report
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error en sincronización con Zabbix: {str(e)}")
 
 @router.delete("/services")
-async def clear_zabbix_services(user: Dict[str, Any] = Depends(get_current_user)):
-    """Elimina todos los servicios creados por NexusDude en Zabbix para permitir re-sincronizaciones limpias."""
+async def clear_zabbix_services(
+    map_id: Optional[str] = None,
+    scope: Optional[str] = "global",
+    user: Dict[str, Any] = Depends(get_current_user)
+):
+    """Elimina los servicios creados por NexusDude en Zabbix (Global o Rama específica)."""
     try:
-        deleted_count = await zabbix_service.clear_nexus_services()
+        if scope == "branch" and map_id:
+            branch_map_ids = await zabbix_service.get_descendant_map_ids(map_id)
+            deleted_count = await zabbix_service.clear_branch_services(branch_map_ids)
+            msg = f"Se eliminaron {deleted_count} servicios de la rama seleccionada ({len(branch_map_ids)} mapas) en Zabbix."
+        else:
+            deleted_count = await zabbix_service.clear_nexus_services()
+            msg = f"Se eliminaron {deleted_count} servicios de NexusDude en Zabbix."
+
         return {
             "status": "success",
             "deleted_services": deleted_count,
-            "message": f"Se eliminaron {deleted_count} servicios de NexusDude en Zabbix."
+            "message": msg
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error eliminando servicios en Zabbix: {str(e)}")

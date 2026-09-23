@@ -3251,6 +3251,30 @@ async function openZabbixSyncModal() {
     consoleBox.innerHTML = '';
   }
 
+  // Actualizar nombre del mapa activo en selector de alcance
+  const scopeMapNameEl = document.getElementById('zbx-scope-map-name');
+  if (scopeMapNameEl) {
+    scopeMapNameEl.textContent = currentMap ? currentMap.name : 'Mapa Actual';
+  }
+
+  // Configurar listeners de cambio de radio de alcance
+  const radioBranch = document.getElementById('radio-zbx-scope-branch');
+  const radioGlobal = document.getElementById('radio-zbx-scope-global');
+  const btnExec = document.getElementById('btn-exec-zbx-sync');
+
+  const updateSyncButtonText = () => {
+    if (!btnExec) return;
+    if (radioBranch && radioBranch.checked) {
+      btnExec.innerHTML = `<i class="fas fa-sync-alt"></i> Sincronizar Rama a Zabbix`;
+    } else {
+      btnExec.innerHTML = `<i class="fas fa-sync-alt"></i> Sincronizar Todo a Zabbix`;
+    }
+  };
+
+  if (radioBranch) radioBranch.onchange = updateSyncButtonText;
+  if (radioGlobal) radioGlobal.onchange = updateSyncButtonText;
+  updateSyncButtonText();
+
   // 1. Obtener estado de conexión Zabbix
   try {
     const status = await API.getZabbixStatus();
@@ -3297,20 +3321,26 @@ async function handleExecuteZabbixSync() {
   const consoleBox = document.getElementById('zbx-sync-console');
   if (!btn || !consoleBox) return;
 
+  const scope = document.querySelector('input[name="zbx-sync-scope"]:checked')?.value || 'branch';
+  const clearFirst = document.getElementById('chk-zbx-clear-first')?.checked ?? true;
+  const mapId = currentMap ? currentMap.id : null;
+  const scopeLabel = scope === 'branch' ? `Rama actual (${currentMap ? currentMap.name : 'Mapa'})` : 'Todo el Sistema';
+
   const originalHtml = btn.innerHTML;
   btn.disabled = true;
   btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Sincronizando...';
   consoleBox.style.display = 'block';
-  consoleBox.innerHTML = '<div style="color: #38bdf8;">[1/3] Iniciando sincronización BSM con Zabbix 7.0...</div>';
+  consoleBox.innerHTML = `<div style="color: #38bdf8;">[1/3] Iniciando sincronización BSM con Zabbix 7.0 (${scopeLabel})...</div>`;
 
   try {
-    consoleBox.innerHTML += '<div style="color: #94a3b8;">[2/3] Mapeando jerarquía de mapas, nodos y dependencias de enlaces...</div>';
-    const res = await API.syncZabbix(true);
+    consoleBox.innerHTML += '<div style="color: #94a3b8;">[2/3] Mapeando jerarquía de servicios, nodos y dependencias directas (Padre ➔ Hijo)...</div>';
+    const res = await API.syncZabbix({ scope, map_id: mapId, clear_first: clearFirst });
     const rep = res.report || {};
 
     consoleBox.innerHTML += `
       <div style="color: #10b981; margin-top: 6px; font-weight: bold;">✔ ¡Sincronización con Zabbix exitosa!</div>
-      <div style="color: #cbd5e1; margin-top: 4px;">• Mapas raíz creados en Zabbix: <strong>${rep.maps_synced || 0}</strong></div>
+      <div style="color: #cbd5e1; margin-top: 4px;">• Alcance: <strong>${scope === 'branch' ? 'Rama Actual' : 'Todo el Sistema'}</strong></div>
+      <div style="color: #cbd5e1;">• Mapas raíz creados en Zabbix: <strong>${rep.maps_synced || 0}</strong></div>
       <div style="color: #cbd5e1;">• Submapas dependientes: <strong>${rep.submaps_synced || 0}</strong></div>
       <div style="color: #cbd5e1;">• Dispositivos sincronizados: <strong>${rep.nodes_synced || 0}</strong></div>
       <div style="color: #10b981;">• Hosts vinculados a triggers en Zabbix: <strong>${rep.nodes_matched_zabbix || 0}</strong></div>
@@ -3327,7 +3357,17 @@ async function handleExecuteZabbixSync() {
 }
 
 async function handleClearZabbixServices() {
-  if (!confirm('¿Estás seguro de eliminar todos los servicios de NexusDude en Zabbix?\n\nEsto limpiará la estructura BSM de NexusDude para permitir una re-sincronización limpia.')) {
+  const scope = document.querySelector('input[name="zbx-sync-scope"]:checked')?.value || 'branch';
+  const mapId = currentMap ? currentMap.id : null;
+
+  let confirmMsg = '';
+  if (scope === 'branch' && currentMap) {
+    confirmMsg = `¿Estás seguro de eliminar de Zabbix únicamente los servicios de la rama '${currentMap.name}' y sus submapas descendientes?`;
+  } else {
+    confirmMsg = '¿Estás seguro de eliminar TODOS los servicios de NexusDude en Zabbix?\n\nEsto limpiará la estructura BSM global de NexusDude para permitir una re-sincronización limpia.';
+  }
+
+  if (!confirm(confirmMsg)) {
     return;
   }
 
@@ -3338,9 +3378,9 @@ async function handleClearZabbixServices() {
   }
 
   try {
-    const res = await API.clearZabbixServices();
+    const res = await API.clearZabbixServices(scope === 'branch' ? mapId : null, scope);
     if (consoleBox) {
-      consoleBox.innerHTML = `<div style="color: #10b981;">✔ Se eliminaron ${res.deleted_services || 0} servicios en Zabbix.</div>`;
+      consoleBox.innerHTML = `<div style="color: #10b981;">✔ ${res.message || `Se eliminaron ${res.deleted_services || 0} servicios en Zabbix.`}</div>`;
     }
   } catch (err) {
     if (consoleBox) {

@@ -659,7 +659,7 @@
         <button class="modal-close" id="btn-close-zabbix-modal">&times;</button>
       </div>
 
-      <div class="modal-form">
+      <div class="modal-form" style="padding: 14px 18px; gap: 12px;">
         <!-- Estado de Conexión -->
         <div style="background: rgba(15, 23, 42, 0.6); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px; display: flex; justify-content: space-between; align-items: center;">
           <div>
@@ -669,6 +669,48 @@
           <span class="user-badge" id="zbx-status-badge" style="padding: 3px 10px; font-size: 0.74rem;">
             <span class="status-dot"></span> <span id="zbx-status-text">Verificando...</span>
           </span>
+        </div>
+
+        <!-- Selector de Alcance de Sincronización (Rama vs Global) -->
+        <div>
+          <label style="font-size: 0.75rem; font-weight: 700; color: #f8fafc; margin-bottom: 6px; display: block;">
+            <i class="fas fa-layer-group" style="color: #38bdf8;"></i> Alcance de la Sincronización:
+          </label>
+          <div style="display: flex; flex-direction: column; gap: 8px;">
+            <label id="lbl-zbx-scope-branch" style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: rgba(15, 23, 42, 0.7); border: 1px solid var(--border-color); border-radius: 8px; cursor: pointer;">
+              <input type="radio" name="zbx-sync-scope" id="radio-zbx-scope-branch" value="branch" checked>
+              <div style="flex: 1; font-size: 0.82rem;">
+                <div style="font-weight: 700; color: #38bdf8; display: flex; align-items: center; gap: 6px;">
+                  <span>🌿 Rama Actual</span>
+                  <span style="font-size: 0.7rem; background: rgba(56, 189, 248, 0.15); color: #38bdf8; padding: 1px 6px; border-radius: 4px;" id="zbx-scope-map-name">Mapa Actual</span>
+                </div>
+                <div style="font-size: 0.72rem; color: var(--text-muted); margin-top: 2px;">
+                  Sincroniza solo el mapa activo y todos sus submapas dependientes.
+                </div>
+              </div>
+            </label>
+
+            <label id="lbl-zbx-scope-global" style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: rgba(15, 23, 42, 0.7); border: 1px solid var(--border-color); border-radius: 8px; cursor: pointer;">
+              <input type="radio" name="zbx-sync-scope" id="radio-zbx-scope-global" value="global">
+              <div style="flex: 1; font-size: 0.82rem;">
+                <div style="font-weight: 700; color: #a855f7; display: flex; align-items: center; gap: 6px;">
+                  <span>🌐 Todo el Sistema (Global)</span>
+                  <span style="font-size: 0.7rem; background: rgba(168, 85, 247, 0.15); color: #c084fc; padding: 1px 6px; border-radius: 4px;">Todos los Mapas</span>
+                </div>
+                <div style="font-size: 0.72rem; color: var(--text-muted); margin-top: 2px;">
+                  Sincroniza la topología completa del sistema (260 mapas, todos los nodos y enlaces).
+                </div>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <!-- Opciones adicionales -->
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <input type="checkbox" id="chk-zbx-clear-first" checked style="cursor: pointer;">
+          <label for="chk-zbx-clear-first" style="font-size: 0.78rem; color: #cbd5e1; cursor: pointer;">
+            Limpiar servicios previos del alcance seleccionado antes de sincronizar
+          </label>
         </div>
 
         <!-- Análisis Topológico del Mapa Activo -->
@@ -702,7 +744,7 @@
 
         <!-- Explicación de impacto en Alertas -->
         <div style="font-size: 0.76rem; color: var(--text-muted); line-height: 1.4; background: rgba(14, 165, 233, 0.05); border: 1px solid rgba(14, 165, 233, 0.2); border-radius: 6px; padding: 8px 10px;">
-          <i class="fas fa-info-circle" style="color: #38bdf8;"></i> Al sincronizar, NexusDude genera el árbol de <strong>Zabbix Services</strong> y vincula los triggers de disponibilidad ICMP. Si un nodo raíz o enlace falla, Zabbix identifica la <em>causa raíz</em> y previene tormentas de alertas secundarias.
+          <i class="fas fa-info-circle" style="color: #38bdf8;"></i> NexusDude genera el árbol de <strong>Zabbix Services</strong> según la dirección de las aristas (<em>Padre ➔ Hijo</em>). Si un equipo proveedor cae, Zabbix aísla la causa raíz y silencia falsas alarmas derivadas.
         </div>
 
         <!-- Consola de Resultados -->
@@ -716,7 +758,7 @@
           <div style="display: flex; gap: 8px;">
             <button class="btn" id="btn-close-zbx-modal">Cerrar</button>
             <button class="btn btn-primary" id="btn-exec-zbx-sync">
-              <i class="fas fa-sync-alt"></i> Sincronizar Todo a Zabbix
+              <i class="fas fa-sync-alt"></i> Sincronizar Rama a Zabbix
             </button>
           </div>
         </div>
@@ -1155,7 +1197,7 @@
   </div>
 
   <!-- Scripts -->
-  <script src="/static/js/api.js?v=2.4"></script>
-  <script src="/static/js/app.js?v=2.4"></script>
+  <script src="/static/js/api.js?v=2.5"></script>
+  <script src="/static/js/app.js?v=2.5"></script>
 </body>
 </html>
