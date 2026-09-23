@@ -1322,27 +1322,42 @@ function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
     tgtPt = { x: tgtNx + tgtHalf.halfW * 2, y: tgtCy + tgtPinOffset };
   }
 
-  // 3. Enrutamiento del corredor con Abanico Bilateral Adaptativo (sin cruces y proporcional a la distancia)
+  // 3. Enrutamiento del corredor con Abanico Bilateral Adaptativo (sin cruces y pistas paralelas)
   let rawPath = [];
 
   if (isSVert) {
     const gapY = Math.abs(tgtPt.y - srcPt.y);
-    const stub = Math.min(14, gapY * 0.22);
-    const usable = Math.max(0, gapY - 2 * stub);
+    const stub = Math.min(22, Math.max(14, gapY * 0.18));
+    const usableY = Math.max(0, gapY - 2 * stub);
 
-    // Fracción según abanico bilateral: centro -> abajo (más cerca del destino), extremos -> arriba (más cerca del origen)
-    let fraction = 0.5;
-    if (srcN > 1) {
-      const midIdx = (srcN - 1) / 2.0;
-      const distFromCenter = Math.abs(srcIdx - midIdx);
-      fraction = 1.0 - (distFromCenter / Math.max(0.5, midIdx));
+    // Separar hermanos en grupo Izquierdo (< srcCx) y grupo Derecho (>= srcCx)
+    const leftGroup = allSrcSiblings.filter(s => s.cx < srcCx);
+    const rightGroup = allSrcSiblings.filter(s => s.cx >= srcCx);
+
+    const isGoingLeft = tgtCx < srcCx;
+    let trackFraction = 0.5;
+
+    if (isGoingLeft && leftGroup.length > 1) {
+      // En grupo izquierdo: ordenado por cx ascendente (0 = más a la izquierda / exterior, n-1 = más cercano al centro / interior)
+      // El exterior gira más arriba (cerca del origen), el interior gira más abajo (lejos del origen)
+      const idxInLeft = leftGroup.findIndex(s => (link && s.linkId === link.id) || s.id === targetNode.id);
+      if (idxInLeft !== -1) {
+        trackFraction = idxInLeft / (leftGroup.length - 1);
+      }
+    } else if (!isGoingLeft && rightGroup.length > 1) {
+      // En grupo derecho: ordenado por cx ascendente (0 = más cercano al centro / interior, n-1 = más a la derecha / exterior)
+      // El exterior gira más arriba (cerca del origen), el interior gira más abajo (lejos del origen)
+      const idxInRight = rightGroup.findIndex(s => (link && s.linkId === link.id) || s.id === targetNode.id);
+      if (idxInRight !== -1) {
+        trackFraction = 1.0 - (idxInRight / (rightGroup.length - 1));
+      }
     }
 
     let midY = (srcPt.y + tgtPt.y) / 2.0;
     if (sFace === 'bottom') {
-      midY = (srcPt.y + stub) + fraction * usable;
+      midY = (srcPt.y + stub) + trackFraction * usableY;
     } else {
-      midY = (srcPt.y - stub) - fraction * usable;
+      midY = (srcPt.y - stub) - trackFraction * usableY;
     }
 
     if (isTVert) {
@@ -1361,21 +1376,35 @@ function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
     }
   } else {
     const gapX = Math.abs(tgtPt.x - srcPt.x);
-    const stubX = Math.min(14, gapX * 0.22);
+    const stubX = Math.min(22, Math.max(14, gapX * 0.18));
     const usableX = Math.max(0, gapX - 2 * stubX);
 
-    let fraction = 0.5;
-    if (srcN > 1) {
-      const midIdx = (srcN - 1) / 2.0;
-      const distFromCenter = Math.abs(srcIdx - midIdx);
-      fraction = 1.0 - (distFromCenter / Math.max(0.5, midIdx));
+    // Separar hermanos en grupo Superior (< srcCy) y grupo Inferior (>= srcCy)
+    const topGroup = allSrcSiblings.filter(s => s.cy < srcCy);
+    const bottomGroup = allSrcSiblings.filter(s => s.cy >= srcCy);
+
+    const isGoingTop = tgtCy < srcCy;
+    let trackFraction = 0.5;
+
+    if (isGoingTop && topGroup.length > 1) {
+      // topGroup ordenado por cy ascendente (0 = más arriba / exterior, n-1 = más cerca del centro / interior)
+      const idxInTop = topGroup.findIndex(s => (link && s.linkId === link.id) || s.id === targetNode.id);
+      if (idxInTop !== -1) {
+        trackFraction = idxInTop / (topGroup.length - 1);
+      }
+    } else if (!isGoingTop && bottomGroup.length > 1) {
+      // bottomGroup ordenado por cy ascendente (0 = más cerca del centro / interior, n-1 = más abajo / exterior)
+      const idxInBottom = bottomGroup.findIndex(s => (link && s.linkId === link.id) || s.id === targetNode.id);
+      if (idxInBottom !== -1) {
+        trackFraction = 1.0 - (idxInBottom / (bottomGroup.length - 1));
+      }
     }
 
     let midX = (srcPt.x + tgtPt.x) / 2.0;
     if (sFace === 'right') {
-      midX = (srcPt.x + stubX) + fraction * usableX;
+      midX = (srcPt.x + stubX) + trackFraction * usableX;
     } else {
-      midX = (srcPt.x - stubX) - fraction * usableX;
+      midX = (srcPt.x - stubX) - trackFraction * usableX;
     }
 
     if (!isTVert) {
