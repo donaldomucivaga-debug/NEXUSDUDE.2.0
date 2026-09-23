@@ -754,6 +754,8 @@ class ZabbixService:
                     "name": n["name"],
                     "ip": n.get("ip") or "",
                     "status": "down",
+                    "ping_status": "down",
+                    "snmp_status": "down",
                     "is_online": False,
                     "icmp_ping": 0,
                     "packet_loss": 100.0,
@@ -779,6 +781,8 @@ class ZabbixService:
                     "name": sm["name"],
                     "ip": "",
                     "status": "down",
+                    "ping_status": "down",
+                    "snmp_status": "down",
                     "is_online": False,
                     "device_type": "submap",
                     "submap_down_devices": len(device_nodes),
@@ -804,6 +808,8 @@ class ZabbixService:
                         "name": n["name"],
                         "ip": n.get("ip") or "",
                         "status": "unknown",
+                        "ping_status": "unknown",
+                        "snmp_status": "unknown",
                         "is_online": False,
                         "icmp_ping": None,
                         "packet_loss": None,
@@ -883,6 +889,61 @@ class ZabbixService:
                         calc_status = "ok"
                         is_online = True
 
+                    # ─── PING STATUS (Exclusivo para conectividad ICMP y pérdida de paquetes) ───
+                    if icmp_val == '0':
+                        ping_status = "down"
+                    elif icmp_val == '1':
+                        if loss_val > 10.0 or (rtt_ms and rtt_ms > 250):
+                            ping_status = "warning"
+                        else:
+                            ping_status = "ok"
+                    else:
+                        has_icmp_down = any(
+                            any(term in t.get("description", "").lower() for term in ("sin respuesta de icmp", "icmp ping", "no icmp", "ping failed"))
+                            for t in trig_list
+                        )
+                        if has_icmp_down:
+                            ping_status = "down"
+                        elif z_host_info:
+                            ping_status = "ok"
+                        else:
+                            ping_status = "unknown"
+
+                    # ─── SNMP STATUS (Exclusivo para interfaz y telemetría/sensores SNMP) ───
+                    snmp_iface = next((i for i in z_host_info.get("interfaces", []) if str(i.get("type")) == "2"), None)
+                    non_icmp_triggers = [
+                        t for t in trig_list
+                        if not any(term in t.get("description", "").lower() for term in ("sin respuesta de icmp", "icmp ping", "no icmp"))
+                    ]
+                    has_snmp_crit = any(int(t.get("priority", 0)) >= 4 for t in non_icmp_triggers)
+                    has_snmp_warn = any(int(t.get("priority", 0)) in (2, 3) for t in non_icmp_triggers)
+
+                    if snmp_iface:
+                        snmp_avail = str(snmp_iface.get("available", "0"))
+                        if snmp_avail == "1":
+                            if has_snmp_crit:
+                                snmp_status = "down"
+                            elif has_snmp_warn:
+                                snmp_status = "warning"
+                            else:
+                                snmp_status = "ok"
+                        elif snmp_avail == "2":
+                            snmp_status = "down"
+                        else:
+                            if has_snmp_crit:
+                                snmp_status = "down"
+                            elif has_snmp_warn:
+                                snmp_status = "warning"
+                            else:
+                                snmp_status = "ok" if (pdata or not trig_list) else "unknown"
+                    else:
+                        if has_snmp_crit:
+                            snmp_status = "down"
+                        elif has_snmp_warn:
+                            snmp_status = "warning"
+                        else:
+                            snmp_status = "unknown"
+
                     formatted_problems = [
                         {
                             "triggerid": t.get("triggerid"),
@@ -900,8 +961,11 @@ class ZabbixService:
                             "name": n["name"],
                             "ip": n.get("ip") or "",
                             "status": calc_status,
+                            "ping_status": ping_status,
+                            "snmp_status": snmp_status,
                             "is_online": is_online,
                             "icmp_ping": int(icmp_val) if icmp_val in ('0', '1') else None,
+                            "snmp_available": int(snmp_iface.get("available", 0)) if snmp_iface else 0,
                             "packet_loss": loss_val,
                             "rtt_ms": rtt_ms,
                             "problems_count": len(formatted_problems),
@@ -957,10 +1021,15 @@ class ZabbixService:
 
                 if downs > 0:
                     sm_status = "down"
+                    sm_ping_status = "down"
                 elif warns > 0:
                     sm_status = "warning"
+                    sm_ping_status = "warning"
                 else:
                     sm_status = "ok"
+                    sm_ping_status = "ok"
+
+                sm_snmp_status = "warning" if warns > 0 else ("down" if downs > 0 else "ok")
 
                 nid = sm["id"]
                 prob_desc = []
@@ -974,6 +1043,8 @@ class ZabbixService:
                     "name": sm["name"],
                     "ip": "",
                     "status": sm_status,
+                    "ping_status": sm_ping_status,
+                    "snmp_status": sm_snmp_status,
                     "is_online": (sm_status == "ok"),
                     "device_type": "submap",
                     "submap_down_devices": downs,
@@ -1251,13 +1322,71 @@ class ZabbixService:
                 "out_text": fmt_bps(out_bps)
             }
 
+        # ─── PING STATUS (Exclusivo para conectividad ICMP) ───
+        if icmp_val == '0':
+            ping_status = "down"
+        elif icmp_val == '1':
+            if loss_val > 10.0 or (rtt_ms and rtt_ms > 250):
+                ping_status = "warning"
+            else:
+                ping_status = "ok"
+        else:
+            has_icmp_down = any(
+                any(term in t.get("description", "").lower() for term in ("sin respuesta de icmp", "icmp ping", "no icmp", "ping failed"))
+                for t in triggers
+            )
+            if has_icmp_down:
+                ping_status = "down"
+            elif h:
+                ping_status = "ok"
+            else:
+                ping_status = "unknown"
+
+        # ─── SNMP STATUS (Exclusivo para interfaz y telemetría/sensores SNMP) ───
+        snmp_iface = next((i for i in h.get("interfaces", []) if str(i.get("type")) == "2"), None)
+        non_icmp_triggers = [
+            t for t in triggers
+            if not any(term in t.get("description", "").lower() for term in ("sin respuesta de icmp", "icmp ping", "no icmp"))
+        ]
+        has_snmp_crit = any(int(t.get("priority", 0)) >= 4 for t in non_icmp_triggers)
+        has_snmp_warn = any(int(t.get("priority", 0)) in (2, 3) for t in non_icmp_triggers)
+
+        if snmp_iface:
+            snmp_avail = str(snmp_iface.get("available", "0"))
+            if snmp_avail == "1":
+                if has_snmp_crit:
+                    snmp_status = "down"
+                elif has_snmp_warn:
+                    snmp_status = "warning"
+                else:
+                    snmp_status = "ok"
+            elif snmp_avail == "2":
+                snmp_status = "down"
+            else:
+                if has_snmp_crit:
+                    snmp_status = "down"
+                elif has_snmp_warn:
+                    snmp_status = "warning"
+                else:
+                    snmp_status = "ok" if (pdata or not triggers) else "unknown"
+        else:
+            if has_snmp_crit:
+                snmp_status = "down"
+            elif has_snmp_warn:
+                snmp_status = "warning"
+            else:
+                snmp_status = "unknown"
+
         return {
             "node_id": node_id,
             "name": n_dict["name"],
             "ip": n_dict.get("ip") or "",
             "status": status,
+            "ping_status": ping_status,
+            "snmp_status": snmp_status,
             "is_online": (status != "down"),
             "icmp_ping": int(icmp_val) if icmp_val in ('0', '1') else None,
+            "snmp_available": int(snmp_iface.get("available", 0)) if snmp_iface else 0,
             "packet_loss": loss_val,
             "rtt_ms": rtt_ms,
             "wireless": wireless_info,

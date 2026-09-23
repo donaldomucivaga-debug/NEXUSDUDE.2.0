@@ -562,8 +562,11 @@ function renderNode(node) {
   group.isSubmap = isSubmap;
   group.isParentShortcut = isParentShortcut;
 
-  // Obtener color del estado del nodo (Zabbix) y rol oficial de NetBox
-  const nodeStatusColor = isParentShortcut ? '#38bdf8' : getNodeStatusColor(node.status, isSubmap);
+  // Estado PING (Contorno del nodo) y Estado SNMP (Punto interior)
+  const pingStatus = node.ping_status || node.status;
+  const snmpStatus = node.snmp_status || node.status;
+  const pingColor = isParentShortcut ? '#38bdf8' : getNodeStatusColor(pingStatus, isSubmap);
+  const snmpColor = isParentShortcut ? '#38bdf8' : getNodeStatusColor(snmpStatus, isSubmap);
   const roleHex = getNodeRoleColor(node);
 
   // Caja de fondo: relleno translúcido con el color del rol/función de NetBox (22-26% alpha)
@@ -580,7 +583,7 @@ function renderNode(node) {
     width: nodeWidth,
     height: nodeHeight,
     fill: boxFill,
-    stroke: isParentShortcut ? '#38bdf8' : nodeStatusColor,
+    stroke: isParentShortcut ? '#38bdf8' : pingColor,
     strokeWidth: isParentShortcut ? 2 : 1.5,
     dash: isParentShortcut ? [5, 3] : undefined,
     cornerRadius: 8,
@@ -593,14 +596,17 @@ function renderNode(node) {
     name: 'box'
   });
 
-  // Indicador de estado circular
+  // Indicador de estado circular (SNMP): aumentado 50% de tamaño (de radio 4.5 a 6.75)
   const statusDot = new Konva.Circle({
-    x: 14,
+    x: 13,
     y: isSubmap ? 16 : 15,
-    radius: 4.5,
-    fill: isParentShortcut ? '#38bdf8' : nodeStatusColor,
+    radius: 6.75,
+    fill: isParentShortcut ? '#38bdf8' : snmpColor,
+    stroke: 'rgba(0, 0, 0, 0.35)',
+    strokeWidth: 1,
     listening: false,
-    perfectDrawEnabled: false
+    perfectDrawEnabled: false,
+    name: 'statusDot'
   });
 
   // Icono
@@ -845,7 +851,8 @@ function renderNode(node) {
   group.on('mouseleave', () => {
     document.body.style.cursor = 'default';
     if (!box.isHighlighted) {
-      box.stroke(isParentShortcut ? '#38bdf8' : getNodeStatusColor(node.status, isSubmap));
+      const curPingStatus = node.ping_status || node.status;
+      box.stroke(isParentShortcut ? '#38bdf8' : getNodeStatusColor(curPingStatus, isSubmap));
       nodesLayer.batchDraw();
     }
   });
@@ -1758,8 +1765,11 @@ function deselectNode() {
     if (grp) {
       const box = grp.findOne('.box');
       if (box) {
-        box.stroke(getNodeStatusColor(selectedNode.status, selectedNode.device_type === 'submap'));
-        box.strokeWidth(1.5);
+        const isParentShortcut = grp.isParentShortcut || false;
+        const isSubmap = grp.isSubmap || (selectedNode.device_type === 'submap');
+        const curPingStatus = selectedNode.ping_status || selectedNode.status;
+        box.stroke(isParentShortcut ? '#38bdf8' : getNodeStatusColor(curPingStatus, isSubmap));
+        box.strokeWidth(isParentShortcut ? 2 : 1.5);
         box.isHighlighted = false;
       }
     }
@@ -1795,8 +1805,11 @@ function removeNodeFromMultiSelection(node) {
   if (grp) {
     const box = grp.findOne('.box');
     if (box) {
-      box.stroke(getNodeStatusColor(node.status, node.device_type === 'submap'));
-      box.strokeWidth(1.5);
+      const isParentShortcut = grp.isParentShortcut || false;
+      const isSubmap = grp.isSubmap || (node.device_type === 'submap');
+      const curPingStatus = node.ping_status || node.status;
+      box.stroke(isParentShortcut ? '#38bdf8' : getNodeStatusColor(curPingStatus, isSubmap));
+      box.strokeWidth(isParentShortcut ? 2 : 1.5);
       box.isHighlighted = false;
     }
   }
@@ -1815,8 +1828,11 @@ function clearMultiSelection() {
     if (grp) {
       const box = grp.findOne('.box');
       if (box && node !== selectedNode) {
-        box.stroke(getNodeStatusColor(node.status, node.device_type === 'submap'));
-        box.strokeWidth(1.5);
+        const isParentShortcut = grp.isParentShortcut || false;
+        const isSubmap = grp.isSubmap || (node.device_type === 'submap');
+        const curPingStatus = node.ping_status || node.status;
+        box.stroke(isParentShortcut ? '#38bdf8' : getNodeStatusColor(curPingStatus, isSubmap));
+        box.strokeWidth(isParentShortcut ? 2 : 1.5);
         box.isHighlighted = false;
       }
     }
@@ -2276,20 +2292,34 @@ function refreshSelectedNodeTelemetry() {
   loadNodeTelemetry(selectedNode.id);
 }
 
-// Actualiza el dot de color y contorno en el canvas Konva para un nodo específico
-function applyNodeStatusToCanvas(nodeId, status) {
+// Actualiza el dot de color (SNMP) y contorno (PING) en el canvas Konva para un nodo específico
+function applyNodeStatusToCanvas(nodeId, statusData) {
   const grp = nodeGroups.get(nodeId);
   if (!grp) return;
-  const dotShape = grp.getChildren(c => c.getClassName() === 'Circle' && !c.listening())[0];
+  const dotShape = grp.findOne('.statusDot') || grp.getChildren(c => c.getClassName() === 'Circle' && !c.listening())[0];
   const boxShape = grp.findOne('.box');
+  const isParentShortcut = grp.isParentShortcut || false;
   const isSubmap = grp.isSubmap || false;
-  const color = getNodeStatusColor(status, isSubmap);
+
+  let pingStatus = 'ok';
+  let snmpStatus = 'ok';
+
+  if (typeof statusData === 'object' && statusData !== null) {
+    pingStatus = statusData.ping_status || statusData.status || 'ok';
+    snmpStatus = statusData.snmp_status || statusData.status || 'ok';
+  } else if (typeof statusData === 'string') {
+    pingStatus = statusData;
+    snmpStatus = statusData;
+  }
+
+  const pingColor = isParentShortcut ? '#38bdf8' : getNodeStatusColor(pingStatus, isSubmap);
+  const snmpColor = isParentShortcut ? '#38bdf8' : getNodeStatusColor(snmpStatus, isSubmap);
 
   if (dotShape) {
-    dotShape.fill(color);
+    dotShape.fill(snmpColor);
   }
   if (boxShape && !boxShape.isHighlighted) {
-    boxShape.stroke(color);
+    boxShape.stroke(pingColor);
   }
   nodesLayer.batchDraw();
 }
@@ -2321,9 +2351,9 @@ function startRealtimePolling(mapId) {
         }
       }
 
-      // Actualizar dot de cada nodo en el canvas sin re-renderizar
+      // Actualizar dot (SNMP) y contorno (PING) de cada nodo en el canvas
       for (const [nodeId, nodeStatus] of Object.entries(data.nodes)) {
-        applyNodeStatusToCanvas(nodeId, nodeStatus.status);
+        applyNodeStatusToCanvas(nodeId, nodeStatus);
         // Si este nodo está seleccionado, refrescar panel también
         if (selectedNode && selectedNode.id === nodeId) {
           applyTelemetryToPanel(nodeStatus);
@@ -2333,7 +2363,11 @@ function startRealtimePolling(mapId) {
       // Actualizar status local en currentMap
       if (currentMap) {
         currentMap.nodes.forEach(n => {
-          if (data.nodes[n.id]) n.status = data.nodes[n.id].status;
+          if (data.nodes[n.id]) {
+            n.status = data.nodes[n.id].status;
+            n.ping_status = data.nodes[n.id].ping_status;
+            n.snmp_status = data.nodes[n.id].snmp_status;
+          }
         });
       }
     } catch (e) {
