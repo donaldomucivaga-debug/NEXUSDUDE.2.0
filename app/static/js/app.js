@@ -3117,7 +3117,6 @@ async function openZabbixSyncModal() {
         document.getElementById('zbx-stat-matched').textContent = `${analysis.nodes.filter(n => n.zabbix_matched).length} / ${analysis.total_nodes}`;
         document.getElementById('zbx-stat-links').textContent = analysis.total_links;
         document.getElementById('zbx-stat-direct').textContent = analysis.direct_relations_count;
-        document.getElementById('zbx-stat-indirect').textContent = analysis.indirect_relations_count;
         document.getElementById('zbx-stat-root').textContent = analysis.root_nodes_count;
       }
     } catch (err) {
@@ -3148,8 +3147,7 @@ async function handleExecuteZabbixSync() {
       <div style="color: #cbd5e1;">• Submapas dependientes: <strong>${rep.submaps_synced || 0}</strong></div>
       <div style="color: #cbd5e1;">• Dispositivos sincronizados: <strong>${rep.nodes_synced || 0}</strong></div>
       <div style="color: #10b981;">• Hosts vinculados a triggers en Zabbix: <strong>${rep.nodes_matched_zabbix || 0}</strong></div>
-      <div style="color: #38bdf8;">• Dependencias directas creadas: <strong>${rep.direct_dependencies_created || 0}</strong></div>
-      <div style="color: #f59e0b;">• Rutas redundantes configuradas: <strong>${rep.redundant_dependencies_created || 0}</strong></div>
+      <div style="color: #38bdf8;">• Dependencias directas de servicio (Aristas): <strong>${rep.direct_dependencies_created || 0}</strong></div>
       <div style="color: #64748b; font-size: 0.7rem; margin-top: 6px;">Las alertas de Zabbix ahora reconocerán automáticamente la causa raíz en caídas.</div>
     `;
     consoleBox.scrollTop = consoleBox.scrollHeight;

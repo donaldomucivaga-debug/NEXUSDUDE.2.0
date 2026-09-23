@@ -309,7 +309,6 @@ class ZabbixService:
         # Clasificación de nodos
         node_analysis = []
         direct_relations_count = 0
-        indirect_relations_count = 0
         root_nodes_count = 0
 
         for nid, n in nodes_dict.items():
@@ -320,12 +319,9 @@ class ZabbixService:
             if len(uplinks) == 0:
                 relation_type = "root"
                 root_nodes_count += 1
-            elif len(uplinks) == 1:
-                relation_type = "direct"
-                direct_relations_count += 1
             else:
-                relation_type = "indirect_redundant"
-                indirect_relations_count += 1
+                relation_type = "direct"
+                direct_relations_count += len(uplinks)
 
             node_analysis.append({
                 "node_id": nid,
@@ -351,7 +347,6 @@ class ZabbixService:
             "total_links": len(links),
             "root_nodes_count": root_nodes_count,
             "direct_relations_count": direct_relations_count,
-            "indirect_relations_count": indirect_relations_count,
             "nodes": node_analysis,
             "links": processed_links
         }
@@ -379,7 +374,7 @@ class ZabbixService:
         1. Limpieza de servicios previos de NexusDude si se solicita.
         2. Creación del árbol de Mapas y Submapas como Servicios contenedores.
         3. Creación de Servicios por cada nodo, asociando etiquetas de problemas con el host en Zabbix.
-        4. Aplicación de dependencias directas o redundantes según las aristas.
+        4. Aplicación de dependencias directas de servicio según las aristas.
         """
         await self.login()
         await self.refresh_zabbix_hosts_cache(force=True)
@@ -402,7 +397,6 @@ class ZabbixService:
             "nodes_synced": 0,
             "nodes_matched_zabbix": 0,
             "direct_dependencies_created": 0,
-            "redundant_dependencies_created": 0,
             "details": []
         }
 
@@ -461,10 +455,9 @@ class ZabbixService:
             for n_info in analysis["nodes"]:
                 nid = n_info["node_id"]
                 node_name = n_info["name"]
-                is_submap_node = n_info.get("device_type") == "submap"
+                is_submap_node = n_info.get("device_type") in ("submap", "parent_map")
 
-                # Si es un nodo de acceso directo a submapa, no duplicar servicio de dispositivo;
-                # el submapa ya tiene su propio servicio creado en el Paso 1
+                # Si es un nodo portal de navegación, no duplicar servicio de dispositivo
                 if is_submap_node:
                     continue
 
@@ -481,31 +474,23 @@ class ZabbixService:
                         await self.ensure_host_tag(str(z_hostid), z_name)
                     report["nodes_matched_zabbix"] += 1
 
-                # Determinar padres del servicio en función de la topología
+                # Determinar padres del servicio en función de las aristas directas
                 relation_type = n_info["relation_type"]
                 uplink_ids = n_info["uplink_ids"]
                 parents = []
 
-                if relation_type == "root" or not uplink_ids:
+                if not uplink_ids:
                     # Cuelga directamente del contenedor del Mapa / Submapa
                     if map_service_id:
                         parents.append({"serviceid": map_service_id})
-                elif relation_type == "direct":
-                    # Relación Directa: Cuelga del servicio del nodo padre
-                    parent_node_id = uplink_ids[0]
-                    if parent_node_id in node_service_ids:
-                        parents.append({"serviceid": node_service_ids[parent_node_id]})
-                        report["direct_dependencies_created"] += 1
-                    elif map_service_id:
-                        parents.append({"serviceid": map_service_id})
                 else:
-                    # Relación Indirecta / Redundante: Cuelga de múltiples padres
+                    # Relación Directa de Servicio: Cuelga directamente de cada servicio del nodo padre
                     for p_nid in uplink_ids:
                         if p_nid in node_service_ids:
                             parents.append({"serviceid": node_service_ids[p_nid]})
+                            report["direct_dependencies_created"] += 1
                     if not parents and map_service_id:
                         parents.append({"serviceid": map_service_id})
-                    report["redundant_dependencies_created"] += 1
 
                 has_children = len(n_info.get("downlink_ids", [])) > 0
 
