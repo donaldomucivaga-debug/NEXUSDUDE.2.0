@@ -1020,9 +1020,6 @@ function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
   const sFace = determineNodeFace(srcCx, srcCy, tgtCx, tgtCy, srcHalf.halfW, srcHalf.halfH);
   const tFace = determineNodeFace(tgtCx, tgtCy, srcCx, srcCy, tgtHalf.halfW, tgtHalf.halfH);
 
-  const srcPt = getNodeFaceCenter(sourceNode, sFace);
-  const tgtPt = getNodeFaceCenter(targetNode, tFace);
-
   const allNodes = (currentMap && currentMap.nodes) ? currentMap.nodes : [];
   const allLinks = (currentMap && currentMap.links) ? currentMap.links : [];
 
@@ -1063,96 +1060,114 @@ function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
   const isSVert = (sFace === 'top' || sFace === 'bottom');
   const isTVert = (tFace === 'top' || tFace === 'bottom');
 
+  // Sort siblings along the face to eliminate any line overlap or crossing
+  if (isSVert) {
+    siblings.sort((a, b) => a.cx - b.cx);
+  } else {
+    siblings.sort((a, b) => a.cy - b.cy);
+  }
+
+  const k = siblings.length;
+  let idx = 0;
+  for (let i = 0; i < siblings.length; i++) {
+    if (siblings[i].id === targetNode.id) {
+      idx = i;
+      break;
+    }
+  }
+
+  // Calculate separated pin position on source face so no lines overlap on the node
+  const pitch = 14;
+  const maxExtent = isSVert ? (srcHalf.halfW - 12) : (srcHalf.halfH - 10);
+  const actualPitch = k > 1 ? Math.min(pitch, (maxExtent * 2) / Math.max(1, k - 1)) : 0;
+  const pinOffset = k > 1 ? (-(k - 1) / 2.0 + idx) * actualPitch : 0;
+
+  let srcPt = { x: srcCx, y: srcCy };
+  if (sFace === 'bottom') {
+    srcPt = { x: srcCx + pinOffset, y: srcNy + srcHalf.halfH * 2 };
+  } else if (sFace === 'top') {
+    srcPt = { x: srcCx + pinOffset, y: srcNy };
+  } else if (sFace === 'right') {
+    srcPt = { x: srcNx + srcHalf.halfW * 2, y: srcCy + pinOffset };
+  } else {
+    srcPt = { x: srcNx, y: srcCy + pinOffset };
+  }
+
+  // Target port (centered on target face)
+  let tgtPt = { x: tgtCx, y: tgtCy };
+  if (tFace === 'top') {
+    tgtPt = { x: tgtCx, y: tgtNy };
+  } else if (tFace === 'bottom') {
+    tgtPt = { x: tgtCx, y: tgtNy + tgtHalf.halfH * 2 };
+  } else if (tFace === 'left') {
+    tgtPt = { x: tgtNx, y: tgtCy };
+  } else {
+    tgtPt = { x: tgtNx + tgtHalf.halfW * 2, y: tgtCy };
+  }
+
+  // Separated horizontal/vertical corridor channel so sibling lines don't overlap in transit
+  const channelOffset = k > 1 ? (-(k - 1) / 2.0 + idx) * 8 : 0;
+
   let rawPath = [];
 
   if (isSVert) {
-    const leftSibs = siblings.filter(s => s.cx < srcCx);
-    const rightSibs = siblings.filter(s => s.cx > srcCx);
-
-    leftSibs.sort((a, b) => Math.abs(b.cx - srcCx) - Math.abs(a.cx - srcCx)); // Outermost first
-    rightSibs.sort((a, b) => Math.abs(b.cx - srcCx) - Math.abs(a.cx - srcCx)); // Outermost first
-
-    let rank = 0;
-    const lIdx = leftSibs.findIndex(s => s.id === targetNode.id);
-    const rIdx = rightSibs.findIndex(s => s.id === targetNode.id);
-    if (lIdx !== -1) rank = lIdx;
-    else if (rIdx !== -1) rank = rIdx;
-
-    const dirSign = sFace === 'bottom' ? 1 : -1;
-    const pitch = 12;
-    let branchY = (srcPt.y + 20 * dirSign) + rank * pitch * dirSign;
-
+    let midY = (srcPt.y + tgtPt.y) / 2.0 + channelOffset;
     if (sFace === 'bottom') {
-      if (tgtPt.y > srcPt.y + 32) {
-        branchY = Math.min(Math.max(branchY, srcPt.y + 16), tgtPt.y - 16);
+      if (tgtPt.y > srcPt.y + 28) {
+        midY = Math.min(Math.max(midY, srcPt.y + 14), tgtPt.y - 14);
       } else {
-        branchY = (srcPt.y + tgtPt.y) / 2.0;
+        midY = (srcPt.y + tgtPt.y) / 2.0;
       }
     } else {
-      if (tgtPt.y < srcPt.y - 32) {
-        branchY = Math.max(Math.min(branchY, srcPt.y - 16), tgtPt.y + 16);
+      if (tgtPt.y < srcPt.y - 28) {
+        midY = Math.max(Math.min(midY, srcPt.y - 14), tgtPt.y + 14);
       } else {
-        branchY = (srcPt.y + tgtPt.y) / 2.0;
+        midY = (srcPt.y + tgtPt.y) / 2.0;
       }
     }
 
     if (isTVert) {
       rawPath = [
-        { x: srcPt.x, y: srcPt.y },
-        { x: srcPt.x, y: branchY },
-        { x: tgtPt.x, y: branchY },
-        { x: tgtPt.x, y: tgtPt.y }
+        srcPt,
+        { x: srcPt.x, y: midY },
+        { x: tgtPt.x, y: midY },
+        tgtPt
       ];
     } else {
       rawPath = [
-        { x: srcPt.x, y: srcPt.y },
+        srcPt,
         { x: srcPt.x, y: tgtPt.y },
-        { x: tgtPt.x, y: tgtPt.y }
+        tgtPt
       ];
     }
   } else {
-    const topSibs = siblings.filter(s => s.cy < srcCy);
-    const botSibs = siblings.filter(s => s.cy > srcCy);
-
-    topSibs.sort((a, b) => Math.abs(b.cy - srcCy) - Math.abs(a.cy - srcCy));
-    botSibs.sort((a, b) => Math.abs(b.cy - srcCy) - Math.abs(a.cy - srcCy));
-
-    let rank = 0;
-    const tIdx = topSibs.findIndex(s => s.id === targetNode.id);
-    const bIdx = botSibs.findIndex(s => s.id === targetNode.id);
-    if (tIdx !== -1) rank = tIdx;
-    else if (bIdx !== -1) rank = bIdx;
-
-    const dirSign = sFace === 'right' ? 1 : -1;
-    const pitch = 12;
-    let branchX = (srcPt.x + 20 * dirSign) + rank * pitch * dirSign;
-
+    let midX = (srcPt.x + tgtPt.x) / 2.0 + channelOffset;
     if (sFace === 'right') {
-      if (tgtPt.x > srcPt.x + 32) {
-        branchX = Math.min(Math.max(branchX, srcPt.x + 16), tgtPt.x - 16);
+      if (tgtPt.x > srcPt.x + 28) {
+        midX = Math.min(Math.max(midX, srcPt.x + 14), tgtPt.x - 14);
       } else {
-        branchX = (srcPt.x + tgtPt.x) / 2.0;
+        midX = (srcPt.x + tgtPt.x) / 2.0;
       }
     } else {
-      if (tgtPt.x < srcPt.x - 32) {
-        branchX = Math.max(Math.min(branchX, srcPt.x - 16), tgtPt.x + 16);
+      if (tgtPt.x < srcPt.x - 28) {
+        midX = Math.max(Math.min(midX, srcPt.x - 14), tgtPt.x + 14);
       } else {
-        branchX = (srcPt.x + tgtPt.x) / 2.0;
+        midX = (srcPt.x + tgtPt.x) / 2.0;
       }
     }
 
     if (!isTVert) {
       rawPath = [
-        { x: srcPt.x, y: srcPt.y },
-        { x: branchX, y: srcPt.y },
-        { x: branchX, y: tgtPt.y },
-        { x: tgtPt.x, y: tgtPt.y }
+        srcPt,
+        { x: midX, y: srcPt.y },
+        { x: midX, y: tgtPt.y },
+        tgtPt
       ];
     } else {
       rawPath = [
-        { x: srcPt.x, y: srcPt.y },
+        srcPt,
         { x: tgtPt.x, y: srcPt.y },
-        { x: tgtPt.x, y: tgtPt.y }
+        tgtPt
       ];
     }
   }
@@ -1175,6 +1190,59 @@ function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
     pts.push(rounded[i].x, rounded[i].y);
   }
   return pts;
+}
+
+// ─── Secuencia de Parpadeo e Iluminación Verde en Cascada (Traffic Pulse) ──────
+let _linkPulseInterval = null;
+let _currentPulseLinkIndex = 0;
+
+function stopLinkPulseAnimation() {
+  if (_linkPulseInterval) {
+    clearInterval(_linkPulseInterval);
+    _linkPulseInterval = null;
+  }
+}
+
+function startLinkPulseAnimation() {
+  stopLinkPulseAnimation();
+
+  _linkPulseInterval = setInterval(() => {
+    if (!currentMap || !currentMap.links || currentMap.links.length === 0 || !linksLayer) return;
+    const entries = Array.from(linkLines.values());
+    if (entries.length === 0) return;
+
+    const entry = entries[_currentPulseLinkIndex % entries.length];
+    _currentPulseLinkIndex = (_currentPulseLinkIndex + 1) % entries.length;
+
+    if (!entry || !entry.line || !entry.line.getStage()) return;
+
+    const line = entry.line;
+    const isIntermap = !!(entry.link && entry.link.extra_data && (entry.link.extra_data.is_intermap || entry.link.extra_data.remote_node_id));
+    const origColor = isIntermap ? '#a855f7' : (entry.link?.status === 'ok' ? '#0ea5e9' : '#ef4444');
+    const origWidth = isIntermap ? 2.5 : 2;
+
+    // 1. Iluminar en Verde Neón por 300ms
+    line.stroke('#22c55e');
+    line.fill('#22c55e');
+    line.strokeWidth(3.5);
+    line.shadowColor('#22c55e');
+    line.shadowBlur(8);
+    line.shadowOpacity(0.8);
+    linksLayer.batchDraw();
+
+    // 2. Apagar después de 300ms (dejando 100ms de pausa antes de la siguiente a los 400ms)
+    setTimeout(() => {
+      if (line && line.getStage()) {
+        line.stroke(origColor);
+        line.fill(origColor);
+        line.strokeWidth(origWidth);
+        line.shadowBlur(0);
+        line.shadowOpacity(0);
+        linksLayer.batchDraw();
+      }
+    }, 300);
+
+  }, 400);
 }
 
 function renderLink(link, nodesDict) {
@@ -2522,11 +2590,12 @@ async function loadMap(mapId) {
   deselectNode();
   clearMultiSelection();
 
-  // Detener polling del mapa anterior
+  // Detener polling y animación de pulso del mapa anterior
   if (_realtimePollInterval) {
     clearInterval(_realtimePollInterval);
     _realtimePollInterval = null;
   }
+  stopLinkPulseAnimation();
 
   const mapData = await API.getMapDetail(mapId);
   if (!mapData) return;
@@ -2556,8 +2625,9 @@ async function loadMap(mapId) {
   refreshMapsTabList();
   checkMapCanPopulateFromSite();
 
-  // Arrancar polling de estado en tiempo real para este mapa
+  // Arrancar polling de estado en tiempo real y pulso de tráfico para este mapa
   startRealtimePolling(mapId);
+  startLinkPulseAnimation();
 
   // Persistir mapa actual y sincronizar estado en URL
   localStorage.setItem('nexusdude_last_map_id', mapId);
