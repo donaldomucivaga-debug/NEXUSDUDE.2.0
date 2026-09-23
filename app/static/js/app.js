@@ -141,14 +141,12 @@ function initCanvas() {
     stage.batchDraw();
   });
 
-  // Evento Mousedown: Iniciar rectángulo de selección (Clic Derecho, Shift+Clic Izquierdo o Arrastre en Paso 2 de Enlaces)
+  // Evento Mousedown: Iniciar rectángulo de selección con Clic Derecho (button 2)
   stage.on('mousedown touchstart', (e) => {
     const isRightBtn = e.evt && e.evt.button === 2;
-    const isShiftLeftBtn = e.evt && e.evt.button === 0 && (e.evt.shiftKey || e.evt.ctrlKey || e.evt.metaKey);
-    const isLinkStep2 = linkMode && !!linkSourceNode;
 
-    if (isRightBtn || isShiftLeftBtn || isLinkStep2) {
-      if (e.evt && (isRightBtn || isLinkStep2)) e.evt.preventDefault();
+    if (isRightBtn) {
+      if (e.evt) e.evt.preventDefault();
       isAreaSelecting = true;
       stage.draggable(false);
 
@@ -1882,7 +1880,7 @@ async function handleLinkNodeClick(node, evt = {}) {
     }
     const bannerText = document.getElementById('link-mode-text');
     if (bannerText) {
-      bannerText.textContent = `Paso 2: Haz clic en el destino o arrastra el mouse para seleccionar múltiples nodos (desde "${node.name}")`;
+      bannerText.textContent = `Paso 2: Haz clic en el destino o arrastra con Clic Derecho para seleccionar múltiples nodos (desde "${node.name}")`;
     }
     const btnMulti = document.getElementById('btn-confirm-multi-link');
     if (btnMulti) btnMulti.style.display = 'none';
@@ -1930,7 +1928,7 @@ async function handleLinkNodeClick(node, evt = {}) {
       } else {
         if (btnMulti) btnMulti.style.display = 'none';
         if (bannerText) {
-          bannerText.textContent = `Paso 2: Haz clic en el destino o arrastra el mouse para seleccionar múltiples nodos (desde "${linkSourceNode.name}")`;
+          bannerText.textContent = `Paso 2: Haz clic en el destino o arrastra con Clic Derecho para seleccionar múltiples nodos (desde "${linkSourceNode.name}")`;
         }
       }
       return;
