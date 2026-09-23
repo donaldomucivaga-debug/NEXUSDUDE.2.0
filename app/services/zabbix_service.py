@@ -545,6 +545,9 @@ class ZabbixService:
                 else:
                     p_id, c_id = s_id, t_id
 
+                uplink_parents[c_id].add(p_id)
+                downlink_children[p_id].add(c_id)
+
         # ─── Paso 2.5: Filtrar SOLO dispositivos que tengan relaciones activas ──────
         connected_device_ids = {
             nid for nid in devices_dict
