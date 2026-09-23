@@ -225,6 +225,15 @@ const API = {
     throw new Error(await res.text());
   },
 
+  async updateLink(linkId, updateData) {
+    const res = await this.fetch(`/api/maps/links/${linkId}`, {
+      method: 'PUT',
+      body: JSON.stringify(updateData)
+    });
+    if (res.ok) return await res.json();
+    throw new Error(await res.text());
+  },
+
   async deleteLink(linkId) {
     const res = await this.fetch(`/api/maps/links/${linkId}`, {
       method: 'DELETE'

@@ -899,13 +899,21 @@ function renderLink(link, nodesDict) {
 
   const pts = calculateLinkEndpoints(source, target, link);
   const isIntermap = !!(link.extra_data && (link.extra_data.is_intermap || link.extra_data.remote_node_id));
+  const direction = link.extra_data?.direction || 'source_to_target';
+  const isTargetToSource = direction === 'target_to_source';
+  const arrowPts = isTargetToSource ? [pts[2], pts[3], pts[0], pts[1]] : [pts[0], pts[1], pts[2], pts[3]];
 
-  const line = new Konva.Line({
-    points: pts,
-    stroke: isIntermap ? '#a855f7' : (link.status === 'ok' ? '#0ea5e9' : '#ef4444'),
+  const color = isIntermap ? '#a855f7' : (link.status === 'ok' ? '#0ea5e9' : '#ef4444');
+
+  const line = new Konva.Arrow({
+    points: arrowPts,
+    pointerLength: 9,
+    pointerWidth: 8,
+    stroke: color,
+    fill: color,
     strokeWidth: isIntermap ? 2.5 : 2,
     dash: isIntermap ? [6, 4] : undefined,
-    hitStrokeWidth: 12,
+    hitStrokeWidth: 14,
     lineCap: 'round',
     lineJoin: 'round',
     perfectDrawEnabled: false,
@@ -915,38 +923,146 @@ function renderLink(link, nodesDict) {
   line.on('mouseenter', () => {
     document.body.style.cursor = 'pointer';
     line.stroke('#f43f5e');
+    line.fill('#f43f5e');
     line.strokeWidth(3.5);
     linksLayer.batchDraw();
   });
 
   line.on('mouseleave', () => {
     document.body.style.cursor = 'default';
-    line.stroke(isIntermap ? '#a855f7' : (link.status === 'ok' ? '#0ea5e9' : '#ef4444'));
+    line.stroke(color);
+    line.fill(color);
     line.strokeWidth(isIntermap ? 2.5 : 2);
     linksLayer.batchDraw();
   });
 
-  line.on('click tap', async (e) => {
+  line.on('click tap', (e) => {
     e.cancelBubble = true;
-    const srcName = source.name || 'Nodo Origen';
-    const tgtName = target.name || 'Nodo Destino';
-    if (confirm(`¿Deseas eliminar el enlace entre "${srcName}" y "${tgtName}"?`)) {
+    openLinkPropertiesModal(link, source, target);
+  });
+
+  linksLayer.add(line);
+  linkLines.set(link.id, { line, sourceId: source.id, targetId: target.id, link, sourceNode: source, targetNode: target });
+}
+
+function openLinkPropertiesModal(link, sourceNode, targetNode) {
+  const modal = document.getElementById('modal-link-properties');
+  if (!modal) return;
+
+  const inputId = document.getElementById('link-modal-id');
+  const txtSrcToTgt = document.getElementById('link-text-src-to-tgt');
+  const srcNamePadre = document.getElementById('link-src-name-padre');
+  const tgtNameHijo = document.getElementById('link-tgt-name-hijo');
+  const txtTgtToSrc = document.getElementById('link-text-tgt-to-src');
+  const tgtNamePadre = document.getElementById('link-tgt-name-padre');
+  const srcNameHijo = document.getElementById('link-src-name-hijo');
+
+  const lblSrcIface = document.getElementById('link-lbl-src-iface');
+  const lblTgtIface = document.getElementById('link-lbl-tgt-iface');
+  const inputSrcIface = document.getElementById('input-link-src-iface');
+  const inputTgtIface = document.getElementById('input-link-tgt-iface');
+
+  const radioSrcToTgt = document.getElementById('radio-dir-source-to-target');
+  const radioTgtToSrc = document.getElementById('radio-dir-target-to-source');
+
+  const btnClose = document.getElementById('btn-close-link-modal');
+  const btnCancel = document.getElementById('btn-cancel-link-modal');
+  const btnSave = document.getElementById('btn-save-link-modal');
+  const btnDelete = document.getElementById('btn-delete-link-modal');
+
+  inputId.value = link.id;
+  const sName = sourceNode.name || 'Nodo A';
+  const tName = targetNode.name || 'Nodo B';
+
+  if (txtSrcToTgt) txtSrcToTgt.textContent = `${sName} ➔ ${tName}`;
+  if (srcNamePadre) srcNamePadre.textContent = sName;
+  if (tgtNameHijo) tgtNameHijo.textContent = tName;
+
+  if (txtTgtToSrc) txtTgtToSrc.textContent = `${tName} ➔ ${sName}`;
+  if (tgtNamePadre) tgtNamePadre.textContent = tName;
+  if (srcNameHijo) srcNameHijo.textContent = sName;
+
+  if (lblSrcIface) lblSrcIface.textContent = `Interfaz en ${sName}:`;
+  if (lblTgtIface) lblTgtIface.textContent = `Interfaz en ${tName}:`;
+  if (inputSrcIface) inputSrcIface.value = link.source_interface || '';
+  if (inputTgtIface) inputTgtIface.value = link.target_interface || '';
+
+  const curDir = link.extra_data?.direction || 'source_to_target';
+  if (curDir === 'target_to_source') {
+    if (radioTgtToSrc) radioTgtToSrc.checked = true;
+  } else {
+    if (radioSrcToTgt) radioSrcToTgt.checked = true;
+  }
+
+  modal.style.display = 'flex';
+
+  const cleanUp = () => {
+    modal.style.display = 'none';
+    if (btnClose) btnClose.onclick = null;
+    if (btnCancel) btnCancel.onclick = null;
+    if (btnSave) btnSave.onclick = null;
+    if (btnDelete) btnDelete.onclick = null;
+  };
+
+  if (btnClose) btnClose.onclick = cleanUp;
+  if (btnCancel) btnCancel.onclick = cleanUp;
+
+  if (btnSave) {
+    btnSave.onclick = async () => {
+      const chosenDir = radioTgtToSrc && radioTgtToSrc.checked ? 'target_to_source' : 'source_to_target';
+      const srcIface = inputSrcIface ? inputSrcIface.value.trim() : '';
+      const tgtIface = inputTgtIface ? inputTgtIface.value.trim() : '';
+
+      const updatedExtra = Object.assign({}, link.extra_data || {}, { direction: chosenDir });
+
+      try {
+        const res = await API.updateLink(link.id, {
+          source_interface: srcIface,
+          target_interface: tgtIface,
+          extra_data: updatedExtra
+        });
+
+        link.extra_data = updatedExtra;
+        link.source_interface = srcIface;
+        link.target_interface = tgtIface;
+
+        // Actualizar la flecha en el lienzo
+        const linkEntry = linkLines.get(link.id);
+        if (linkEntry && linkEntry.line) {
+          const pts = calculateLinkEndpoints(sourceNode, targetNode, link);
+          const isTargetToSource = chosenDir === 'target_to_source';
+          const arrowPts = isTargetToSource ? [pts[2], pts[3], pts[0], pts[1]] : [pts[0], pts[1], pts[2], pts[3]];
+          linkEntry.line.points(arrowPts);
+          linksLayer.batchDraw();
+        }
+
+        cleanUp();
+      } catch (err) {
+        alert('Error guardando enlace: ' + err.message);
+      }
+    };
+  }
+
+  if (btnDelete) {
+    btnDelete.onclick = async () => {
+      if (!confirm(`¿Estás seguro de eliminar el enlace entre "${sName}" y "${tName}"?`)) return;
       try {
         await API.deleteLink(link.id);
-        line.destroy();
+        const linkEntry = linkLines.get(link.id);
+        if (linkEntry && linkEntry.line) {
+          linkEntry.line.destroy();
+        }
         linkLines.delete(link.id);
         if (currentMap && currentMap.links) {
           currentMap.links = currentMap.links.filter(l => l.id !== link.id);
         }
         linksLayer.batchDraw();
+        cleanUp();
       } catch (err) {
         alert('Error eliminando enlace: ' + err.message);
       }
-    }
-  });
-
-  linksLayer.add(line);
-  linkLines.set(link.id, { line, sourceId: source.id, targetId: target.id, link, sourceNode: source, targetNode: target });
+    };
+  }
 }
 
 function updateAttachedLinks(nodeId, newX, newY) {
@@ -963,7 +1079,10 @@ function updateAttachedLinks(nodeId, newX, newY) {
       const tgtNode = nodeMap.get(targetId);
       if (srcNode && tgtNode) {
         const pts = calculateLinkEndpoints(srcNode, tgtNode, link);
-        line.points(pts);
+        const direction = link.extra_data?.direction || 'source_to_target';
+        const isTargetToSource = direction === 'target_to_source';
+        const arrowPts = isTargetToSource ? [pts[2], pts[3], pts[0], pts[1]] : [pts[0], pts[1], pts[2], pts[3]];
+        line.points(arrowPts);
         hasUpdated = true;
       }
     }
@@ -1225,12 +1344,16 @@ async function handleLinkNodeClick(node) {
     }
 
     try {
+      if (!linkExtra.direction) {
+        linkExtra.direction = 'source_to_target';
+      }
+
       const newLink = await API.createLink({
         map_id: currentMap.id,
         source_node_id: linkSourceNode.id,
         target_node_id: node.id,
         status: 'ok',
-        extra_data: Object.keys(linkExtra).length > 0 ? linkExtra : null
+        extra_data: linkExtra
       });
 
       currentMap.links.push(newLink);

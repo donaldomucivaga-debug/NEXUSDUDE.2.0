@@ -771,6 +771,70 @@
     </div>
   </div>
 
+  <!-- Modal Propiedades de Arista de Servicio (Dirección de Flujo / Padre-Hijo) -->
+  <div class="modal-overlay" id="modal-link-properties" style="display: none;">
+    <div class="modal-card" style="width: 520px;">
+      <div class="modal-header">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <i class="fas fa-route" style="color: #38bdf8; font-size: 1.2rem;"></i>
+          <h3 class="modal-title" style="font-size: 1rem;">Propiedades de Arista de Servicio</h3>
+        </div>
+        <button class="modal-close" id="btn-close-link-modal">&times;</button>
+      </div>
+      <div class="modal-form" style="padding: 14px 18px; gap: 12px;">
+        <input type="hidden" id="link-modal-id">
+
+        <!-- Selector de Dirección / Flujo de Servicio -->
+        <div>
+          <label style="font-size: 0.75rem; font-weight: 700; color: #f8fafc; margin-bottom: 6px; display: block;">
+            <i class="fas fa-arrows-alt-h" style="color: #38bdf8;"></i> Flujo del Servicio (Quién le da servicio a quién):
+          </label>
+          <div style="display: flex; flex-direction: column; gap: 8px;">
+            <label id="lbl-dir-source-to-target" style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: rgba(15, 23, 42, 0.7); border: 1px solid var(--border-color); border-radius: 8px; cursor: pointer;">
+              <input type="radio" name="link-service-direction" id="radio-dir-source-to-target" value="source_to_target" checked>
+              <div style="flex: 1; font-size: 0.82rem;">
+                <div style="font-weight: 700; color: #38bdf8;" id="link-text-src-to-tgt">Nodo A ➔ Nodo B</div>
+                <div style="font-size: 0.7rem; color: var(--text-muted); margin-top: 2px;"><span id="link-src-name-padre">Nodo A</span> es el <strong>Proveedor (Padre)</strong> y alimenta a <span id="link-tgt-name-hijo">Nodo B</span></div>
+              </div>
+            </label>
+
+            <label id="lbl-dir-target-to-source" style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: rgba(15, 23, 42, 0.7); border: 1px solid var(--border-color); border-radius: 8px; cursor: pointer;">
+              <input type="radio" name="link-service-direction" id="radio-dir-target-to-source" value="target_to_source">
+              <div style="flex: 1; font-size: 0.82rem;">
+                <div style="font-weight: 700; color: #a855f7;" id="link-text-tgt-to-src">Nodo B ➔ Nodo A</div>
+                <div style="font-size: 0.7rem; color: var(--text-muted); margin-top: 2px;"><span id="link-tgt-name-padre">Nodo B</span> es el <strong>Proveedor (Padre)</strong> y alimenta a <span id="link-src-name-hijo">Nodo A</span></div>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <!-- Interfaces / Detalles opcionales -->
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+          <div>
+            <label style="font-size: 0.72rem; color: var(--text-muted); font-weight: 600;" id="link-lbl-src-iface">Interfaz en Nodo A:</label>
+            <input type="text" class="input-text" id="input-link-src-iface" placeholder="ej. sfp-sfpplus1, ether1" style="width: 100%; font-size: 0.78rem; padding: 6px 8px;">
+          </div>
+          <div>
+            <label style="font-size: 0.72rem; color: var(--text-muted); font-weight: 600;" id="link-lbl-tgt-iface">Interfaz en Nodo B:</label>
+            <input type="text" class="input-text" id="input-link-tgt-iface" placeholder="ej. ether1, wlan1" style="width: 100%; font-size: 0.78rem; padding: 6px 8px;">
+          </div>
+        </div>
+
+        <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px;">
+          <button type="button" class="btn btn-danger" id="btn-delete-link-modal" style="font-size: 0.78rem; padding: 6px 12px;">
+            <i class="fas fa-trash-alt"></i> Eliminar Enlace
+          </button>
+          <div style="display: flex; gap: 8px;">
+            <button type="button" class="btn" id="btn-cancel-link-modal">Cancelar</button>
+            <button type="button" class="btn btn-primary" id="btn-save-link-modal">
+              <i class="fas fa-save"></i> Guardar Enlace
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Modal Generación Automática de Todos los Sitios NetBox -->
   <div class="modal-overlay" id="modal-bulk-sites" style="display: none;">
     <div class="modal-card" style="width: 580px;">
@@ -1091,7 +1155,7 @@
   </div>
 
   <!-- Scripts -->
-  <script src="/static/js/api.js?v=2.3"></script>
-  <script src="/static/js/app.js?v=2.3"></script>
+  <script src="/static/js/api.js?v=2.4"></script>
+  <script src="/static/js/app.js?v=2.4"></script>
 </body>
 </html>

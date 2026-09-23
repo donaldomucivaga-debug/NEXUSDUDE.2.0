@@ -284,13 +284,16 @@ class ZabbixService:
                 else:
                     out_degree[local_dev_id].append({"downlink_id": remote_node_id, "link": l, "is_intermap": True, "remote_name": l_extra.get("remote_node_name", "Downlink Remoto")})
             else:
-                s_rank = get_role_rank(s_node.get("device_type"))
-                t_rank = get_role_rank(t_node.get("device_type"))
+                # ─── DETERMINAR DIRECCIÓN DEL SERVICIO ──────────────────────────
+                # 1. Dirección explícita en extra_data del enlace ('source_to_target' vs 'target_to_source')
+                direction = l_extra.get("direction", "source_to_target")
 
-                if s_rank <= t_rank:
-                    uplink_id, downlink_id = s_id, t_id
-                else:
+                if direction == "target_to_source":
+                    # El nodo destino alimenta / da servicio al nodo origen
                     uplink_id, downlink_id = t_id, s_id
+                else:
+                    # Por defecto: el nodo origen alimenta / da servicio al nodo destino
+                    uplink_id, downlink_id = s_id, t_id
 
                 in_degree[downlink_id].append({"uplink_id": uplink_id, "link": l})
                 out_degree[uplink_id].append({"downlink_id": downlink_id, "link": l})
@@ -298,10 +301,13 @@ class ZabbixService:
 
             processed_links.append({
                 "link_id": l["id"],
-                "uplink_node_id": s_id,
-                "downlink_node_id": t_id,
-                "uplink_node_name": nodes_dict[s_id]["name"],
-                "downlink_node_name": nodes_dict[t_id]["name"],
+                "source_node_id": s_id,
+                "target_node_id": t_id,
+                "uplink_node_id": uplink_id if not (is_s_nav or is_t_nav) else s_id,
+                "downlink_node_id": downlink_id if not (is_s_nav or is_t_nav) else t_id,
+                "uplink_node_name": nodes_dict[uplink_id]["name"] if not (is_s_nav or is_t_nav) and uplink_id in nodes_dict else nodes_dict[s_id]["name"],
+                "downlink_node_name": nodes_dict[downlink_id]["name"] if not (is_s_nav or is_t_nav) and downlink_id in nodes_dict else nodes_dict[t_id]["name"],
+                "direction": l_extra.get("direction", "source_to_target"),
                 "status": l["status"],
                 "rtt_ms": l["rtt_ms"]
             })
@@ -451,15 +457,41 @@ class ZabbixService:
 
             map_nodes_details = []
 
-            # Crear servicios para cada nodo del mapa
-            for n_info in analysis["nodes"]:
+            # Filtrar y ordenar nodos en orden topológico (Proveedores/Padres primero)
+            candidate_nodes = [n for n in analysis["nodes"] if n.get("device_type") not in ("submap", "parent_map")]
+            
+            sorted_nodes = []
+            visited_ids = set()
+
+            # Nodos raíz (sin uplinks) primero
+            for n in candidate_nodes:
+                if not n.get("uplink_ids"):
+                    sorted_nodes.append(n)
+                    visited_ids.add(n["node_id"])
+
+            # Nodos dependientes iterativamente
+            remaining = [n for n in candidate_nodes if n["node_id"] not in visited_ids]
+            iterations = 0
+            while remaining and iterations < 50:
+                iterations += 1
+                progress = False
+                next_remaining = []
+                for n in remaining:
+                    if all(u_id in visited_ids or u_id in node_service_ids for u_id in n.get("uplink_ids", [])):
+                        sorted_nodes.append(n)
+                        visited_ids.add(n["node_id"])
+                        progress = True
+                    else:
+                        next_remaining.append(n)
+                remaining = next_remaining
+                if not progress:
+                    sorted_nodes.extend(remaining)
+                    break
+
+            # Crear servicios para cada nodo del mapa en orden de flujo de servicio
+            for n_info in sorted_nodes:
                 nid = n_info["node_id"]
                 node_name = n_info["name"]
-                is_submap_node = n_info.get("device_type") in ("submap", "parent_map")
-
-                # Si es un nodo portal de navegación, no duplicar servicio de dispositivo
-                if is_submap_node:
-                    continue
 
                 matched = n_info.get("zabbix_matched")
                 z_name = n_info.get("zabbix_hostname") or node_name

@@ -90,6 +90,8 @@ class LinkCreate(LinkBase):
     map_id: str
 
 class LinkUpdate(BaseModel):
+    source_node_id: Optional[str] = None
+    target_node_id: Optional[str] = None
     source_interface: Optional[str] = None
     target_interface: Optional[str] = None
     status: Optional[str] = None

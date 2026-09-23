@@ -1070,6 +1070,50 @@ async def create_link(link_data: LinkCreate, user: Dict[str, Any] = Depends(get_
             updated_at=str(r["updated_at"])
         )
 
+@router.put("/links/{link_id}", response_model=LinkOut)
+async def update_link(link_id: str, link_data: LinkUpdate, user: Dict[str, Any] = Depends(get_current_user)):
+    """Actualiza propiedades de un enlace (interfaces, dirección de servicio, extra_data)."""
+    async with get_db_connection() as db:
+        cursor = await db.execute("SELECT * FROM links WHERE id = ?", (link_id,))
+        r = await cursor.fetchone()
+        if not r:
+            raise HTTPException(status_code=404, detail="Enlace no encontrado")
+
+        new_src_iface = link_data.source_interface if link_data.source_interface is not None else r["source_interface"]
+        new_tgt_iface = link_data.target_interface if link_data.target_interface is not None else r["target_interface"]
+        new_status = link_data.status if link_data.status is not None else r["status"]
+        new_rtt = link_data.rtt_ms if link_data.rtt_ms is not None else r["rtt_ms"]
+        new_loss = link_data.loss_percent if link_data.loss_percent is not None else r["loss_percent"]
+
+        cur_extra = json.loads(r["extra_data"]) if r["extra_data"] else {}
+        if link_data.extra_data is not None:
+            cur_extra.update(link_data.extra_data)
+
+        await db.execute("""
+            UPDATE links
+            SET source_interface = ?, target_interface = ?, status = ?, rtt_ms = ?, loss_percent = ?,
+                extra_data = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        """, (new_src_iface, new_tgt_iface, new_status, new_rtt, new_loss, json.dumps(cur_extra), link_id))
+        await db.commit()
+
+        c_u = await db.execute("SELECT * FROM links WHERE id = ?", (link_id,))
+        u = await c_u.fetchone()
+        return LinkOut(
+            id=u["id"],
+            map_id=u["map_id"],
+            source_node_id=u["source_node_id"],
+            target_node_id=u["target_node_id"],
+            source_interface=u["source_interface"],
+            target_interface=u["target_interface"],
+            status=u["status"],
+            rtt_ms=u["rtt_ms"],
+            loss_percent=u["loss_percent"],
+            extra_data=json.loads(u["extra_data"]) if u["extra_data"] else None,
+            created_at=str(u["created_at"]),
+            updated_at=str(u["updated_at"])
+        )
+
 @router.delete("/links/{link_id}")
 async def delete_link(link_id: str, user: Dict[str, Any] = Depends(get_current_user)):
     """Elimina un enlace entre nodos."""
