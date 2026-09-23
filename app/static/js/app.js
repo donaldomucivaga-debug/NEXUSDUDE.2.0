@@ -1538,6 +1538,10 @@ function openLinkPropertiesModal(link, sourceNode, targetNode) {
     if (radioSrcToTgt) radioSrcToTgt.checked = true;
   }
 
+  const checkVisualOnly = document.getElementById('check-link-visual-only');
+  const isVisualOnly = !!(link.extra_data?.is_visual_only || link.extra_data?.sync_zabbix === false || link.extra_data?.is_simple_link);
+  if (checkVisualOnly) checkVisualOnly.checked = isVisualOnly;
+
   modal.style.display = 'flex';
 
   const cleanUp = () => {
@@ -1556,8 +1560,14 @@ function openLinkPropertiesModal(link, sourceNode, targetNode) {
       const chosenDir = radioTgtToSrc && radioTgtToSrc.checked ? 'target_to_source' : 'source_to_target';
       const srcIface = inputSrcIface ? inputSrcIface.value.trim() : '';
       const tgtIface = inputTgtIface ? inputTgtIface.value.trim() : '';
+      const visualOnly = checkVisualOnly ? checkVisualOnly.checked : false;
 
-      const updatedExtra = Object.assign({}, link.extra_data || {}, { direction: chosenDir });
+      const updatedExtra = Object.assign({}, link.extra_data || {}, {
+        direction: chosenDir,
+        is_visual_only: visualOnly,
+        sync_zabbix: !visualOnly,
+        is_simple_link: visualOnly
+      });
 
       try {
         const res = await API.updateLink(link.id, {
@@ -1692,6 +1702,7 @@ function promptIntermapLink(sourceNode, targetNode, targetMapId, remoteNodes, is
     const countEl = document.getElementById('intermap-candidate-count');
     const emptyNotice = document.getElementById('intermap-empty-notice');
     const btnConfirm = document.getElementById('btn-confirm-intermap-link');
+    const btnSimple = document.getElementById('btn-simple-intermap-link');
     const btnCancel = document.getElementById('btn-cancel-intermap-link');
     const btnClose = document.getElementById('btn-close-intermap-modal');
 
@@ -1758,6 +1769,7 @@ function promptIntermapLink(sourceNode, targetNode, targetMapId, remoteNodes, is
     const cleanUp = () => {
       modal.style.display = 'none';
       btnConfirm.onclick = null;
+      if (btnSimple) btnSimple.onclick = null;
       btnCancel.onclick = null;
       btnClose.onclick = null;
       if (searchInput) searchInput.oninput = null;
@@ -1770,6 +1782,13 @@ function promptIntermapLink(sourceNode, targetNode, targetMapId, remoteNodes, is
       cleanUp();
       resolve(chosenNode);
     };
+
+    if (btnSimple) {
+      btnSimple.onclick = () => {
+        cleanUp();
+        resolve({ is_simple: true });
+      };
+    }
 
     btnCancel.onclick = () => {
       cleanUp();
@@ -1826,13 +1845,22 @@ async function handleLinkNodeClick(node) {
           const targetMapDetail = await API.getMapDetail(targetMapId);
           if (targetMapDetail && targetMapDetail.nodes && targetMapDetail.nodes.length > 0) {
             const remoteCandidates = targetMapDetail.nodes.filter(n => n.device_type !== 'parent_map' && !n.extra_data?.is_parent_shortcut && n.device_type !== 'submap');
-            if (remoteCandidates.length > 0) {
-              const remoteNode = await promptIntermapLink(linkSourceNode, node, targetMapId, remoteCandidates, isSourceNav);
-              if (!remoteNode) {
-                cancelLinkMode();
-                return;
-              }
+            
+            const remoteNode = await promptIntermapLink(linkSourceNode, node, targetMapId, remoteCandidates, isSourceNav);
+            if (!remoteNode) {
+              cancelLinkMode();
+              return;
+            }
 
+            if (remoteNode.is_simple) {
+              // Enlace Simple (Visual): Solo flecha visual directa, sin crear pines ni alimentar Zabbix BSM
+              linkExtra = {
+                is_visual_only: true,
+                is_simple_link: true,
+                sync_zabbix: false,
+                direction: 'source_to_target'
+              };
+            } else {
               const pinId = 'pin-' + Date.now().toString(36);
               const isParentNav = navNode.device_type === 'parent_map' || !!navNode.extra_data?.is_parent_shortcut;
 

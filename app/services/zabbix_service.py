@@ -271,6 +271,24 @@ class ZabbixService:
                 except Exception:
                     l_extra = {}
 
+            # Ignorar enlaces marcados como sólo visuales o sin sincronización Zabbix para el grafo de servicios
+            is_visual_only = bool(l_extra.get("is_visual_only") or l_extra.get("is_simple_link") or l_extra.get("sync_zabbix") is False)
+            if is_visual_only:
+                processed_links.append({
+                    "link_id": l["id"],
+                    "source_node_id": s_id,
+                    "target_node_id": t_id,
+                    "uplink_node_id": s_id,
+                    "downlink_node_id": t_id,
+                    "uplink_node_name": nodes_dict[s_id]["name"],
+                    "downlink_node_name": nodes_dict[t_id]["name"],
+                    "direction": l_extra.get("direction", "source_to_target"),
+                    "status": l["status"],
+                    "rtt_ms": l["rtt_ms"],
+                    "is_visual_only": True
+                })
+                continue
+
             is_s_nav = s_node.get("device_type") in ("submap", "parent_map")
             is_t_nav = t_node.get("device_type") in ("submap", "parent_map")
             remote_node_id = l_extra.get("remote_node_id")
@@ -512,6 +530,10 @@ class ZabbixService:
                     l_extra = json.loads(l["extra_data"]) if isinstance(l["extra_data"], str) else l["extra_data"]
                 except Exception:
                     l_extra = {}
+
+            # Ignorar enlaces marcados como sólo visuales o sin sincronización Zabbix
+            if l_extra.get("is_visual_only") or l_extra.get("is_simple_link") or l_extra.get("sync_zabbix") is False:
+                continue
 
             direction = l_extra.get("direction", "source_to_target")
 

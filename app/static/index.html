@@ -810,11 +810,16 @@
           <i class="fas fa-exclamation-triangle"></i> Este submapa aún no tiene dispositivos agregados. Puedes poblarlo primero desde NetBox.
         </div>
 
-        <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px;">
+        <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px;">
           <button type="button" class="btn" id="btn-cancel-intermap-link">Cancelar</button>
-          <button type="button" class="btn btn-purple" id="btn-confirm-intermap-link">
-            <i class="fas fa-link"></i> Crear Enlace de Servicio
-          </button>
+          <div style="display: flex; gap: 8px;">
+            <button type="button" class="btn btn-secondary" id="btn-simple-intermap-link" title="Crea un enlace simple / flecha visual directa al submapa sin alimentar el árbol jerárquico de Zabbix">
+              <i class="fas fa-arrow-right"></i> Enlace Simple (Visual)
+            </button>
+            <button type="button" class="btn btn-purple" id="btn-confirm-intermap-link">
+              <i class="fas fa-link"></i> Crear Enlace de Servicio
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -855,6 +860,19 @@
               </div>
             </label>
           </div>
+        </div>
+
+        <!-- Opción Solo Visual / Excluir de Zabbix BSM -->
+        <div style="background: rgba(15, 23, 42, 0.7); border: 1px solid var(--border-color); border-radius: 8px; padding: 10px 12px;">
+          <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; margin: 0; font-size: 0.8rem; color: #f8fafc;">
+            <input type="checkbox" id="check-link-visual-only" style="width: 16px; height: 16px; accent-color: #38bdf8;">
+            <div>
+              <span style="font-weight: 700;">Enlace solo visual (Sin sincronización Zabbix)</span>
+              <div style="font-size: 0.7rem; color: var(--text-muted); margin-top: 2px;">
+                Mantiene la flecha en el lienzo sin alimentar el árbol de servicios BSM en Zabbix.
+              </div>
+            </div>
+          </label>
         </div>
 
         <!-- Interfaces / Detalles opcionales -->
