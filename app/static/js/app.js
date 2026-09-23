@@ -488,6 +488,7 @@ function measureTextWidth(text, font) {
 function computeNodeDimensions(node) {
   const isParentShortcut = node.device_type === 'parent_map' || !!node.extra_data?.is_parent_shortcut;
   const isSubmap = node.device_type === 'submap' || isParentShortcut;
+  const pins = node.extra_data?.pins || [];
   const nameFont = 'bold 11px system-ui, -apple-system, sans-serif';
   const nameW = measureTextWidth(node.name, nameFont);
 
@@ -509,17 +510,28 @@ function computeNodeDimensions(node) {
   const subFont = isSubmap ? 'bold 9.5px system-ui, -apple-system, sans-serif' : 'normal 9.5px monospace';
   const subW = measureTextWidth(subLabelText, subFont);
 
+  let maxPinW = 0;
+  pins.forEach(p => {
+    const pText = p.label || (isParentShortcut ? `⬅ ${p.remote_node_name}` : `➔ ${p.remote_node_name}`);
+    const pw = measureTextWidth(pText, 'bold 9px monospace');
+    if (pw > maxPinW) maxPinW = pw;
+  });
+
   // Margen izquierdo del título: statusDot (14px) + gap + icon (16px) + gap = 44px + text + margen derecho (16px)
   const titleNeeded = 44 + nameW + 16;
   // Margen izquierdo del subtítulo: 14px + subW + margen derecho (16px)
   const subNeeded = 14 + subW + 16;
+  const pinNeeded = maxPinW > 0 ? (28 + maxPinW + 16) : 0;
 
   const minWidth = isParentShortcut ? 170 : (isSubmap ? 150 : 136);
-  const maxWidth = isParentShortcut ? 320 : (isSubmap ? 290 : 250);
-  const nodeWidth = Math.min(Math.max(minWidth, Math.ceil(Math.max(titleNeeded, subNeeded))), maxWidth);
-  const nodeHeight = isSubmap ? 56 : 52;
+  const maxWidth = isParentShortcut ? 320 : (isSubmap ? 300 : 250);
+  const nodeWidth = Math.min(Math.max(minWidth, Math.ceil(Math.max(titleNeeded, subNeeded, pinNeeded))), maxWidth);
+  
+  const baseHeight = isSubmap ? 56 : 52;
+  const pinsHeight = pins.length * 20;
+  const nodeHeight = baseHeight + pinsHeight;
 
-  return { nodeWidth, nodeHeight, subLabelText };
+  return { nodeWidth, nodeHeight, subLabelText, pins };
 }
 
 function getNodeHalfDimensions(nodeOrId) {
@@ -539,7 +551,7 @@ function getNodeHalfDimensions(nodeOrId) {
 function renderNode(node) {
   const isParentShortcut = node.device_type === 'parent_map' || !!node.extra_data?.is_parent_shortcut;
   const isSubmap = node.device_type === 'submap' || isParentShortcut;
-  const { nodeWidth, nodeHeight, subLabelText } = computeNodeDimensions(node);
+  const { nodeWidth, nodeHeight, subLabelText, pins } = computeNodeDimensions(node);
 
   const group = new Konva.Group({
     x: node.x,
@@ -643,6 +655,49 @@ function renderNode(node) {
   group.add(iconText);
   group.add(label);
   group.add(ipText);
+
+  // Si tiene pines de interconexión (Bornes virtuales)
+  if (pins && pins.length > 0) {
+    const divider = new Konva.Line({
+      points: [6, 48, nodeWidth - 6, 48],
+      stroke: 'rgba(255, 255, 255, 0.18)',
+      strokeWidth: 1,
+      dash: [3, 2],
+      listening: false
+    });
+    group.add(divider);
+
+    pins.forEach((pin, idx) => {
+      const pinY = 52 + idx * 20 + 8;
+      
+      const pinDot = new Konva.Circle({
+        x: 14,
+        y: pinY + 2,
+        radius: 3.5,
+        fill: isParentShortcut ? '#38bdf8' : '#a855f7',
+        stroke: '#ffffff',
+        strokeWidth: 0.8,
+        listening: false
+      });
+
+      const pinLabel = new Konva.Text({
+        x: 24,
+        y: pinY - 3,
+        text: pin.label || (isParentShortcut ? `⬅ ${pin.remote_node_name}` : `➔ ${pin.remote_node_name}`),
+        width: nodeWidth - 30,
+        ellipsis: true,
+        wrap: 'none',
+        fontSize: 9,
+        fontFamily: 'monospace',
+        fontStyle: 'bold',
+        fill: isParentShortcut ? '#7dd3fc' : '#e9d5ff',
+        listening: false
+      });
+
+      group.add(pinDot);
+      group.add(pinLabel);
+    });
+  }
 
   // Arrastre conjunto si está en selección múltiple
   let lastDragPos = { x: node.x, y: node.y };
@@ -786,23 +841,59 @@ function renderNode(node) {
   nodeGroups.set(node.id, group);
 }
 
+function getNodePerimeterIntersection(cx, cy, halfW, halfH, targetCx, targetCy) {
+  const dx = targetCx - cx;
+  const dy = targetCy - cy;
+  if (dx === 0 && dy === 0) return { x: cx, y: cy };
+
+  const scaleX = (halfW - 0.5) / Math.abs(dx);
+  const scaleY = (halfH - 0.5) / Math.abs(dy);
+  const scale = Math.min(scaleX, scaleY);
+
+  return {
+    x: cx + dx * scale,
+    y: cy + dy * scale
+  };
+}
+
+function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
+  if (!sourceNode || !targetNode) return [0, 0, 0, 0];
+
+  const srcHalf = getNodeHalfDimensions(sourceNode);
+  const tgtHalf = getNodeHalfDimensions(targetNode);
+
+  const srcGroup = nodeGroups.get(sourceNode.id);
+  const tgtGroup = nodeGroups.get(targetNode.id);
+
+  const srcX = srcGroup ? srcGroup.x() : sourceNode.x;
+  const srcY = srcGroup ? srcGroup.y() : sourceNode.y;
+  const tgtX = tgtGroup ? tgtGroup.x() : targetNode.x;
+  const tgtY = tgtGroup ? tgtGroup.y() : targetNode.y;
+
+  const srcCx = srcX + srcHalf.halfW;
+  const srcCy = srcY + srcHalf.halfH;
+  const tgtCx = tgtX + tgtHalf.halfW;
+  const tgtCy = tgtY + tgtHalf.halfH;
+
+  const p1 = getNodePerimeterIntersection(srcCx, srcCy, srcHalf.halfW, srcHalf.halfH, tgtCx, tgtCy);
+  const p2 = getNodePerimeterIntersection(tgtCx, tgtCy, tgtHalf.halfW, tgtHalf.halfH, srcCx, srcCy);
+
+  return [p1.x, p1.y, p2.x, p2.y];
+}
+
 function renderLink(link, nodesDict) {
   const source = nodesDict.get(link.source_node_id);
   const target = nodesDict.get(link.target_node_id);
   if (!source || !target) return;
 
-  const srcHalf = getNodeHalfDimensions(source);
-  const tgtHalf = getNodeHalfDimensions(target);
+  const pts = calculateLinkEndpoints(source, target, link);
+  const isIntermap = !!(link.extra_data && (link.extra_data.is_intermap || link.extra_data.remote_node_id));
 
   const line = new Konva.Line({
-    points: [
-      source.x + srcHalf.halfW,
-      source.y + srcHalf.halfH,
-      target.x + tgtHalf.halfW,
-      target.y + tgtHalf.halfH
-    ],
-    stroke: link.status === 'ok' ? '#0ea5e9' : '#ef4444',
-    strokeWidth: 2,
+    points: pts,
+    stroke: isIntermap ? '#a855f7' : (link.status === 'ok' ? '#0ea5e9' : '#ef4444'),
+    strokeWidth: isIntermap ? 2.5 : 2,
+    dash: isIntermap ? [6, 4] : undefined,
     hitStrokeWidth: 12,
     lineCap: 'round',
     lineJoin: 'round',
@@ -819,8 +910,8 @@ function renderLink(link, nodesDict) {
 
   line.on('mouseleave', () => {
     document.body.style.cursor = 'default';
-    line.stroke(link.status === 'ok' ? '#0ea5e9' : '#ef4444');
-    line.strokeWidth(2);
+    line.stroke(isIntermap ? '#a855f7' : (link.status === 'ok' ? '#0ea5e9' : '#ef4444'));
+    line.strokeWidth(isIntermap ? 2.5 : 2);
     linksLayer.batchDraw();
   });
 
@@ -844,29 +935,29 @@ function renderLink(link, nodesDict) {
   });
 
   linksLayer.add(line);
-  linkLines.set(link.id, { line, sourceId: source.id, targetId: target.id });
+  linkLines.set(link.id, { line, sourceId: source.id, targetId: target.id, link, sourceNode: source, targetNode: target });
 }
 
 function updateAttachedLinks(nodeId, newX, newY) {
   let hasUpdated = false;
-  const { halfW, halfH } = getNodeHalfDimensions(nodeId);
+  if (!currentMap || !currentMap.nodes) return;
 
-  linkLines.forEach(({ line, sourceId, targetId }) => {
-    if (sourceId === nodeId) {
-      const points = line.points();
-      points[0] = newX + halfW;
-      points[1] = newY + halfH;
-      line.points(points);
-      hasUpdated = true;
-    } else if (targetId === nodeId) {
-      const points = line.points();
-      points[2] = newX + halfW;
-      points[3] = newY + halfH;
-      line.points(points);
-      hasUpdated = true;
+  const nodeMap = new Map();
+  currentMap.nodes.forEach(n => nodeMap.set(n.id, n));
+
+  linkLines.forEach((linkObj, linkId) => {
+    const { line, sourceId, targetId, link } = linkObj;
+    if (sourceId === nodeId || targetId === nodeId) {
+      const srcNode = nodeMap.get(sourceId);
+      const tgtNode = nodeMap.get(targetId);
+      if (srcNode && tgtNode) {
+        const pts = calculateLinkEndpoints(srcNode, tgtNode, link);
+        line.points(pts);
+        hasUpdated = true;
+      }
     }
   });
-  // Solo redibujar linksLayer si realmente se modificó alguna línea
+
   if (hasUpdated && linksLayer) {
     linksLayer.batchDraw();
   }
@@ -885,12 +976,67 @@ function cancelLinkMode() {
   linkMode = false;
   if (linkSourceNode) {
     const grp = nodeGroups.get(linkSourceNode.id);
-    if (grp) grp.findOne('.box').stroke('#27354a');
+    if (grp) {
+      const isParentShortcut = linkSourceNode.device_type === 'parent_map' || !!linkSourceNode.extra_data?.is_parent_shortcut;
+      const isSubmap = linkSourceNode.device_type === 'submap' || isParentShortcut;
+      grp.findOne('.box').stroke(isParentShortcut ? '#38bdf8' : getNodeStatusColor(linkSourceNode.status, isSubmap));
+    }
   }
   linkSourceNode = null;
   document.getElementById('btn-toggle-link-mode').classList.remove('btn-active');
   document.getElementById('link-mode-banner').style.display = 'none';
   nodesLayer.batchDraw();
+}
+
+function promptIntermapLink(sourceNode, targetNode, targetMapId, remoteNodes, isSourceNav) {
+  return new Promise((resolve) => {
+    const modal = document.getElementById('modal-intermap-link');
+    const select = document.getElementById('select-intermap-remote-node');
+    const targetNameEl = document.getElementById('intermap-target-name');
+    const btnConfirm = document.getElementById('btn-confirm-intermap-link');
+    const btnCancel = document.getElementById('btn-cancel-intermap-link');
+    const btnClose = document.getElementById('btn-close-intermap-modal');
+
+    if (!modal || !select) {
+      resolve(remoteNodes[0]);
+      return;
+    }
+
+    targetNameEl.textContent = (isSourceNav ? sourceNode.name : targetNode.name) || 'Submapa';
+    select.innerHTML = '';
+    remoteNodes.forEach(rn => {
+      const opt = document.createElement('option');
+      opt.value = rn.id;
+      opt.textContent = `${rn.name} (${rn.ip || rn.device_type || 'Dispositivo'})`;
+      select.appendChild(opt);
+    });
+
+    modal.style.display = 'flex';
+
+    const cleanUp = () => {
+      modal.style.display = 'none';
+      btnConfirm.onclick = null;
+      btnCancel.onclick = null;
+      btnClose.onclick = null;
+    };
+
+    btnConfirm.onclick = () => {
+      const chosenId = select.value;
+      const chosenNode = remoteNodes.find(n => n.id === chosenId) || remoteNodes[0];
+      cleanUp();
+      resolve(chosenNode);
+    };
+
+    btnCancel.onclick = () => {
+      cleanUp();
+      resolve(null);
+    };
+
+    btnClose.onclick = () => {
+      cleanUp();
+      resolve(null);
+    };
+  });
 }
 
 async function handleLinkNodeClick(node) {
@@ -911,12 +1057,111 @@ async function handleLinkNodeClick(node) {
       return;
     }
 
+    const isSourceNav = linkSourceNode.device_type === 'submap' || linkSourceNode.device_type === 'parent_map' || !!linkSourceNode.extra_data?.is_parent_shortcut;
+    const isTargetNav = node.device_type === 'submap' || node.device_type === 'parent_map' || !!node.extra_data?.is_parent_shortcut;
+
+    let linkExtra = {};
+
+    // ── Interconexión Inter-Mapa a través de Portal de Navegación ──
+    if (isSourceNav || isTargetNav) {
+      const navNode = isTargetNav ? node : linkSourceNode;
+      const deviceNode = isTargetNav ? linkSourceNode : node;
+      
+      const targetMapId = navNode.extra_data?.target_map_id || (navNode.device_type === 'parent_map' || navNode.extra_data?.is_parent_shortcut ? currentMap.parent_map_id : null);
+
+      if (targetMapId) {
+        try {
+          const targetMapDetail = await API.getMapDetail(targetMapId);
+          if (targetMapDetail && targetMapDetail.nodes && targetMapDetail.nodes.length > 0) {
+            const remoteCandidates = targetMapDetail.nodes.filter(n => n.device_type !== 'parent_map' && !n.extra_data?.is_parent_shortcut && n.device_type !== 'submap');
+            if (remoteCandidates.length > 0) {
+              const remoteNode = await promptIntermapLink(linkSourceNode, node, targetMapId, remoteCandidates, isSourceNav);
+              if (!remoteNode) {
+                cancelLinkMode();
+                return;
+              }
+
+              const pinId = 'pin-' + Date.now().toString(36);
+              const isParentNav = navNode.device_type === 'parent_map' || !!navNode.extra_data?.is_parent_shortcut;
+
+              // 1. Agregar Pin al nodo de navegación local
+              if (!navNode.extra_data) navNode.extra_data = {};
+              if (!navNode.extra_data.pins) navNode.extra_data.pins = [];
+              navNode.extra_data.pins.push({
+                pin_id: pinId,
+                remote_node_id: remoteNode.id,
+                remote_node_name: remoteNode.name,
+                remote_map_id: targetMapId,
+                label: isParentNav ? `⬅ ${remoteNode.name}` : `➔ ${remoteNode.name}`
+              });
+              await API.updateNode(navNode.id, { extra_data: navNode.extra_data });
+
+              // 2. Agregar Pin recíproco al nodo de navegación complementario en el mapa destino
+              const complementaryNav = targetMapDetail.nodes.find(n => (isParentNav ? n.device_type === 'submap' : (n.device_type === 'parent_map' || n.extra_data?.is_parent_shortcut)));
+              if (complementaryNav) {
+                if (!complementaryNav.extra_data) complementaryNav.extra_data = {};
+                if (!complementaryNav.extra_data.pins) complementaryNav.extra_data.pins = [];
+                complementaryNav.extra_data.pins.push({
+                  pin_id: pinId,
+                  remote_node_id: deviceNode.id,
+                  remote_node_name: deviceNode.name,
+                  remote_map_id: currentMap.id,
+                  label: isParentNav ? `➔ ${deviceNode.name}` : `⬅ ${deviceNode.name}`
+                });
+                await API.updateNode(complementaryNav.id, { extra_data: complementaryNav.extra_data });
+
+                // Crear enlace en el submapa/padre si aún no existe
+                try {
+                  await API.createLink({
+                    map_id: targetMapId,
+                    source_node_id: isParentNav ? remoteNode.id : complementaryNav.id,
+                    target_node_id: isParentNav ? complementaryNav.id : remoteNode.id,
+                    status: 'ok',
+                    extra_data: {
+                      is_intermap: true,
+                      pin_id: pinId,
+                      local_node_id: remoteNode.id,
+                      local_node_name: remoteNode.name,
+                      remote_node_id: deviceNode.id,
+                      remote_node_name: deviceNode.name,
+                      remote_map_id: currentMap.id
+                    }
+                  });
+                } catch (cErr) {
+                  console.warn('Enlace complementario ya existía o error:', cErr);
+                }
+              }
+
+              linkExtra = {
+                is_intermap: true,
+                pin_id: pinId,
+                local_node_id: deviceNode.id,
+                local_node_name: deviceNode.name,
+                remote_node_id: remoteNode.id,
+                remote_node_name: remoteNode.name,
+                remote_map_id: targetMapId
+              };
+
+              // Re-renderizar el nodo de navegación local para mostrar el nuevo pin
+              const grpNav = nodeGroups.get(navNode.id);
+              if (grpNav) grpNav.destroy();
+              renderNode(navNode);
+              nodesLayer.batchDraw();
+            }
+          }
+        } catch (mErr) {
+          console.error('Error procesando enlace inter-mapa:', mErr);
+        }
+      }
+    }
+
     try {
       const newLink = await API.createLink({
         map_id: currentMap.id,
         source_node_id: linkSourceNode.id,
         target_node_id: node.id,
-        status: 'ok'
+        status: 'ok',
+        extra_data: Object.keys(linkExtra).length > 0 ? linkExtra : null
       });
 
       currentMap.links.push(newLink);
@@ -924,7 +1169,6 @@ async function handleLinkNodeClick(node) {
       currentMap.nodes.forEach(n => dict.set(n.id, n));
       renderLink(newLink, dict);
 
-      // Los nodos ya están naturalmente encima porque nodesLayer está sobre linksLayer
       linksLayer.batchDraw();
 
     } catch (err) {

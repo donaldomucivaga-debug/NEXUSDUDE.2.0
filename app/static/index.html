@@ -726,6 +726,36 @@
     </div>
   </div>
 
+  <!-- Modal Interconexión de Enlace Inter-Mapa -->
+  <div class="modal-overlay" id="modal-intermap-link" style="display: none;">
+    <div class="modal-card" style="width: 460px;">
+      <div class="modal-header">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <i class="fas fa-plug" style="color: #a855f7; font-size: 1.2rem;"></i>
+          <h3 class="modal-title" style="font-size: 1rem;">Interconexión Inter-Mapa</h3>
+        </div>
+        <button class="modal-close" id="btn-close-intermap-modal">&times;</button>
+      </div>
+      <div class="modal-form" style="padding: 14px 18px;">
+        <p style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 12px; line-height: 1.4;">
+          Estás conectando un nodo a un <strong>Portal de Navegación</strong>. Selecciona el equipo remoto al que se enlaza este túnel:
+        </p>
+        <div style="margin-bottom: 14px;">
+          <label style="font-size: 0.75rem; font-weight: 600; color: #cbd5e1; display: block; margin-bottom: 6px;">
+            Equipo Remoto en <span id="intermap-target-name" style="color: #c084fc;">Submapa</span>:
+          </label>
+          <select id="select-intermap-remote-node" class="input-text" style="width: 100%; padding: 8px 10px; font-size: 0.82rem;"></select>
+        </div>
+        <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 8px;">
+          <button type="button" class="btn" id="btn-cancel-intermap-link">Cancelar</button>
+          <button type="button" class="btn btn-purple" id="btn-confirm-intermap-link">
+            <i class="fas fa-check"></i> Vincular Enlace
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Modal Generación Automática de Todos los Sitios NetBox -->
   <div class="modal-overlay" id="modal-bulk-sites" style="display: none;">
     <div class="modal-card" style="width: 580px;">
@@ -1046,7 +1076,7 @@
   </div>
 
   <!-- Scripts -->
-  <script src="/static/js/api.js?v=1.9"></script>
-  <script src="/static/js/app.js?v=1.9"></script>
+  <script src="/static/js/api.js?v=2.0"></script>
+  <script src="/static/js/app.js?v=2.0"></script>
 </body>
 </html>

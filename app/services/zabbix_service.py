@@ -261,25 +261,47 @@ class ZabbixService:
 
             s_node = nodes_dict[s_id]
             t_node = nodes_dict[t_id]
-            s_rank = get_role_rank(s_node.get("device_type"))
-            t_rank = get_role_rank(t_node.get("device_type"))
 
-            # Determinar dirección de alimentación (uplink -> downlink)
-            if s_rank <= t_rank:
-                uplink_id, downlink_id = s_id, t_id
+            # Parsear extra_data del enlace
+            l_extra = {}
+            if l.get("extra_data"):
+                try:
+                    l_extra = json.loads(l["extra_data"]) if isinstance(l["extra_data"], str) else l["extra_data"]
+                except Exception:
+                    l_extra = {}
+
+            is_s_nav = s_node.get("device_type") in ("submap", "parent_map")
+            is_t_nav = t_node.get("device_type") in ("submap", "parent_map")
+            remote_node_id = l_extra.get("remote_node_id")
+
+            if (is_s_nav or is_t_nav) and remote_node_id:
+                local_dev_id = t_id if is_s_nav else s_id
+                nav_node = s_node if is_s_nav else t_node
+                is_parent_portal = nav_node.get("device_type") == "parent_map"
+
+                if is_parent_portal:
+                    in_degree[local_dev_id].append({"uplink_id": remote_node_id, "link": l, "is_intermap": True, "remote_name": l_extra.get("remote_node_name", "Uplink Remoto")})
+                else:
+                    out_degree[local_dev_id].append({"downlink_id": remote_node_id, "link": l, "is_intermap": True, "remote_name": l_extra.get("remote_node_name", "Downlink Remoto")})
             else:
-                uplink_id, downlink_id = t_id, s_id
+                s_rank = get_role_rank(s_node.get("device_type"))
+                t_rank = get_role_rank(t_node.get("device_type"))
 
-            in_degree[downlink_id].append({"uplink_id": uplink_id, "link": l})
-            out_degree[uplink_id].append({"downlink_id": downlink_id, "link": l})
-            adjacency[uplink_id].add(downlink_id)
+                if s_rank <= t_rank:
+                    uplink_id, downlink_id = s_id, t_id
+                else:
+                    uplink_id, downlink_id = t_id, s_id
+
+                in_degree[downlink_id].append({"uplink_id": uplink_id, "link": l})
+                out_degree[uplink_id].append({"downlink_id": downlink_id, "link": l})
+                adjacency[uplink_id].add(downlink_id)
 
             processed_links.append({
                 "link_id": l["id"],
-                "uplink_node_id": uplink_id,
-                "downlink_node_id": downlink_id,
-                "uplink_node_name": nodes_dict[uplink_id]["name"],
-                "downlink_node_name": nodes_dict[downlink_id]["name"],
+                "uplink_node_id": s_id,
+                "downlink_node_id": t_id,
+                "uplink_node_name": nodes_dict[s_id]["name"],
+                "downlink_node_name": nodes_dict[t_id]["name"],
                 "status": l["status"],
                 "rtt_ms": l["rtt_ms"]
             })
@@ -313,9 +335,9 @@ class ZabbixService:
                 "rank": get_role_rank(n.get("device_type")),
                 "relation_type": relation_type,
                 "uplink_ids": [u["uplink_id"] for u in uplinks],
-                "uplink_names": [nodes_dict[u["uplink_id"]]["name"] for u in uplinks],
+                "uplink_names": [nodes_dict[u["uplink_id"]]["name"] if u["uplink_id"] in nodes_dict else u.get("remote_name", "Remoto") for u in uplinks],
                 "downlink_ids": [d["downlink_id"] for d in downlinks],
-                "downlink_names": [nodes_dict[d["downlink_id"]]["name"] for d in downlinks],
+                "downlink_names": [nodes_dict[d["downlink_id"]]["name"] if d["downlink_id"] in nodes_dict else d.get("remote_name", "Remoto") for d in downlinks],
                 "zabbix_matched": matched_host is not None,
                 "zabbix_hostid": matched_host["hostid"] if matched_host else None,
                 "zabbix_hostname": matched_host["name"] if matched_host else None
