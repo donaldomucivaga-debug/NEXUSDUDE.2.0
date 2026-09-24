@@ -3234,8 +3234,38 @@ function renderDeviceList(devices, total) {
   });
 }
 
-// ─── 9. Pestaña de Mapas y Jerarquía CRUD ──────────────────────────────────
+// ─── 9. Pestaña de Mapas y Jerarquía Estilo Gestor de Archivos ───────────────
 let cachedMaps = [];
+const expandedMapIds = new Set();
+
+// Inicializar mapas expandidos desde localStorage
+try {
+  const savedExpanded = localStorage.getItem('nexusdude_expanded_map_ids');
+  if (savedExpanded) {
+    JSON.parse(savedExpanded).forEach(id => expandedMapIds.add(id));
+  } else {
+    expandedMapIds.add('default-map');
+  }
+} catch (e) {
+  expandedMapIds.add('default-map');
+}
+
+function saveExpandedMapIds() {
+  try {
+    localStorage.setItem('nexusdude_expanded_map_ids', JSON.stringify(Array.from(expandedMapIds)));
+  } catch (e) {}
+}
+
+function autoExpandAncestors(mapId) {
+  if (!mapId || !Array.isArray(cachedMaps)) return;
+  const mapDict = new Map(cachedMaps.map(m => [m.id, m]));
+  let cur = mapDict.get(mapId);
+  while (cur && cur.parent_map_id) {
+    expandedMapIds.add(cur.parent_map_id);
+    cur = mapDict.get(cur.parent_map_id);
+  }
+  saveExpandedMapIds();
+}
 
 async function refreshMapsTabList(filterText = '') {
   window.loadMapsTree = refreshMapsTabList;
@@ -3246,15 +3276,30 @@ async function refreshMapsTabList(filterText = '') {
 
   updateParentMapSelectOptions();
 
+  // Si hay un mapa activo, expandir sus ancestros para que sea inmediatamente visible
+  if (currentMap) {
+    autoExpandAncestors(currentMap.id);
+  }
+
   // Filtrar mapas si hay texto de búsqueda
+  const isSearching = Boolean(filterText && filterText.trim());
   let filtered = cachedMaps;
-  if (filterText && filterText.trim()) {
+  if (isSearching) {
     const q = filterText.trim().toLowerCase();
-    filtered = cachedMaps.filter(m => m.name.toLowerCase().includes(q) || (m.description && m.description.toLowerCase().includes(q)));
+    filtered = cachedMaps.filter(m => 
+      (m.name || '').toLowerCase().includes(q) || 
+      (m.description && m.description.toLowerCase().includes(q))
+    );
+  }
+
+  // Actualizar visibilidad del botón de limpiar búsqueda
+  const btnClearSearch = document.getElementById('btn-clear-search-maps');
+  if (btnClearSearch) {
+    btnClearSearch.style.display = isSearching ? 'block' : 'none';
   }
 
   if (filtered.length === 0) {
-    treeContainer.innerHTML = '<div style="color: var(--text-muted); font-size: 0.8rem; text-align: center; padding: 20px;">No se encontraron mapas.</div>';
+    treeContainer.innerHTML = '<div style="color: var(--text-muted); font-size: 0.8rem; text-align: center; padding: 20px;"><i class="fas fa-search" style="margin-bottom: 6px; display: block; opacity: 0.5;"></i>No se encontraron mapas con ese nombre.</div>';
     return;
   }
 
@@ -3270,73 +3315,139 @@ async function refreshMapsTabList(filterText = '') {
     }
   });
 
-  const isSearching = Boolean(filterText && filterText.trim());
   const rootMaps = cachedMaps.filter(m => !m.parent_map_id || !allIds.has(m.parent_map_id));
 
-  function renderMapNode(mapObj, level = 0, includeChildren = true) {
+  // Función recursiva para renderizar un nodo del árbol estilo gestor de archivos
+  function renderTreeNode(mapObj, level = 0, visited = new Set()) {
+    if (visited.has(mapObj.id)) return document.createDocumentFragment();
+    visited.add(mapObj.id);
+
     const wrapper = document.createElement('div');
-    wrapper.className = 'map-node-wrapper';
+    wrapper.className = 'tree-node-wrapper';
+    wrapper.dataset.mapId = mapObj.id;
 
-    const card = document.createElement('div');
-    const isSubmap = level > 0 || Boolean(mapObj.parent_map_id);
+    const children = childrenMap.get(mapObj.id) || [];
+    const hasChildren = children.length > 0;
+    const isExpanded = isSearching || expandedMapIds.has(mapObj.id);
     const isActive = currentMap && currentMap.id === mapObj.id;
-
-    card.className = `map-item-card ${isSubmap ? 'is-submap' : ''} ${isActive ? 'active' : ''}`;
-    const iconClass = isSubmap ? 'fa-folder submap' : 'fa-sitemap';
     const isDefault = mapObj.id === 'default-map';
 
-    card.innerHTML = `
-      <div class="map-card-head">
-        <div class="map-card-title-group" title="Hacer clic para abrir este mapa en el lienzo">
-          <i class="fas ${iconClass} map-card-icon"></i>
-          <span class="map-card-name">${mapObj.name}</span>
-        </div>
-        ${isActive ? '<span class="map-active-badge"><i class="fas fa-check"></i> Activo</span>' : ''}
-      </div>
+    // Fila principal del elemento
+    const row = document.createElement('div');
+    row.className = `tree-row ${isActive ? 'active' : ''}`;
+    row.title = `Mapa: ${mapObj.name}${mapObj.description ? ' (' + mapObj.description + ')' : ''}`;
 
-      <div class="map-card-meta">
-        <div class="map-card-stats">
-          <span><i class="fas fa-server"></i> ${mapObj.nodes_count || 0} nodos</span>
-          <span><i class="fas fa-project-diagram"></i> ${mapObj.links_count || 0} enlaces</span>
-        </div>
-        <div class="map-actions">
-          <button class="map-action-btn open-btn" title="Cargar este mapa en el lienzo">
-            <i class="fas fa-eye"></i>
-          </button>
-          <button class="map-action-btn add-sub-btn" title="Crear submapa hijo de este mapa">
-            <i class="fas fa-folder-plus"></i>
-          </button>
-          <button class="map-action-btn populate-btn" title="Poblar o sincronizar equipos desde NetBox">
-            <i class="fas fa-magic"></i>
-          </button>
-          <button class="map-action-btn edit-btn" title="Editar propiedades del mapa">
-            <i class="fas fa-pen"></i>
-          </button>
-          ${!isDefault ? `
-          <button class="map-action-btn delete-btn" title="Eliminar mapa">
-            <i class="fas fa-trash-alt"></i>
-          </button>` : ''}
-        </div>
-      </div>
+    // Caret de expansión (Flecha desplegable)
+    const caret = document.createElement('span');
+    caret.className = `tree-caret ${hasChildren ? '' : 'empty'}`;
+    if (hasChildren) {
+      caret.innerHTML = `<i class="fas ${isExpanded ? 'fa-chevron-down' : 'fa-chevron-right'}"></i>`;
+      caret.title = isExpanded ? 'Contraer submapas' : 'Desplegar submapas';
+    }
+
+    // Icono del nodo (Globo para raíz, Carpeta para ramas / submapas)
+    const icon = document.createElement('i');
+    if (!mapObj.parent_map_id) {
+      icon.className = 'fas fa-globe tree-icon root';
+    } else if (hasChildren) {
+      icon.className = `fas ${isExpanded ? 'fa-folder-open open' : 'fa-folder'} tree-icon`;
+    } else {
+      icon.className = 'fas fa-folder tree-icon submap';
+    }
+
+    // Nombre del mapa
+    const label = document.createElement('span');
+    label.className = 'tree-label';
+    label.textContent = mapObj.name;
+
+    // Badge con conteo de nodos
+    const badge = document.createElement('span');
+    badge.className = 'tree-badge';
+    badge.textContent = mapObj.nodes_count || 0;
+    badge.title = `${mapObj.nodes_count || 0} dispositivos / nodos en este mapa`;
+
+    // Botones de acción rápida en hover
+    const actions = document.createElement('div');
+    actions.className = 'tree-actions';
+    actions.innerHTML = `
+      <button type="button" class="tree-action-btn btn-tree-submap" title="Crear un nuevo submapa hijo"><i class="fas fa-folder-plus"></i></button>
+      <button type="button" class="tree-action-btn btn-tree-populate" title="Poblar o sincronizar equipos desde NetBox"><i class="fas fa-magic"></i></button>
+      <button type="button" class="tree-action-btn btn-tree-edit" title="Editar propiedades del mapa"><i class="fas fa-pen"></i></button>
+      ${!isDefault ? '<button type="button" class="tree-action-btn btn-tree-delete" title="Eliminar mapa"><i class="fas fa-trash-alt"></i></button>' : ''}
     `;
 
-    // Clic en abrir
-    card.querySelector('.map-card-title-group').addEventListener('click', () => loadMap(mapObj.id));
-    card.querySelector('.open-btn').addEventListener('click', (e) => {
-      e.stopPropagation();
+    row.appendChild(caret);
+    row.appendChild(icon);
+    row.appendChild(label);
+    row.appendChild(badge);
+    row.appendChild(actions);
+    wrapper.appendChild(row);
+
+    // Contenedor de submapas hijos
+    let childContainer = null;
+    if (hasChildren) {
+      childContainer = document.createElement('div');
+      childContainer.className = 'tree-children';
+      childContainer.style.display = isExpanded ? 'flex' : 'none';
+
+      children.forEach(child => {
+        childContainer.appendChild(renderTreeNode(child, level + 1, new Set(visited)));
+      });
+      wrapper.appendChild(childContainer);
+    }
+
+    // Handler para expandir / contraer al hacer clic en el caret
+    const toggleExpand = (e) => {
+      if (e) e.stopPropagation();
+      if (!hasChildren) return;
+
+      const currentlyOpen = expandedMapIds.has(mapObj.id);
+      if (currentlyOpen) {
+        expandedMapIds.delete(mapObj.id);
+      } else {
+        expandedMapIds.add(mapObj.id);
+      }
+      saveExpandedMapIds();
+
+      const newOpen = expandedMapIds.has(mapObj.id);
+      if (childContainer) {
+        childContainer.style.display = newOpen ? 'flex' : 'none';
+      }
+      caret.innerHTML = `<i class="fas ${newOpen ? 'fa-chevron-down' : 'fa-chevron-right'}"></i>`;
+      caret.title = newOpen ? 'Contraer submapas' : 'Desplegar submapas';
+      if (mapObj.parent_map_id) {
+        icon.className = `fas ${newOpen ? 'fa-folder-open open' : 'fa-folder'} tree-icon`;
+      }
+    };
+
+    if (hasChildren) {
+      caret.addEventListener('click', toggleExpand);
+    }
+
+    // Clic en la fila: cargar el mapa en el lienzo
+    row.addEventListener('click', (e) => {
+      if (e.target.closest('.tree-actions') || e.target.closest('.tree-caret')) return;
       loadMap(mapObj.id);
     });
 
-    // Botón crear submapa
-    card.querySelector('.add-sub-btn').addEventListener('click', (e) => {
-      e.stopPropagation();
-      openCreateMapModal(true, mapObj.id);
+    // Doble clic: si tiene hijos, toggle expand/collapse
+    row.addEventListener('dblclick', (e) => {
+      if (e.target.closest('.tree-actions') || e.target.closest('.tree-caret')) return;
+      if (hasChildren) toggleExpand(e);
     });
 
-    // Botón poblar desde NetBox
-    const popBtn = card.querySelector('.populate-btn');
-    if (popBtn) {
-      popBtn.addEventListener('click', async (e) => {
+    // Handlers de los botones de acción rápida
+    const btnSubmap = actions.querySelector('.btn-tree-submap');
+    if (btnSubmap) {
+      btnSubmap.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openCreateMapModal(true, mapObj.id);
+      });
+    }
+
+    const btnPopulate = actions.querySelector('.btn-tree-populate');
+    if (btnPopulate) {
+      btnPopulate.addEventListener('click', async (e) => {
         e.stopPropagation();
         if (!confirm(`¿Deseas poblar o sincronizar los equipos de NetBox para el mapa "${mapObj.name}"?`)) return;
         try {
@@ -3353,34 +3464,20 @@ async function refreshMapsTabList(filterText = '') {
       });
     }
 
-    // Botón editar mapa
-    card.querySelector('.edit-btn').addEventListener('click', (e) => {
-      e.stopPropagation();
-      openEditMapModal(mapObj);
-    });
-
-    // Botón eliminar mapa
-    const delBtn = card.querySelector('.delete-btn');
-    if (delBtn) {
-      delBtn.addEventListener('click', (e) => {
+    const btnEdit = actions.querySelector('.btn-tree-edit');
+    if (btnEdit) {
+      btnEdit.addEventListener('click', (e) => {
         e.stopPropagation();
-        handleDeleteMap(mapObj.id, mapObj.name);
+        openEditMapModal(mapObj);
       });
     }
 
-    wrapper.appendChild(card);
-
-    // Hijos recursivos en modo jerárquico
-    if (includeChildren) {
-      const children = childrenMap.get(mapObj.id) || [];
-      if (children.length > 0) {
-        const childContainer = document.createElement('div');
-        childContainer.className = 'map-children-container';
-        children.forEach(child => {
-          childContainer.appendChild(renderMapNode(child, level + 1, true));
-        });
-        wrapper.appendChild(childContainer);
-      }
+    const btnDelete = actions.querySelector('.btn-tree-delete');
+    if (btnDelete) {
+      btnDelete.addEventListener('click', (e) => {
+        e.stopPropagation();
+        handleDeleteMap(mapObj.id, mapObj.name);
+      });
     }
 
     return wrapper;
@@ -3389,12 +3486,12 @@ async function refreshMapsTabList(filterText = '') {
   if (isSearching) {
     // Modo búsqueda: mostrar directamente todos los mapas coincidentes
     filtered.forEach(m => {
-      treeContainer.appendChild(renderMapNode(m, 0, false));
+      treeContainer.appendChild(renderTreeNode(m, 0));
     });
   } else {
     // Modo jerárquico: mostrar desde las raíces
     rootMaps.forEach(root => {
-      treeContainer.appendChild(renderMapNode(root, 0, true));
+      treeContainer.appendChild(renderTreeNode(root, 0));
     });
   }
 }
@@ -4936,6 +5033,35 @@ window.addEventListener('DOMContentLoaded', async () => {
       mapSearchTimeout = setTimeout(() => {
         refreshMapsTabList(inputSearchMaps.value);
       }, 200);
+    });
+  }
+
+  // Botón limpiar búsqueda de mapas
+  const btnClearSearchMaps = document.getElementById('btn-clear-search-maps');
+  if (btnClearSearchMaps) {
+    btnClearSearchMaps.addEventListener('click', () => {
+      if (inputSearchMaps) inputSearchMaps.value = '';
+      refreshMapsTabList('');
+    });
+  }
+
+  // Botón contraer todas las carpetas del árbol
+  const btnCollapseAllMaps = document.getElementById('btn-collapse-all-maps');
+  if (btnCollapseAllMaps) {
+    btnCollapseAllMaps.addEventListener('click', () => {
+      expandedMapIds.clear();
+      saveExpandedMapIds();
+      refreshMapsTabList(inputSearchMaps ? inputSearchMaps.value : '');
+    });
+  }
+
+  // Botón expandir todas las carpetas del árbol
+  const btnExpandAllMaps = document.getElementById('btn-expand-all-maps');
+  if (btnExpandAllMaps) {
+    btnExpandAllMaps.addEventListener('click', () => {
+      (cachedMaps || []).forEach(m => expandedMapIds.add(m.id));
+      saveExpandedMapIds();
+      refreshMapsTabList(inputSearchMaps ? inputSearchMaps.value : '');
     });
   }
 
