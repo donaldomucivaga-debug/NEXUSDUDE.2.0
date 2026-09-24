@@ -2939,7 +2939,9 @@ function applyNodeStatusToCanvas(nodeId, statusData) {
   nodesLayer.batchDraw();
 }
 
-// ─── POLLING EN TIEMPO REAL: actualiza el mapa completo cada 45s ─────────────
+// ─── POLLING EN TIEMPO REAL: actualiza el mapa, nodos y enlaces cada 10s ────
+const REALTIME_POLL_INTERVAL_MS = 10000; // 10 segundos
+
 function startRealtimePolling(mapId) {
   // Limpiar polling anterior
   if (_realtimePollInterval) {
@@ -2951,13 +2953,24 @@ function startRealtimePolling(mapId) {
   const poll = async () => {
     if (!currentMap || currentMap.id !== mapId) return;
     try {
-      const data = await API.getMapRealtimeStatus(mapId);
-      if (!data || !data.nodes) return;
+      // 1. Obtener estado en tiempo real (Zabbix ping / SNMP / alertas) y datos actualizados del mapa en paralelo
+      const [realtimeData, mapDetail] = await Promise.all([
+        API.getMapRealtimeStatus(mapId).catch(e => {
+          console.warn('[Realtime] Error consultando status:', e);
+          return null;
+        }),
+        API.getMapDetail(mapId).catch(e => {
+          console.warn('[Realtime] Error consultando detalle del mapa:', e);
+          return null;
+        })
+      ]);
 
-      // Actualizar indicador de conectividad con Zabbix
+      if (!currentMap || currentMap.id !== mapId) return;
+
+      // 2. Actualizar indicador de conectividad con Zabbix
       const sourceDot = document.getElementById('telemetry-source-dot');
-      if (sourceDot) {
-        if (data.zabbix_connected === false) {
+      if (sourceDot && realtimeData) {
+        if (realtimeData.zabbix_connected === false) {
           sourceDot.style.color = '#ef4444';
           sourceDot.title = 'Zabbix Desconectado / Fuera de Línea';
         } else {
@@ -2966,28 +2979,150 @@ function startRealtimePolling(mapId) {
         }
       }
 
-      // Actualizar dot (SNMP) y contorno (PING) de cada nodo en el canvas
-      for (const [nodeId, nodeStatus] of Object.entries(data.nodes)) {
-        applyNodeStatusToCanvas(nodeId, nodeStatus);
-        // Si este nodo está seleccionado, refrescar panel también
-        if (selectedNode && selectedNode.id === nodeId) {
-          applyTelemetryToPanel(nodeStatus);
+      // 3. Sincronización Incremental de Nodos (si hubo altas, bajas o cambios en BD/NetBox)
+      if (mapDetail && Array.isArray(mapDetail.nodes)) {
+        const freshNodesMap = new Map();
+        mapDetail.nodes.forEach(n => freshNodesMap.set(n.id, n));
+
+        // a) Detectar nodos eliminados y removerlos del canvas
+        const currentNodesList = currentMap.nodes || [];
+        for (let i = currentNodesList.length - 1; i >= 0; i--) {
+          const localNode = currentNodesList[i];
+          if (!freshNodesMap.has(localNode.id)) {
+            const grp = nodeGroups.get(localNode.id);
+            if (grp) {
+              grp.destroy();
+              nodeGroups.delete(localNode.id);
+            }
+            currentNodesList.splice(i, 1);
+            if (selectedNode && selectedNode.id === localNode.id) {
+              deselectNode();
+            }
+          }
+        }
+
+        // b) Detectar nodos nuevos o actualizar existentes
+        for (const freshNode of mapDetail.nodes) {
+          const localNode = currentNodesList.find(n => n.id === freshNode.id);
+          const grp = nodeGroups.get(freshNode.id);
+
+          if (!grp || !localNode) {
+            // Nuevo nodo agregado: renderizarlo en el canvas
+            currentNodesList.push(freshNode);
+            renderNode(freshNode);
+          } else {
+            // Nodo existente: sincronizar propiedades de fondo (nombre, ip, pins, etc.)
+            let needsRerender = false;
+            if (localNode.name !== freshNode.name || localNode.ip !== freshNode.ip || localNode.device_type !== freshNode.device_type) {
+              needsRerender = true;
+            }
+            // Comparar pines
+            const oldPinsStr = JSON.stringify(localNode.extra_data?.pins || []);
+            const newPinsStr = JSON.stringify(freshNode.extra_data?.pins || []);
+            if (oldPinsStr !== newPinsStr) {
+              needsRerender = true;
+            }
+
+            // Sincronizar posición sólo si el usuario NO está arrastrando el nodo en este momento
+            const isDragging = grp.isDragging && grp.isDragging();
+            if (!isDragging) {
+              if (Math.abs(grp.x() - freshNode.x) > 1 || Math.abs(grp.y() - freshNode.y) > 1) {
+                grp.position({ x: freshNode.x, y: freshNode.y });
+                localNode.x = freshNode.x;
+                localNode.y = freshNode.y;
+              }
+            }
+
+            Object.assign(localNode, freshNode);
+
+            if (needsRerender && !isDragging) {
+              grp.destroy();
+              nodeGroups.delete(freshNode.id);
+              renderNode(localNode);
+            }
+          }
         }
       }
 
-      // Actualizar status local en currentMap
-      if (currentMap) {
-        currentMap.nodes.forEach(n => {
-          if (data.nodes[n.id]) {
-            n.status = data.nodes[n.id].status;
-            n.ping_status = data.nodes[n.id].ping_status;
-            n.snmp_status = data.nodes[n.id].snmp_status;
+      // 4. Sincronización Incremental de Enlaces (Links)
+      if (mapDetail && Array.isArray(mapDetail.links)) {
+        const freshLinksMap = new Map();
+        mapDetail.links.forEach(l => freshLinksMap.set(l.id, l));
+
+        const currentLinksList = currentMap.links || [];
+        // a) Remover enlaces eliminados
+        for (let i = currentLinksList.length - 1; i >= 0; i--) {
+          const localLink = currentLinksList[i];
+          if (!freshLinksMap.has(localLink.id)) {
+            const linkObj = linkLines.get(localLink.id);
+            if (linkObj && linkObj.line) {
+              linkObj.line.destroy();
+            }
+            linkLines.delete(localLink.id);
+            currentLinksList.splice(i, 1);
           }
-        });
-        updateAllLinkColors();
+        }
+
+        // b) Agregar nuevos enlaces o actualizar existentes
+        const nodesDict = new Map();
+        if (currentMap && currentMap.nodes) {
+          currentMap.nodes.forEach(n => nodesDict.set(n.id, n));
+        }
+
+        for (const freshLink of mapDetail.links) {
+          const localLink = currentLinksList.find(l => l.id === freshLink.id);
+          const linkObj = linkLines.get(freshLink.id);
+
+          if (!linkObj || !localLink) {
+            currentLinksList.push(freshLink);
+            renderLink(freshLink, nodesDict);
+          } else {
+            Object.assign(localLink, freshLink);
+            linkObj.link = localLink;
+          }
+        }
+
+        updateAllLinks();
       }
+
+      // 5. Aplicar Telemetría y Estados en Tiempo Real de Zabbix
+      if (realtimeData && realtimeData.nodes) {
+        for (const [nodeId, nodeStatus] of Object.entries(realtimeData.nodes)) {
+          applyNodeStatusToCanvas(nodeId, nodeStatus);
+          // Si este nodo está seleccionado en el panel de inspector, refrescar panel
+          if (selectedNode && selectedNode.id === nodeId) {
+            applyTelemetryToPanel(nodeStatus);
+          }
+        }
+
+        // Actualizar status local en currentMap.nodes
+        if (currentMap && currentMap.nodes) {
+          currentMap.nodes.forEach(n => {
+            if (realtimeData.nodes[n.id]) {
+              n.status = realtimeData.nodes[n.id].status;
+              n.ping_status = realtimeData.nodes[n.id].ping_status;
+              n.snmp_status = realtimeData.nodes[n.id].snmp_status;
+            }
+          });
+        }
+      }
+
+      // 6. Refrescar colores de líneas de enlace (verde / rojo según ping actual)
+      updateAllLinkColors();
+
+      // Batch draw layers
+      if (linksLayer) linksLayer.batchDraw();
+      if (nodesLayer) nodesLayer.batchDraw();
+
+      // Actualizar timestamp en panel si aplica
+      const lastUpdateEl = document.getElementById('telemetry-last-update');
+      if (lastUpdateEl) {
+        const d = new Date();
+        lastUpdateEl.textContent = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`;
+      }
+
     } catch (e) {
-      console.warn('[Realtime] Error en polling de estado:', e);
+      console.warn('[Realtime 10s Poll] Error en sincronización periódica:', e);
       const sourceDot = document.getElementById('telemetry-source-dot');
       if (sourceDot) {
         sourceDot.style.color = '#ef4444';
@@ -2996,9 +3131,9 @@ function startRealtimePolling(mapId) {
     }
   };
 
-  // Primera ejecución inmediata + polling cada 45s
+  // Primera ejecución inmediata + polling cada 10s
   poll();
-  _realtimePollInterval = setInterval(poll, 45000);
+  _realtimePollInterval = setInterval(poll, REALTIME_POLL_INTERVAL_MS);
 }
 
 function updateUrlHashState() {
