@@ -396,7 +396,7 @@ async def create_map_from_site(req: CreateMapFromSiteRequest, user: Dict[str, An
             sub_extra = json.dumps({
                 "target_map_id": new_map_id,
                 "site_name": site_name,
-                "device_count": len(devices)
+                "device_count": len(devices) if req.auto_populate else 0
             })
             await db.execute("""
                 INSERT INTO nodes (id, map_id, name, ip, device_type, site_name, x, y, status, extra_data)
