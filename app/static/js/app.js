@@ -1502,6 +1502,37 @@ function updateAllLinkColors() {
   linksLayer.batchDraw();
 }
 
+function createLinkPortBadge(text, color = '#38bdf8') {
+  const group = new Konva.Group({
+    listening: false,
+    perfectDrawEnabled: false
+  });
+  const padX = 4;
+  const padY = 2;
+  const txt = new Konva.Text({
+    text: text,
+    fontSize: 8.5,
+    fontFamily: 'monospace',
+    fontStyle: 'bold',
+    fill: '#f8fafc',
+    padding: 0
+  });
+  const bg = new Konva.Rect({
+    width: txt.width() + padX * 2,
+    height: txt.height() + padY * 2,
+    fill: 'rgba(15, 23, 42, 0.9)',
+    stroke: color,
+    strokeWidth: 1,
+    cornerRadius: 3
+  });
+  txt.x(padX);
+  txt.y(padY);
+  group.add(bg);
+  group.add(txt);
+  group.offset({ x: (txt.width() + padX * 2) / 2, y: (txt.height() + padY * 2) / 2 });
+  return group;
+}
+
 function renderLink(link, nodesDict) {
   const source = nodesDict.get(link.source_node_id);
   const target = nodesDict.get(link.target_node_id);
@@ -1530,6 +1561,42 @@ function renderLink(link, nodesDict) {
     id: link.id
   });
 
+  // Etiquetas flotantes de interfaces/puertos
+  let srcBadge = null;
+  let tgtBadge = null;
+
+  const updateBadgesPos = (ptsVec) => {
+    const p1x = ptsVec[0], p1y = ptsVec[1], p2x = ptsVec[2], p2y = ptsVec[3];
+    const dx = p2x - p1x;
+    const dy = p2y - p1y;
+    const len = Math.hypot(dx, dy);
+    if (len > 35) {
+      const offsetDist = Math.min(26, len * 0.22);
+      if (srcBadge) {
+        srcBadge.position({
+          x: p1x + (dx / len) * offsetDist,
+          y: p1y + (dy / len) * offsetDist
+        });
+      }
+      if (tgtBadge) {
+        tgtBadge.position({
+          x: p2x - (dx / len) * offsetDist,
+          y: p2y - (dy / len) * offsetDist
+        });
+      }
+    }
+  };
+
+  if (link.source_interface) {
+    srcBadge = createLinkPortBadge(link.source_interface, '#38bdf8');
+    linksLayer.add(srcBadge);
+  }
+  if (link.target_interface) {
+    tgtBadge = createLinkPortBadge(link.target_interface, '#a855f7');
+    linksLayer.add(tgtBadge);
+  }
+  updateBadgesPos(arrowPts);
+
   line.on('mouseenter', () => {
     document.body.style.cursor = 'pointer';
     line.stroke('#38bdf8');
@@ -1553,7 +1620,7 @@ function renderLink(link, nodesDict) {
   });
 
   linksLayer.add(line);
-  linkLines.set(link.id, { line, sourceId: source.id, targetId: target.id, link, sourceNode: source, targetNode: target });
+  linkLines.set(link.id, { line, srcBadge, tgtBadge, updateBadgesPos, sourceId: source.id, targetId: target.id, link, sourceNode: source, targetNode: target });
 }
 
 function openLinkPropertiesModal(link, sourceNode, targetNode) {
@@ -1785,15 +1852,18 @@ function openLinkPropertiesModal(link, sourceNode, targetNode) {
         link.cable_type = res.cable_type ?? cableType;
         link.cable_status = res.cable_status ?? link.cable_status;
 
-        // Actualizar la flecha en el lienzo
+        // Re-renderizar el enlace para actualizar etiquetas de puertos y flechas
         const linkEntry = linkLines.get(link.id);
-        if (linkEntry && linkEntry.line) {
-          const pts = calculateLinkEndpoints(sourceNode, targetNode, link);
-          const arrowPts = getArrowPointsForDirection(pts, chosenDir);
-          linkEntry.line.points(arrowPts);
-          linkEntry.line.tension(0);
-          linksLayer.batchDraw();
+        if (linkEntry) {
+          if (linkEntry.line) linkEntry.line.destroy();
+          if (linkEntry.srcBadge) linkEntry.srcBadge.destroy();
+          if (linkEntry.tgtBadge) linkEntry.tgtBadge.destroy();
+          linkLines.delete(link.id);
         }
+        const dict = new Map();
+        if (currentMap && currentMap.nodes) currentMap.nodes.forEach(n => dict.set(n.id, n));
+        renderLink(link, dict);
+        linksLayer.batchDraw();
 
         cleanUp();
       } catch (err) {
@@ -1808,8 +1878,10 @@ function openLinkPropertiesModal(link, sourceNode, targetNode) {
       try {
         await API.deleteLink(link.id);
         const linkEntry = linkLines.get(link.id);
-        if (linkEntry && linkEntry.line) {
-          linkEntry.line.destroy();
+        if (linkEntry) {
+          if (linkEntry.line) linkEntry.line.destroy();
+          if (linkEntry.srcBadge) linkEntry.srcBadge.destroy();
+          if (linkEntry.tgtBadge) linkEntry.tgtBadge.destroy();
         }
         linkLines.delete(link.id);
         if (currentMap && currentMap.links) {
@@ -1832,16 +1904,17 @@ function updateAttachedLinks(nodeId, newX, newY) {
   currentMap.nodes.forEach(n => nodeMap.set(n.id, n));
 
   linkLines.forEach((linkObj, linkId) => {
-    const { line, sourceId, targetId, link } = linkObj;
+    const { line, srcBadge, tgtBadge, updateBadgesPos, sourceId, targetId, link } = linkObj;
     if (sourceId === nodeId || targetId === nodeId) {
       const srcNode = nodeMap.get(sourceId);
       const tgtNode = nodeMap.get(targetId);
-      if (srcNode && tgtNode) {
+      if (srcNode && tgtNode && line) {
         const pts = calculateLinkEndpoints(srcNode, tgtNode, link);
         const direction = link.extra_data?.direction || 'source_to_target';
         const arrowPts = getArrowPointsForDirection(pts, direction);
         line.points(arrowPts);
         line.tension(0);
+        if (updateBadgesPos) updateBadgesPos(arrowPts);
         hasUpdated = true;
       }
     }
@@ -1858,7 +1931,7 @@ function updateAllLinks() {
   currentMap.nodes.forEach(n => nodeMap.set(n.id, n));
 
   linkLines.forEach((linkObj, linkId) => {
-    const { line, sourceId, targetId, link } = linkObj;
+    const { line, srcBadge, tgtBadge, updateBadgesPos, sourceId, targetId, link } = linkObj;
     const srcNode = nodeMap.get(sourceId);
     const tgtNode = nodeMap.get(targetId);
     if (srcNode && tgtNode && line) {
@@ -1867,6 +1940,7 @@ function updateAllLinks() {
       const arrowPts = getArrowPointsForDirection(pts, direction);
       line.points(arrowPts);
       line.tension(0);
+      if (updateBadgesPos) updateBadgesPos(arrowPts);
     }
   });
   linksLayer.batchDraw();
@@ -2169,11 +2243,169 @@ async function connectMultipleTargetNodes(sourceNode, targetNodes) {
   cancelLinkMode();
 }
 
+function promptPortConnectModal(sourceNode, targetNode) {
+  return new Promise((resolve) => {
+    const modal = document.getElementById('modal-port-connect');
+    if (!modal) {
+      resolve({ confirmed: true, source_interface: '', target_interface: '', cable_type: 'cat6', direction: 'source_to_target' });
+      return;
+    }
+
+    const srcName = document.getElementById('port-connect-src-name');
+    const srcModel = document.getElementById('port-connect-src-model');
+    const tgtName = document.getElementById('port-connect-tgt-name');
+    const tgtModel = document.getElementById('port-connect-tgt-model');
+    const selectSrc = document.getElementById('port-connect-select-src');
+    const selectTgt = document.getElementById('port-connect-select-tgt');
+    const inputSrc = document.getElementById('port-connect-input-src');
+    const inputTgt = document.getElementById('port-connect-input-tgt');
+    const chipsSrc = document.getElementById('port-connect-src-chips');
+    const chipsTgt = document.getElementById('port-connect-tgt-chips');
+    const badgeSrc = document.getElementById('port-connect-src-badge');
+    const badgeTgt = document.getElementById('port-connect-tgt-badge');
+    const selectCable = document.getElementById('port-connect-cable-type');
+    const selectDir = document.getElementById('port-connect-direction');
+
+    const btnConfirm = document.getElementById('btn-confirm-port-connect');
+    const btnQuick = document.getElementById('btn-port-connect-quick');
+    const btnCancel = document.getElementById('btn-cancel-port-connect');
+    const btnClose = document.getElementById('btn-close-port-connect');
+
+    const sName = sourceNode.name || 'Nodo A';
+    const tName = targetNode.name || 'Nodo B';
+    if (srcName) srcName.textContent = sName;
+    if (srcModel) srcModel.textContent = `${sourceNode.extra_data?.model || sourceNode.device_type || 'Dispositivo'} (${sourceNode.ip || ''})`;
+    if (tgtName) tgtName.textContent = tName;
+    if (tgtModel) tgtModel.textContent = `${targetNode.extra_data?.model || targetNode.device_type || 'Dispositivo'} (${targetNode.ip || ''})`;
+
+    if (inputSrc) { inputSrc.value = ''; inputSrc.style.display = 'none'; }
+    if (inputTgt) { inputTgt.value = ''; inputTgt.style.display = 'none'; }
+    if (selectCable) selectCable.value = 'cat6';
+    if (selectDir) selectDir.value = 'source_to_target';
+
+    const setupNodePorts = async (node, selectEl, inputEl, chipsEl, badgeEl) => {
+      if (!selectEl) return;
+      selectEl.innerHTML = '<option value="">⏳ Cargando puertos...</option>';
+      if (chipsEl) chipsEl.innerHTML = '';
+      if (badgeEl) badgeEl.textContent = 'Cargando...';
+
+      let ifaces = [];
+      if (node && node.device_id) {
+        try {
+          ifaces = await API.getDeviceInterfaces(node.device_id);
+        } catch (e) {
+          console.warn('Error fetching ifaces:', e);
+        }
+      }
+
+      selectEl.innerHTML = '';
+      const defOpt = document.createElement('option');
+      defOpt.value = '';
+      defOpt.textContent = '-- Seleccionar Puerto --';
+      selectEl.appendChild(defOpt);
+
+      if (badgeEl) badgeEl.textContent = `${ifaces.length} puertos`;
+
+      if (Array.isArray(ifaces) && ifaces.length > 0) {
+        ifaces.forEach((iface, idx) => {
+          const opt = document.createElement('option');
+          opt.value = iface.name;
+          opt.dataset.ifaceId = iface.id;
+          const speedStr = iface.type ? ` (${iface.type})` : '';
+          const connStr = iface.is_connected ? ' [Ocupado]' : '';
+          opt.textContent = `${iface.name}${speedStr}${connStr}`;
+          if (idx === 0 && !iface.is_connected) {
+            opt.selected = true;
+          }
+          selectEl.appendChild(opt);
+
+          if (chipsEl) {
+            const chip = document.createElement('button');
+            chip.type = 'button';
+            chip.className = 'badge';
+            const isFiber = (iface.type || '').includes('sfp');
+            const isConn = iface.is_connected;
+            chip.style.cssText = `font-size: 0.68rem; padding: 3px 6px; cursor: pointer; border-radius: 4px; border: 1px solid ${isConn ? 'rgba(239,68,68,0.4)' : (isFiber ? 'rgba(168,85,247,0.4)' : 'rgba(56,189,248,0.4)')}; background: ${isConn ? 'rgba(239,68,68,0.1)' : (isFiber ? 'rgba(168,85,247,0.1)' : 'rgba(56,189,248,0.1)')}; color: ${isConn ? '#f87171' : (isFiber ? '#c084fc' : '#38bdf8')};`;
+            chip.textContent = `${isFiber ? '⚡ ' : '🔌 '}${iface.name}${isConn ? ' ●' : ''}`;
+            chip.title = `${iface.name} (${iface.type || 'Port'})${isConn ? ' - Conectado' : ' - Disponible'}`;
+            chip.onclick = () => {
+              selectEl.value = iface.name;
+              if (inputEl) inputEl.style.display = 'none';
+              Array.from(chipsEl.children).forEach(c => c.style.outline = 'none');
+              chip.style.outline = '2px solid #38bdf8';
+            };
+            chipsEl.appendChild(chip);
+          }
+        });
+      }
+
+      const manualOpt = document.createElement('option');
+      manualOpt.value = '__manual__';
+      manualOpt.textContent = '✏️ Puerto Personalizado...';
+      selectEl.appendChild(manualOpt);
+
+      selectEl.onchange = () => {
+        if (selectEl.value === '__manual__') {
+          if (inputEl) {
+            inputEl.style.display = 'block';
+            inputEl.focus();
+          }
+        } else {
+          if (inputEl) {
+            inputEl.style.display = 'none';
+            inputEl.value = selectEl.value;
+          }
+        }
+      };
+    };
+
+    setupNodePorts(sourceNode, selectSrc, inputSrc, chipsSrc, badgeSrc);
+    setupNodePorts(targetNode, selectTgt, inputTgt, chipsTgt, badgeTgt);
+
+    modal.style.display = 'flex';
+
+    const cleanUp = () => {
+      modal.style.display = 'none';
+      btnConfirm.onclick = null;
+      btnQuick.onclick = null;
+      btnCancel.onclick = null;
+      btnClose.onclick = null;
+    };
+
+    btnConfirm.onclick = () => {
+      let srcIface = selectSrc && selectSrc.value === '__manual__' ? (inputSrc ? inputSrc.value.trim() : '') : (selectSrc ? selectSrc.value : '');
+      let tgtIface = selectTgt && selectTgt.value === '__manual__' ? (inputTgt ? inputTgt.value.trim() : '') : (selectTgt ? selectTgt.value : '');
+      const cableType = selectCable ? selectCable.value : 'cat6';
+      const direction = selectDir ? selectDir.value : 'source_to_target';
+      cleanUp();
+      resolve({ confirmed: true, source_interface: srcIface, target_interface: tgtIface, cable_type: cableType, direction });
+    };
+
+    btnQuick.onclick = () => {
+      cleanUp();
+      resolve({ confirmed: true, source_interface: '', target_interface: '', cable_type: 'cat6', direction: 'source_to_target', is_quick: true });
+    };
+
+    btnCancel.onclick = () => {
+      cleanUp();
+      resolve({ confirmed: false });
+    };
+
+    btnClose.onclick = () => {
+      cleanUp();
+      resolve({ confirmed: false });
+    };
+  });
+}
+
 async function connectSingleTargetNode(sourceNode, node) {
   const isSourceNav = sourceNode.device_type === 'submap' || sourceNode.device_type === 'parent_map' || !!sourceNode.extra_data?.is_parent_shortcut;
   const isTargetNav = node.device_type === 'submap' || node.device_type === 'parent_map' || !!node.extra_data?.is_parent_shortcut;
 
   let linkExtra = {};
+  let srcIface = '';
+  let tgtIface = '';
+  let cableType = 'cat6';
 
   // ── Interconexión Inter-Mapa a través de Portal de Navegación ──
   if (isSourceNav || isTargetNav) {
@@ -2203,7 +2435,6 @@ async function connectSingleTargetNode(sourceNode, node) {
           }
 
           if (remoteNode.is_simple) {
-            // Enlace Simple (Visual): Solo flecha visual directa, sin crear pines ni alimentar Zabbix BSM
             linkExtra = {
               is_visual_only: true,
               is_simple_link: true,
@@ -2214,7 +2445,6 @@ async function connectSingleTargetNode(sourceNode, node) {
             const pinId = 'pin-' + Date.now().toString(36);
             const isParentNav = navNode.device_type === 'parent_map' || !!navNode.extra_data?.is_parent_shortcut;
 
-            // 1. Agregar Pin al nodo de navegación local
             if (!navNode.extra_data) navNode.extra_data = {};
             if (!navNode.extra_data.pins) navNode.extra_data.pins = [];
             navNode.extra_data.pins.push({
@@ -2226,7 +2456,6 @@ async function connectSingleTargetNode(sourceNode, node) {
             });
             await API.updateNode(navNode.id, { extra_data: navNode.extra_data });
 
-            // 2. Agregar Pin recíproco al nodo de navegación complementario en el mapa destino
             const complementaryNav = targetMapDetail.nodes.find(n => (isParentNav ? n.device_type === 'submap' : (n.device_type === 'parent_map' || n.extra_data?.is_parent_shortcut)));
             if (complementaryNav) {
               if (!complementaryNav.extra_data) complementaryNav.extra_data = {};
@@ -2240,7 +2469,6 @@ async function connectSingleTargetNode(sourceNode, node) {
               });
               await API.updateNode(complementaryNav.id, { extra_data: complementaryNav.extra_data });
 
-              // Crear enlace en el submapa/padre si aún no existe
               try {
                 await API.createLink({
                   map_id: targetMapId,
@@ -2272,7 +2500,6 @@ async function connectSingleTargetNode(sourceNode, node) {
               remote_map_id: targetMapId
             };
 
-            // Re-renderizar el nodo de navegación local para mostrar el nuevo pin
             const grpNav = nodeGroups.get(navNode.id);
             if (grpNav) grpNav.destroy();
             renderNode(navNode);
@@ -2283,6 +2510,17 @@ async function connectSingleTargetNode(sourceNode, node) {
         console.error('Error procesando enlace inter-mapa:', mErr);
       }
     }
+  } else if (sourceNode.device_id || node.device_id) {
+    // Si al menos uno de los nodos es un equipo gestionado en NetBox, solicitar selección visual de puertos
+    const portRes = await promptPortConnectModal(sourceNode, node);
+    if (!portRes || !portRes.confirmed) {
+      cancelLinkMode();
+      return;
+    }
+    srcIface = portRes.source_interface || '';
+    tgtIface = portRes.target_interface || '';
+    cableType = portRes.cable_type || 'cat6';
+    linkExtra.direction = portRes.direction || 'source_to_target';
   }
 
   try {
@@ -2294,6 +2532,9 @@ async function connectSingleTargetNode(sourceNode, node) {
       map_id: currentMap.id,
       source_node_id: sourceNode.id,
       target_node_id: node.id,
+      source_interface: srcIface,
+      target_interface: tgtIface,
+      cable_type: cableType,
       status: 'ok',
       extra_data: linkExtra
     });
@@ -2315,7 +2556,6 @@ async function connectSingleTargetNode(sourceNode, node) {
 
 // ─── 6. Inspector de Propiedades del Nodo ───────────────────────────────────
 
-// Cache for realtime telemetry polling interval
 let _realtimePollInterval = null;
 
 function selectNode(node) {
@@ -2331,7 +2571,6 @@ function selectNode(node) {
     nodesLayer.batchDraw();
   }
 
-  // Actualizar panel lateral
   document.getElementById('no-selection-msg').style.display = 'none';
   document.getElementById('node-properties-panel').style.display = 'block';
 
@@ -2339,7 +2578,6 @@ function selectNode(node) {
   const isParentShortcut = node.device_type === 'parent_map' || !!extra.is_parent_shortcut;
   const isSubmap = node.device_type === 'submap' || isParentShortcut;
 
-  // Título y badge
   document.getElementById('prop-node-title').textContent = node.name || 'Sin Nombre';
   const badgeEl = document.getElementById('prop-node-type-badge');
   if (badgeEl) {
@@ -2356,7 +2594,6 @@ function selectNode(node) {
     }
   }
 
-  // Subtítulo
   const subtitleEl = document.getElementById('prop-node-subtitle');
   if (isParentShortcut) {
     subtitleEl.textContent = 'Portal de Navegación a Nivel Superior';
@@ -2368,14 +2605,12 @@ function selectNode(node) {
     subtitleEl.textContent = 'Ficha técnica NetBox';
   }
 
-  // Datos Técnicos Observables (Read-Only)
   const ipLinkEl = document.getElementById('prop-node-ip-link');
   const ipTextEl = document.getElementById('prop-node-ip');
   const webAdminBtn = document.getElementById('btn-open-device-web');
 
   const rawIp = (node.ip || '').trim();
   if (rawIp && !isSubmap) {
-    // Limpiar máscara si viene con formato CIDR (ej: 10.9.8.52/24 -> 10.9.8.52)
     const cleanIp = rawIp.split('/')[0].trim();
     if (ipTextEl) ipTextEl.textContent = rawIp;
 
@@ -2420,14 +2655,12 @@ function selectNode(node) {
 
   document.getElementById('prop-node-coords').textContent = `X: ${Math.round(node.x)}, Y: ${Math.round(node.y)}`;
 
-  // Enlace directo a NetBox
   const netboxBtn = document.getElementById('btn-open-netbox');
   if (node.device_id && !isParentShortcut) {
     const host = window.location.hostname || '10.9.1.6';
     netboxBtn.href = `https://${host}:8443/dcim/devices/${node.device_id}/`;
     netboxBtn.style.display = 'inline-flex';
 
-    // Enriquecer datos si faltan detalles de hardware
     if (!extra.serial || !extra.model) {
       API.getDeviceById(node.device_id).then(dev => {
         if (dev && selectedNode && selectedNode.id === node.id) {
@@ -2450,7 +2683,6 @@ function selectNode(node) {
     netboxBtn.style.display = 'none';
   }
 
-  // Enlace directo a Zabbix
   const zabbixBtn = document.getElementById('btn-open-zabbix');
   if (zabbixBtn) {
     if (!isSubmap && !isParentShortcut && node.name) {
@@ -2463,7 +2695,6 @@ function selectNode(node) {
     }
   }
 
-  // Acción de Convertir a Submapa vs Entrar a Submapa
   const convertSubmapBox = document.getElementById('convert-submap-action-box');
   const submapBox = document.getElementById('submap-action-box');
   const btnEnterSubmap = document.getElementById('btn-enter-submap');
@@ -2505,6 +2736,84 @@ function selectNode(node) {
       loadNodeTelemetry(node.id);
     } else {
       telemetryPanel.style.display = 'none';
+    }
+  }
+
+  // ─── PUERTOS & INTERFACES FÍSICAS (NetBox) ──────────────────────────────
+  const portsCard = document.getElementById('node-ports-card');
+  const portsGrid = document.getElementById('node-ports-grid');
+  const portsBadge = document.getElementById('node-ports-count-badge');
+  const portsLoading = document.getElementById('node-ports-loading');
+
+  if (portsCard && portsGrid) {
+    if (node.device_id && !isParentShortcut && !isSubmap) {
+      portsCard.style.display = 'block';
+      if (portsLoading) portsLoading.style.display = 'block';
+      portsGrid.innerHTML = '';
+      if (portsBadge) portsBadge.textContent = '...';
+
+      API.getDeviceInterfaces(node.device_id).then(ifaces => {
+        if (!selectedNode || selectedNode.id !== node.id) return;
+        if (portsLoading) portsLoading.style.display = 'none';
+        if (portsBadge) portsBadge.textContent = `${ifaces.length} Puertos`;
+
+        if (!ifaces || ifaces.length === 0) {
+          portsGrid.innerHTML = '<div style="grid-column: span 3; font-size: 0.72rem; color: var(--text-muted); text-align: center;">Sin puertos registrados</div>';
+          return;
+        }
+
+        portsGrid.innerHTML = '';
+        ifaces.forEach(iface => {
+          const isConn = iface.is_connected;
+          const isFiber = (iface.type || '').includes('sfp');
+          const chip = document.createElement('div');
+          chip.className = 'port-slot-chip';
+          chip.style.cssText = `
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            background: ${isConn ? 'rgba(56, 189, 248, 0.12)' : 'rgba(15, 23, 42, 0.7)'};
+            border: 1px solid ${isConn ? '#38bdf8' : (isFiber ? 'rgba(168, 85, 247, 0.4)' : 'rgba(148, 163, 184, 0.25)')};
+            border-radius: 5px; padding: 4px 3px; cursor: pointer; transition: all 0.15s ease;
+          `;
+          
+          const icon = isFiber ? '<i class="fas fa-bolt" style="font-size: 0.65rem; color: #c084fc;"></i>' : '<i class="fas fa-ethernet" style="font-size: 0.65rem; color: #38bdf8;"></i>';
+          const statusDot = `<span style="display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: ${isConn ? '#10b981' : '#64748b'}; margin-left: 2px;"></span>`;
+          
+          chip.innerHTML = `
+            <div style="font-size: 0.68rem; font-weight: 700; color: #f8fafc; display: flex; align-items: center; gap: 3px;">
+              ${icon} <span>${iface.name}</span> ${statusDot}
+            </div>
+            <div style="font-size: 0.58rem; color: var(--text-muted); margin-top: 1px;">
+              ${iface.type ? (iface.type.includes('sfp') ? 'SFP+' : '1G') : 'Port'}
+            </div>
+          `;
+
+          const peerInfo = iface.connected_device ? `Conectado a ${iface.connected_device} (${iface.connected_interface})` : (isConn ? 'Conectado' : 'Disponible');
+          chip.title = `${iface.name} (${iface.type || 'Port'}) — ${peerInfo}. Clic para iniciar trazado de enlace desde este puerto.`;
+
+          chip.onmouseenter = () => {
+            chip.style.transform = 'translateY(-1px)';
+            chip.style.borderColor = '#38bdf8';
+            chip.style.boxShadow = '0 2px 6px rgba(56, 189, 248, 0.25)';
+          };
+          chip.onmouseleave = () => {
+            chip.style.transform = '';
+            chip.style.borderColor = isConn ? '#38bdf8' : (isFiber ? 'rgba(168, 85, 247, 0.4)' : 'rgba(148, 163, 184, 0.25)');
+            chip.style.boxShadow = '';
+          };
+
+          chip.onclick = () => {
+            startLinkMode();
+            handleLinkNodeClick(node);
+          };
+
+          portsGrid.appendChild(chip);
+        });
+      }).catch(err => {
+        if (portsLoading) portsLoading.style.display = 'none';
+        portsGrid.innerHTML = `<div style="grid-column: span 3; font-size: 0.7rem; color: #f87171;">Error cargando puertos: ${err.message}</div>`;
+      });
+    } else {
+      portsCard.style.display = 'none';
     }
   }
 
