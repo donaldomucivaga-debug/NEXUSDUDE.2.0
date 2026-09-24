@@ -156,3 +156,29 @@ async def get_map_links_telemetry(map_id: str, user: Dict[str, Any] = Depends(ge
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error obteniendo telemetría de enlaces del mapa: {str(e)}")
 
+@router.get("/gpon-branch/{node_id}")
+async def get_gpon_branch_telemetry(node_id: str, user: Dict[str, Any] = Depends(get_current_user)):
+    """
+    Obtiene la telemetría completa de un brazo FTTH / ramal GPON:
+    - Estado de puerto (Up/Down)
+    - Tráfico en tiempo real (In/Out)
+    - Volumen acumulado de datos
+    - Potencia óptica de clientes ONUs: conteo y promedio de Típicos (> -27 dBm) y Atípicos (<= -27 dBm)
+    """
+    try:
+        data = await zabbix_service.get_gpon_branch_telemetry(node_id)
+        return data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error obteniendo telemetría de brazo GPON: {str(e)}")
+
+@router.get("/olt/{olt_ip_or_name}/gpon-ports")
+async def get_olt_gpon_ports(olt_ip_or_name: str, user: Dict[str, Any] = Depends(get_current_user)):
+    """
+    Obtiene la lista de puertos GPON detectados en Zabbix para una OLT seleccionada.
+    """
+    try:
+        ports = await zabbix_service.get_olt_gpon_ports(olt_ip_or_name)
+        return ports
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error listando puertos GPON de la OLT: {str(e)}")
+

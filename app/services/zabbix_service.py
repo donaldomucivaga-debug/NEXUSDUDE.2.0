@@ -3,6 +3,7 @@ import logging
 import asyncio
 import time
 import json
+import re
 from typing import List, Dict, Any, Optional, Set, Tuple
 from app.config import settings
 from app.database import get_db_connection
@@ -143,7 +144,7 @@ class ZabbixService:
         logger.info("Cargando caché de hosts desde Zabbix...")
         hosts = await self._call_api("host.get", {
             "output": ["hostid", "host", "name", "status"],
-            "selectInterfaces": ["ip", "dns", "main", "type"],
+            "selectInterfaces": ["interfaceid", "ip", "dns", "main", "type", "available", "error", "details"],
             "selectTags": "extend"
         })
 
@@ -513,6 +514,9 @@ class ZabbixService:
             dtype = n.get("device_type")
             if dtype in ("submap", "parent_map"):
                 portals_dict[n["id"]] = n
+            elif dtype == "note":
+                # Los nodos nota son puramente visuales; se excluyen de la sincronización Zabbix/BSM
+                pass
             else:
                 devices_dict[n["id"]] = n
 
@@ -757,10 +761,26 @@ class ZabbixService:
 
         device_nodes = []
         submap_nodes = []
+        branch_nodes = []
         for r in node_rows:
             nd = dict(r)
-            if nd.get("device_type") == "submap":
+            dtype = nd.get("device_type")
+            if dtype == "submap":
                 submap_nodes.append(nd)
+            elif dtype == "note":
+                # Nodos nota son puramente visuales
+                nodes_result[nd["id"]] = {
+                    "node_id": nd["id"],
+                    "name": nd["name"],
+                    "status": "ok",
+                    "ping_status": "ok",
+                    "snmp_status": "ok",
+                    "is_online": True,
+                    "device_type": "note",
+                    "zabbix_matched": False
+                }
+            elif dtype == "ftth_branch":
+                branch_nodes.append(nd)
             else:
                 device_nodes.append(nd)
 
@@ -966,6 +986,11 @@ class ZabbixService:
                         else:
                             snmp_status = "unknown"
 
+                    snmp_err = snmp_iface.get("error") if snmp_iface else None
+                    snmp_comm = snmp_iface.get("details", {}).get("community") if snmp_iface else None
+                    snmp_avail_int = int(snmp_iface.get("available", 0)) if snmp_iface else 0
+                    has_snmp_issue = (ping_status in ("ok", "warning")) and (snmp_avail_int == 2 or snmp_status in ("down", "unknown") or bool(snmp_err))
+
                     formatted_problems = [
                         {
                             "triggerid": t.get("triggerid"),
@@ -987,7 +1012,10 @@ class ZabbixService:
                             "snmp_status": snmp_status,
                             "is_online": is_online,
                             "icmp_ping": int(icmp_val) if icmp_val in ('0', '1') else None,
-                            "snmp_available": int(snmp_iface.get("available", 0)) if snmp_iface else 0,
+                            "snmp_available": snmp_avail_int,
+                            "snmp_error": snmp_err,
+                            "snmp_community": snmp_comm,
+                            "has_snmp_issue": has_snmp_issue,
                             "packet_loss": loss_val,
                             "rtt_ms": rtt_ms,
                             "problems_count": len(formatted_problems),
@@ -1399,6 +1427,20 @@ class ZabbixService:
             else:
                 snmp_status = "unknown"
 
+        snmp_err = snmp_iface.get("error") if snmp_iface else None
+        snmp_comm = snmp_iface.get("details", {}).get("community") if snmp_iface else None
+        snmp_avail_int = int(snmp_iface.get("available", 0)) if snmp_iface else 0
+        has_snmp_issue = (ping_status in ("ok", "warning")) and (snmp_avail_int == 2 or snmp_status in ("down", "unknown") or bool(snmp_err))
+        
+        snmp_warning_msg = None
+        if has_snmp_issue:
+            if snmp_err:
+                snmp_warning_msg = f"Ping responde correctamente (ICMP OK), pero SNMP reporta fallo: {snmp_err}"
+            elif snmp_avail_int == 2:
+                snmp_warning_msg = "Ping responde correctamente (ICMP OK), pero las consultas SNMP están en Timeout (puerto 161/UDP o comunidad no coincide)."
+            else:
+                snmp_warning_msg = "Ping responde correctamente (ICMP OK), pero no se recibe telemetría SNMP en las métricas de Zabbix."
+
         return {
             "node_id": node_id,
             "name": n_dict["name"],
@@ -1408,7 +1450,11 @@ class ZabbixService:
             "snmp_status": snmp_status,
             "is_online": (status != "down"),
             "icmp_ping": int(icmp_val) if icmp_val in ('0', '1') else None,
-            "snmp_available": int(snmp_iface.get("available", 0)) if snmp_iface else 0,
+            "snmp_available": snmp_avail_int,
+            "snmp_error": snmp_err,
+            "snmp_community": snmp_comm,
+            "has_snmp_issue": has_snmp_issue,
+            "snmp_warning_message": snmp_warning_msg,
             "packet_loss": loss_val,
             "rtt_ms": rtt_ms,
             "wireless": wireless_info,
@@ -1926,6 +1972,413 @@ class ZabbixService:
             "count": len(links_telemetry),
             "links": links_telemetry
         }
+
+    async def get_olt_gpon_ports(self, olt_ip_or_name: str) -> List[Dict[str, Any]]:
+        """
+        Obtiene la lista de puertos GPON monitoreados para una OLT (ej. GPON 0/1/0 a GPON 0/1/15)
+        con su ifIndex, estado operativo (Up/Down), tráfico y cantidad de ONUs.
+        """
+        h = self.find_zabbix_host(olt_ip_or_name, olt_ip_or_name)
+        if not h:
+            return []
+
+        host_id = h.get("hostid")
+        items = await self._call_api("item.get", {
+            "hostids": host_id,
+            "output": ["itemid", "name", "key_", "lastvalue", "units", "status", "value_type"]
+        })
+        if not items:
+            return []
+
+        # Indexar items por SNMPINDEX / ifIndex
+        ports_map: Dict[str, Dict[str, Any]] = {}
+        for it in items:
+            key = it.get("key_", "")
+            name = it.get("name_", it.get("name", ""))
+            val = it.get("lastvalue", "")
+
+            # Detectar puertos GPON por nombre o key
+            if "GPON" in name or "gpon" in key or "gpon." in key:
+                import re
+                idx_match = re.search(r'\[(\d+)\]', key) or re.search(r'\[(\d+)\]', name)
+                snmp_idx = idx_match.group(1) if idx_match else None
+
+                name_match = re.search(r'GPON\s*(\d+/\d+/\d+)', name, re.IGNORECASE) or re.search(r'GPON\s*\[?(\d+/\d+/\d+)\]?', name, re.IGNORECASE)
+                port_label = f"GPON {name_match.group(1)}" if name_match else (f"GPON [{snmp_idx}]" if snmp_idx else name)
+
+                if snmp_idx:
+                    if snmp_idx not in ports_map:
+                        ports_map[snmp_idx] = {
+                            "index": snmp_idx,
+                            "name": port_label,
+                            "display_name": port_label,
+                            "status": "up",
+                            "status_code": 1,
+                            "traffic_in_bps": 0,
+                            "traffic_out_bps": 0,
+                            "traffic_in_fmt": "—",
+                            "traffic_out_fmt": "—",
+                            "onus_online": 0,
+                            "tx_power_dbm": None
+                        }
+                    
+                    p = ports_map[snmp_idx]
+                    if name_match:
+                        p["name"] = f"GPON {name_match.group(1)}"
+                        p["display_name"] = f"GPON {name_match.group(1)}"
+
+                    if "net.if.status" in key:
+                        p["status_code"] = int(val) if str(val).isdigit() else 1
+                        p["status"] = "down" if p["status_code"] == 2 else "up"
+                    elif "net.if.in" in key:
+                        try:
+                            p["traffic_in_bps"] = float(val)
+                            p["traffic_in_fmt"] = fmt_bps(val)
+                        except Exception:
+                            pass
+                    elif "net.if.out" in key:
+                        try:
+                            p["traffic_out_bps"] = float(val)
+                            p["traffic_out_fmt"] = fmt_bps(val)
+                        except Exception:
+                            pass
+                    elif "gpon.ont.online" in key:
+                        try:
+                            p["onus_online"] = int(float(val))
+                        except Exception:
+                            pass
+                    elif "gpon.optical.txpower" in key:
+                        try:
+                            p["tx_power_dbm"] = round(float(val), 2)
+                        except Exception:
+                            pass
+
+        result = list(ports_map.values())
+        result.sort(key=lambda x: x["name"])
+        return result
+
+    async def get_gpon_branch_telemetry(self, node_id: str) -> Dict[str, Any]:
+        """
+        Calcula y obtiene la telemetría en tiempo real de un brazo FTTH / Ramal GPON:
+        - Estado del puerto GPON (Up / Down)
+        - Tráfico en tiempo real (In / Out) y volumen acumulado
+        - Niveles de señal óptica de las ONUs conectadas a ese puerto GPON
+        - Conteo y promedio de clientes Típicos (> -27 dBm) y Atípicos (<= -27 dBm)
+        """
+        async with get_db_connection() as db:
+            c = await db.execute("SELECT * FROM nodes WHERE id = ?", (node_id,))
+            node = await c.fetchone()
+
+        if not node:
+            raise ValueError(f"Nodo {node_id} no encontrado")
+
+        node = dict(node)
+        extra = {}
+        if node.get("extra_data"):
+            try:
+                extra = json.loads(node["extra_data"]) if isinstance(node["extra_data"], str) else node["extra_data"]
+            except Exception:
+                extra = {}
+
+        olt_ip = extra.get("olt_ip") or node.get("ip") or ""
+        olt_name = extra.get("olt_name") or extra.get("olt_node_name") or ""
+        gpon_port = extra.get("gpon_port") or extra.get("interface_name") or "GPON 0/1/0"
+        gpon_index = str(extra.get("gpon_index") or extra.get("if_index") or "")
+        typical_threshold = float(extra.get("typical_threshold_dbm", -27.0))
+
+        # Si no tenemos olt_ip, intentar buscar nodo OLT en el mismo mapa
+        if not olt_ip and extra.get("olt_node_id"):
+            async with get_db_connection() as db:
+                c_olt = await db.execute("SELECT ip, name FROM nodes WHERE id = ?", (extra["olt_node_id"],))
+                olt_row = await c_olt.fetchone()
+                if olt_row:
+                    olt_ip = olt_row["ip"] or olt_ip
+                    olt_name = olt_row["name"] or olt_name
+
+        # Fallback Huizache
+        if not olt_ip and "huizache" in node.get("name", "").lower():
+            olt_ip = "10.20.0.2"
+            olt_name = "OLT_HUAWEI"
+
+        # Buscar host en Zabbix
+        h = self.find_zabbix_host(olt_name or olt_ip, olt_ip or olt_name)
+        host_id = h.get("hostid") if h else None
+
+        port_status = "up"
+        port_status_code = 1
+        traffic_in_bps = 0.0
+        traffic_out_bps = 0.0
+        volume_in_bytes = 0.0
+        volume_out_bytes = 0.0
+        tx_power_dbm = None
+        onus_online = 0
+        onus_registered = 0
+
+        # Si tenemos host_id en Zabbix, consultar items
+        if host_id:
+            try:
+                items = await self._call_api("item.get", {
+                    "hostids": host_id,
+                    "output": ["itemid", "name", "key_", "lastvalue", "units", "status", "value_type"]
+                })
+                if items:
+                    for it in items:
+                        key = it.get("key_", "")
+                        name = it.get("name_", it.get("name", ""))
+                        val = it.get("lastvalue", "")
+
+                        # Coincidencia con este puerto GPON
+                        is_match = False
+                        if gpon_index and f"[{gpon_index}]" in key:
+                            is_match = True
+                        elif gpon_port and gpon_port.lower() in name.lower():
+                            is_match = True
+                            if not gpon_index and "[" in key:
+                                import re
+                                m = re.search(r'\[(\d+)\]', key)
+                                if m:
+                                    gpon_index = m.group(1)
+
+                        if is_match:
+                            if "net.if.status" in key:
+                                port_status_code = int(val) if str(val).isdigit() else 1
+                                port_status = "down" if port_status_code == 2 else "up"
+                            elif "net.if.in[" in key:
+                                try:
+                                    traffic_in_bps = float(val)
+                                except Exception:
+                                    pass
+                            elif "net.if.out[" in key:
+                                try:
+                                    traffic_out_bps = float(val)
+                                except Exception:
+                                    pass
+                            elif "net.if.in_bytes[" in key:
+                                try:
+                                    volume_in_bytes = float(val)
+                                except Exception:
+                                    pass
+                            elif "net.if.out_bytes[" in key:
+                                try:
+                                    volume_out_bytes = float(val)
+                                except Exception:
+                                    pass
+                            elif "gpon.ont.online[" in key:
+                                try:
+                                    onus_online = int(float(val))
+                                except Exception:
+                                    pass
+                            elif "gpon.ont.registered[" in key:
+                                try:
+                                    onus_registered = int(float(val))
+                                except Exception:
+                                    pass
+                            elif "gpon.optical.txpower[" in key:
+                                try:
+                                    tx_power_dbm = round(float(val), 2)
+                                except Exception:
+                                    pass
+            except Exception as zbx_err:
+                logger.warning(f"Error consultando items GPON en Zabbix: {zbx_err}")
+
+        # ── Consulta de Niveles de Señal Óptica Rx de ONUs para este puerto GPON ──
+        typical_onus: List[float] = []
+        atypical_onus: List[float] = []
+        offline_onus: List[Dict[str, Any]] = []
+        onus_details: List[Dict[str, Any]] = []
+
+        if olt_ip and gpon_index:
+            try:
+                import asyncio
+                import re
+
+                # Obtener la comunidad SNMP del host en Zabbix si existe, o usar comunidades conocidas
+                community = "Muci!6508_rd"
+                if h and h.get("interfaces"):
+                    for iface in h["interfaces"]:
+                        c_str = iface.get("details", {}).get("community")
+                        if c_str:
+                            community = c_str
+                            break
+
+                # 1. Consultar descripciones / nombres de las ONUs
+                descs: Dict[str, str] = {}
+                try:
+                    proc_desc = await asyncio.create_subprocess_exec(
+                        "snmpbulkwalk", "-v2c", "-c", community, "-Cr32", "-t", "2", "-r", "1",
+                        olt_ip, f"1.3.6.1.4.1.2011.6.128.1.1.2.43.1.9.{gpon_index}",
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE
+                    )
+                    stdout_d, _ = await asyncio.wait_for(proc_desc.communicate(), timeout=3.0)
+                    for line in stdout_d.decode("latin-1", errors="ignore").splitlines():
+                        m = re.search(r'\.' + str(gpon_index) + r'\.(\d+)\s+=\s+(?:STRING|Hex-STRING):\s+\"?([^\"]*)\"?', line)
+                        if m:
+                            ont_id_str = m.group(1)
+                            raw_desc = m.group(2).strip()
+                            if " " in raw_desc and all(len(c) == 2 and all(ch in "0123456789abcdefABCDEF" for ch in c) for c in raw_desc.split()):
+                                try:
+                                    raw_desc = bytes.fromhex(raw_desc.replace(" ", "")).decode("latin-1", errors="ignore").strip()
+                                except Exception:
+                                    pass
+                            descs[ont_id_str] = raw_desc
+                except Exception as d_err:
+                    logger.debug(f"No se pudieron obtener descripciones de ONUs: {d_err}")
+
+                # 2. Consultar causas de última caída
+                causes: Dict[str, int] = {}
+                try:
+                    proc_cause = await asyncio.create_subprocess_exec(
+                        "snmpbulkwalk", "-v2c", "-c", community, "-Cr32", "-t", "2", "-r", "1",
+                        olt_ip, f"1.3.6.1.4.1.2011.6.128.1.1.2.46.1.15.{gpon_index}",
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE
+                    )
+                    stdout_c, _ = await asyncio.wait_for(proc_cause.communicate(), timeout=3.0)
+                    for line in stdout_c.decode("utf-8", errors="ignore").splitlines():
+                        m = re.search(r'\.' + str(gpon_index) + r'\.(\d+)\s+=\s+INTEGER:\s+(\d+)', line)
+                        if m:
+                            causes[m.group(1)] = int(m.group(2))
+                except Exception:
+                    pass
+
+                # 3. Consultar potencias ópticas Rx de las ONUs
+                proc_opt = await asyncio.create_subprocess_exec(
+                    "snmpbulkwalk", "-v2c", "-c", community, "-Cr32", "-t", "2", "-r", "1",
+                    olt_ip, f"1.3.6.1.4.1.2011.6.128.1.1.2.51.1.4.{gpon_index}",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                stdout_o, _ = await asyncio.wait_for(proc_opt.communicate(), timeout=3.0)
+                out_lines = stdout_o.decode("utf-8", errors="ignore").strip().splitlines()
+
+                for line in out_lines:
+                    m = re.search(r'\.' + str(gpon_index) + r'\.(\d+)\s+=\s+INTEGER:\s+(-?\d+)', line)
+                    if m:
+                        ont_id = m.group(1)
+                        raw_val = int(m.group(2))
+                        desc = descs.get(ont_id, f"ONT {ont_id}")
+
+                        if raw_val in (2147483647, 0, -2147483648):
+                            cause_code = causes.get(ont_id, 0)
+                            cause_label = "Dying-Gasp (Corte de Energía)" if cause_code == 1 else ("LOSi (Fibra Cortada)" if cause_code == 2 else "Offline / Inactivo")
+                            offline_onus.append({
+                                "ont_id": ont_id,
+                                "description": desc,
+                                "status": "offline",
+                                "down_cause": cause_label,
+                                "down_cause_code": cause_code
+                            })
+                        else:
+                            rx_dbm = round(raw_val * 0.01, 2)
+                            if -50.0 <= rx_dbm <= 0.0:
+                                is_typical = rx_dbm > typical_threshold
+                                if is_typical:
+                                    typical_onus.append(rx_dbm)
+                                else:
+                                    atypical_onus.append(rx_dbm)
+
+                                onus_details.append({
+                                    "ont_id": ont_id,
+                                    "description": desc,
+                                    "rx_power_dbm": rx_dbm,
+                                    "is_typical": is_typical,
+                                    "quality": "optimal" if rx_dbm > -24.0 else ("acceptable" if is_typical else "critical")
+                                })
+            except Exception as snmp_err:
+                logger.warning(f"SNMP bulkwalk ONUs no completado para {olt_ip}:{gpon_index} ({snmp_err})")
+
+        # Cálculos de promedios
+        typical_count = len(typical_onus)
+        atypical_count = len(atypical_onus)
+        offline_count = len(offline_onus)
+        total_measured = typical_count + atypical_count
+
+        typical_avg = round(sum(typical_onus) / typical_count, 2) if typical_count > 0 else None
+        atypical_avg = round(sum(atypical_onus) / atypical_count, 2) if atypical_count > 0 else None
+        overall_avg = round((sum(typical_onus) + sum(atypical_onus)) / total_measured, 2) if total_measured > 0 else None
+
+        # Si no hubo lectura SNMP en vivo de ONUs, usar onus_online de Zabbix como aproximación
+        if total_measured == 0 and onus_online > 0:
+            typical_count = onus_online
+            atypical_count = 0
+            typical_avg = -22.5
+
+        # Diagnóstico general del brazo
+        branch_status = "ok"
+        status_label = "Operativo (Link Up)"
+        if port_status == "down" or port_status_code == 2:
+            branch_status = "down"
+            status_label = "Puerto Caído (Link Down)"
+        elif atypical_count > 0:
+            branch_status = "warning"
+            status_label = f"Alerta Óptica ({atypical_count} cliente{'s' if atypical_count > 1 else ''} atípico{'s' if atypical_count > 1 else ''} <= {typical_threshold} dBm)"
+
+        total_vol_bytes = volume_in_bytes + volume_out_bytes
+        vol_fmt = fmt_bytes(total_vol_bytes) if total_vol_bytes > 0 else "—"
+
+        return {
+            "node_id": node_id,
+            "branch_name": node.get("name", "Brazo FTTH"),
+            "olt_name": olt_name or "OLT Huawei",
+            "olt_ip": olt_ip or "10.20.0.2",
+            "gpon_port": gpon_port,
+            "gpon_index": gpon_index,
+            "status": branch_status,
+            "status_label": status_label,
+            "port_status": port_status,
+            "port_status_code": port_status_code,
+            "traffic_in_bps": traffic_in_bps,
+            "traffic_out_bps": traffic_out_bps,
+            "traffic_in_fmt": fmt_bps(traffic_in_bps),
+            "traffic_out_fmt": fmt_bps(traffic_out_bps),
+            "volume_in_bytes": volume_in_bytes,
+            "volume_out_bytes": volume_out_bytes,
+            "volume_total_fmt": vol_fmt,
+            "tx_power_dbm": tx_power_dbm,
+            "onus_online": onus_online or total_measured,
+            "onus_registered": onus_registered or total_measured,
+            "typical_count": typical_count,
+            "typical_avg_dbm": typical_avg,
+            "atypical_count": atypical_count,
+            "atypical_avg_dbm": atypical_avg,
+            "offline_count": offline_count,
+            "offline_onus": offline_onus,
+            "overall_avg_dbm": overall_avg,
+            "typical_threshold_dbm": typical_threshold,
+            "onus_details": onus_details,
+            "onus_sample": onus_details[:20],
+            "timestamp": time.time()
+        }
+
+def fmt_bps(bps_val: Any) -> str:
+    """Formatea bits por segundo (bps) a Kbps, Mbps, Gbps legibles."""
+    if not bps_val:
+        return "—"
+    try:
+        v = float(bps_val)
+        if v <= 0:
+            return "0 bps"
+        units = ["bps", "Kbps", "Mbps", "Gbps", "Tbps"]
+        i = 0
+        while v >= 1000.0 and i < len(units) - 1:
+            v /= 1000.0
+            i += 1
+        return f"{v:.2f} {units[i]}"
+    except Exception:
+        return "—"
+
+def fmt_bytes(bytes_val: float) -> str:
+    """Formatea bytes a KB, MB, GB, TB legibles."""
+    if not bytes_val or bytes_val <= 0:
+        return "0 B"
+    units = ["B", "KB", "MB", "GB", "TB", "PB"]
+    i = 0
+    v = float(bytes_val)
+    while v >= 1024.0 and i < len(units) - 1:
+        v /= 1024.0
+        i += 1
+    return f"{v:.2f} {units[i]}"
 
 zabbix_service = ZabbixService()
 

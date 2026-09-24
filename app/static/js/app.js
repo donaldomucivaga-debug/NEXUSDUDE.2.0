@@ -506,6 +506,32 @@ function measureTextWidth(text, font) {
 }
 
 function computeNodeDimensions(node) {
+  // ── Nodo Nota (Sticky Note) ──
+  if (node.device_type === 'note') {
+    const noteText = node.extra_data?.note_text || node.name || '';
+    const lines = noteText.split('\n');
+    const noteFont = '10px system-ui, -apple-system, sans-serif';
+    let maxLineW = 0;
+    lines.forEach(l => {
+      const lw = measureTextWidth(l || ' ', noteFont);
+      if (lw > maxLineW) maxLineW = lw;
+    });
+    const noteWidth  = Math.min(Math.max(120, Math.ceil(maxLineW) + 24), 320);
+    const noteHeight = Math.max(56, lines.length * 14 + 24);
+    return { nodeWidth: noteWidth, nodeHeight: noteHeight, subLabelText: '', pins: [] };
+  }
+
+  // ── Brazo FTTH / Ramal GPON ──
+  if (node.device_type === 'ftth_branch') {
+    const branchName = node.extra_data?.branch_name || node.name || 'Brazo FTTH';
+    const portName = node.extra_data?.gpon_port || 'GPON';
+    const titleFont = 'bold 10px system-ui, -apple-system, sans-serif';
+    const nameW = measureTextWidth(`${portName}: ${branchName}`, titleFont);
+    const branchWidth = Math.min(Math.max(130, Math.ceil(nameW) + 42), 270);
+    const branchHeight = 36;
+    return { nodeWidth: branchWidth, nodeHeight: branchHeight, subLabelText: '', pins: [] };
+  }
+
   const isParentShortcut = node.device_type === 'parent_map' || !!node.extra_data?.is_parent_shortcut;
   const isSubmap = node.device_type === 'submap' || isParentShortcut;
   const pins = node.extra_data?.pins || [];
@@ -568,7 +594,458 @@ function getNodeHalfDimensions(nodeOrId) {
   return { halfW: 68, halfH: 26 };
 }
 
+// ─── Renderizado de Nodo Nota (Sticky Note) ──────────────────────────────────
+// Paleta de colores semitransparentes disponibles para notas
+const NOTE_COLORS = {
+  'yellow':  { bg: 'rgba(234, 179, 8,  0.18)', border: '#ca8a04', text: '#fef9c3' },
+  'blue':    { bg: 'rgba(56,  189, 248, 0.16)', border: '#0284c7', text: '#e0f2fe' },
+  'green':   { bg: 'rgba(34,  197, 94,  0.16)', border: '#16a34a', text: '#dcfce7' },
+  'red':     { bg: 'rgba(239, 68,  68,  0.16)', border: '#dc2626', text: '#fee2e2' },
+  'purple':  { bg: 'rgba(168, 85,  247, 0.16)', border: '#9333ea', text: '#f3e8ff' },
+  'gray':    { bg: 'rgba(148, 163, 184, 0.14)', border: '#64748b', text: '#e2e8f0' },
+  'orange':  { bg: 'rgba(249, 115, 22,  0.16)', border: '#ea580c', text: '#ffedd5' },
+};
+
+function _renderNoteNode(node) {
+  const noteText  = node.extra_data?.note_text || node.name || '';
+  const colorKey  = node.extra_data?.note_color || 'yellow';
+  const theme     = NOTE_COLORS[colorKey] || NOTE_COLORS['yellow'];
+  const { nodeWidth, nodeHeight } = computeNodeDimensions(node);
+  const FOLD = 14; // tamaño del doblez esquina
+
+  const group = new Konva.Group({
+    x: node.x,
+    y: node.y,
+    draggable: true,
+    id: node.id
+  });
+  group.isNote = true;
+
+  // Fondo principal del sticky note (sin esquina superior-derecha)
+  const bgPoints = [
+    0,           0,
+    nodeWidth - FOLD, 0,
+    nodeWidth,       FOLD,
+    nodeWidth,       nodeHeight,
+    0,           nodeHeight
+  ];
+  const bg = new Konva.Line({
+    points: bgPoints,
+    closed: true,
+    fill: theme.bg,
+    stroke: theme.border,
+    strokeWidth: 1.5,
+    cornerRadius: 2,
+    shadowColor: 'rgba(0,0,0,0.35)',
+    shadowBlur: 6,
+    shadowOffset: { x: 1, y: 2 },
+    shadowOpacity: 0.5,
+    perfectDrawEnabled: false,
+    name: 'box'
+  });
+
+  // Triángulo del doblez en esquina superior-derecha
+  const foldTriangle = new Konva.Line({
+    points: [
+      nodeWidth - FOLD, 0,
+      nodeWidth,        FOLD,
+      nodeWidth - FOLD, FOLD
+    ],
+    closed: true,
+    fill: 'rgba(0,0,0,0.18)',
+    stroke: theme.border,
+    strokeWidth: 0.8,
+    listening: false,
+    perfectDrawEnabled: false
+  });
+
+  // Icono de nota en esquina superior-izquierda
+  const iconTxt = new Konva.Text({
+    x: 5, y: 4,
+    text: '📝',
+    fontSize: 10,
+    listening: false,
+    perfectDrawEnabled: false
+  });
+
+  // Texto de la nota (multilínea)
+  const textEl = new Konva.Text({
+    x: 8,
+    y: 18,
+    width: nodeWidth - 16,
+    text: noteText,
+    fontSize: 10,
+    fontFamily: 'system-ui, -apple-system, sans-serif',
+    fill: theme.text,
+    wrap: 'word',
+    ellipsis: true,
+    lineHeight: 1.35,
+    listening: false,
+    perfectDrawEnabled: false,
+    name: 'label'
+  });
+
+  group.add(bg);
+  group.add(foldTriangle);
+  group.add(iconTxt);
+  group.add(textEl);
+
+  // ── Arrastre ──
+  let lastDragPos = { x: node.x, y: node.y };
+  group.on('dragstart', () => {
+    lastDragPos = { x: group.x(), y: group.y() };
+    if (selectedNodes.size > 0 && !selectedNodes.has(node)) clearMultiSelection();
+  });
+  group.on('dragmove', () => {
+    let curX = group.x(); let curY = group.y();
+    if (snapToGrid) {
+      curX = Math.round(curX / GRID_SIZE) * GRID_SIZE;
+      curY = Math.round(curY / GRID_SIZE) * GRID_SIZE;
+      group.position({ x: curX, y: curY });
+    }
+    const dx = curX - lastDragPos.x; const dy = curY - lastDragPos.y;
+    lastDragPos = { x: curX, y: curY };
+    if (selectedNodes.has(node) && selectedNodes.size > 1) {
+      selectedNodes.forEach(otherNode => {
+        if (otherNode.id !== node.id) {
+          const og = nodeGroups.get(otherNode.id);
+          if (og) {
+            let nx = og.x() + dx; let ny = og.y() + dy;
+            if (snapToGrid) { nx = Math.round(nx/GRID_SIZE)*GRID_SIZE; ny = Math.round(ny/GRID_SIZE)*GRID_SIZE; }
+            og.position({ x: nx, y: ny }); otherNode.x = nx; otherNode.y = ny;
+            updateAttachedLinks(otherNode.id, nx, ny);
+          }
+        }
+      });
+    }
+    updateAttachedLinks(node.id, curX, curY);
+  });
+  group.on('dragend', async () => {
+    try {
+      if (selectedNodes.has(node) && selectedNodes.size > 1) {
+        selectedNodes.forEach(async sNode => {
+          const sg = nodeGroups.get(sNode.id);
+          if (sg) { sNode.x = sg.x(); sNode.y = sg.y(); await API.updateNode(sNode.id, { x: sg.x(), y: sg.y() }); }
+        });
+      } else {
+        await API.updateNode(node.id, { x: group.x(), y: group.y() });
+        node.x = group.x(); node.y = group.y();
+      }
+      updateAllLinks();
+    } catch(err) { console.error('Error guardando posición de nota:', err); }
+  });
+
+  // ── Clic: selección / modo enlace ──
+  group.on('click tap', (e) => {
+    e.cancelBubble = true;
+    if (linkMode) {
+      handleLinkNodeClick(node, e.evt);
+    } else {
+      const evt = e.evt || {};
+      if (evt.shiftKey || evt.ctrlKey || evt.metaKey) {
+        if (selectedNodes.has(node)) { removeNodeFromMultiSelection(node); }
+        else {
+          if (selectedNode) { const prev = selectedNode; deselectNode(); addNodeToMultiSelection(prev); }
+          addNodeToMultiSelection(node); showMultiSelectionNotice(selectedNodes.size);
+        }
+      } else {
+        if (selectedNodes.size > 0 && selectedNodes.has(node)) { showMultiSelectionNotice(selectedNodes.size); }
+        else { clearMultiSelection(); selectNode(node); }
+      }
+    }
+  });
+
+  // ── Doble clic: abrir editor de nota ──
+  group.on('dblclick dbltap', () => { openNoteEditorModal(node); });
+
+  // ── Hover ──
+  group.on('mouseenter', () => {
+    document.body.style.cursor = linkMode ? 'crosshair' : 'pointer';
+    if (!bg.isHighlighted) { bg.stroke('#f8fafc'); nodesLayer.batchDraw(); }
+  });
+  group.on('mouseleave', () => {
+    document.body.style.cursor = 'default';
+    if (!bg.isHighlighted) { bg.stroke(theme.border); nodesLayer.batchDraw(); }
+  });
+
+  nodesLayer.add(group);
+  nodeGroups.set(node.id, group);
+}
+
+// ─── Renderizado de Brazo FTTH / Ramal GPON ─────────────────────────────────
+const _gponTelemetryCache = new Map(); // Cache temporal de 10s para telemetría GPON
+
+async function fetchGponBranchTelemetry(nodeId, force = false) {
+  const now = Date.now();
+  if (!force && _gponTelemetryCache.has(nodeId)) {
+    const cached = _gponTelemetryCache.get(nodeId);
+    if (now - cached.time < 10000) return cached.data;
+  }
+  try {
+    const data = await API.getGponBranchTelemetry(nodeId);
+    if (data) {
+      _gponTelemetryCache.set(nodeId, { time: now, data });
+    }
+    return data;
+  } catch (e) {
+    console.warn(`Error obteniendo telemetría GPON para ${nodeId}:`, e);
+    return null;
+  }
+}
+
+function _renderFtthBranchNode(node) {
+  const extra = node.extra_data || {};
+  const branchName = extra.branch_name || node.name || 'Brazo FTTH';
+  const gponPort = extra.gpon_port || 'GPON';
+  const { nodeWidth, nodeHeight } = computeNodeDimensions(node);
+
+  const group = new Konva.Group({
+    x: node.x,
+    y: node.y,
+    draggable: true,
+    id: node.id
+  });
+  group.isFtthBranch = true;
+
+  // Estado del puerto (1 = Up, 2 = Down, o desde ping_status / status)
+  const isDown = node.status === 'down' || node.ping_status === 'down' || extra.port_status === 'down' || extra.port_status_code === 2;
+  const hasAtypical = (extra.atypical_count || 0) > 0;
+  
+  let branchBorderColor = '#10b981'; // Verde por defecto (Up)
+  let branchBgColor = 'rgba(15, 23, 42, 0.92)';
+  let glowColor = 'rgba(16, 185, 129, 0.35)';
+
+  if (isDown) {
+    branchBorderColor = '#ef4444'; // Rojo si está Link Down
+    branchBgColor = 'rgba(69, 10, 10, 0.88)';
+    glowColor = 'rgba(239, 68, 68, 0.5)';
+  } else if (hasAtypical) {
+    branchBorderColor = '#f59e0b'; // Amarillo si hay alertas ópticas
+    glowColor = 'rgba(245, 158, 11, 0.4)';
+  }
+
+  // 2. Cápsula / Nodo compacto donde se ubica el nombre del brazo
+  const capsule = new Konva.Rect({
+    x: 0,
+    y: 0,
+    width: nodeWidth,
+    height: nodeHeight,
+    fill: branchBgColor,
+    stroke: branchBorderColor,
+    strokeWidth: isDown ? 2 : 1.5,
+    cornerRadius: 18,
+    shadowColor: glowColor,
+    shadowBlur: isDown ? 8 : 4,
+    shadowOpacity: 0.6,
+    perfectDrawEnabled: false,
+    name: 'box'
+  });
+
+  // 3. LED de estado circular
+  const statusLed = new Konva.Circle({
+    x: 14,
+    y: nodeHeight / 2,
+    radius: 4.5,
+    fill: branchBorderColor,
+    stroke: 'rgba(0,0,0,0.5)',
+    strokeWidth: 1,
+    listening: false,
+    name: 'statusLed'
+  });
+
+  // 4. Ícono de fibra óptica
+  const iconText = new Konva.Text({
+    x: 23,
+    y: (nodeHeight / 2) - 6,
+    text: '⚡',
+    fontSize: 10.5,
+    listening: false,
+    perfectDrawEnabled: false
+  });
+
+  // 5. Etiqueta de Título (Puerto GPON + Nombre del Brazo)
+  const maxLabelW = nodeWidth - 44;
+  const labelText = `${gponPort}: ${branchName}`;
+  const label = new Konva.Text({
+    x: 37,
+    y: (nodeHeight / 2) - 5.5,
+    text: labelText,
+    width: maxLabelW,
+    ellipsis: true,
+    wrap: 'none',
+    fontSize: 9.5,
+    fontStyle: 'bold',
+    fontFamily: 'system-ui, -apple-system, sans-serif',
+    fill: isDown ? '#fca5a5' : '#f8fafc',
+    listening: false,
+    perfectDrawEnabled: false,
+    name: 'label'
+  });
+
+  group.add(capsule);
+  group.add(statusLed);
+  group.add(iconText);
+  group.add(label);
+
+  // ── Arrastre ──
+  let lastDragPos = { x: node.x, y: node.y };
+  group.on('dragstart', () => {
+    lastDragPos = { x: group.x(), y: group.y() };
+    if (selectedNodes.size > 0 && !selectedNodes.has(node)) clearMultiSelection();
+  });
+  group.on('dragmove', () => {
+    let curX = group.x(); let curY = group.y();
+    if (snapToGrid) {
+      curX = Math.round(curX / GRID_SIZE) * GRID_SIZE;
+      curY = Math.round(curY / GRID_SIZE) * GRID_SIZE;
+      group.position({ x: curX, y: curY });
+    }
+    const dx = curX - lastDragPos.x; const dy = curY - lastDragPos.y;
+    lastDragPos = { x: curX, y: curY };
+    if (selectedNodes.has(node) && selectedNodes.size > 1) {
+      selectedNodes.forEach(otherNode => {
+        if (otherNode.id !== node.id) {
+          const og = nodeGroups.get(otherNode.id);
+          if (og) {
+            let nx = og.x() + dx; let ny = og.y() + dy;
+            if (snapToGrid) { nx = Math.round(nx/GRID_SIZE)*GRID_SIZE; ny = Math.round(ny/GRID_SIZE)*GRID_SIZE; }
+            og.position({ x: nx, y: ny }); otherNode.x = nx; otherNode.y = ny;
+            updateAttachedLinks(otherNode.id, nx, ny);
+          }
+        }
+      });
+    }
+    updateAttachedLinks(node.id, curX, curY);
+  });
+  group.on('dragend', async () => {
+    try {
+      if (selectedNodes.has(node) && selectedNodes.size > 1) {
+        selectedNodes.forEach(async sNode => {
+          const sg = nodeGroups.get(sNode.id);
+          if (sg) { sNode.x = sg.x(); sNode.y = sg.y(); await API.updateNode(sNode.id, { x: sg.x(), y: sg.y() }); }
+        });
+      } else {
+        await API.updateNode(node.id, { x: group.x(), y: group.y() });
+        node.x = group.x(); node.y = group.y();
+      }
+      updateAllLinks();
+    } catch(err) { console.error('Error guardando posición de brazo:', err); }
+  });
+
+  // ── Clic: selección / modo enlace ──
+  group.on('click tap', (e) => {
+    e.cancelBubble = true;
+    if (linkMode) {
+      handleLinkNodeClick(node, e.evt);
+    } else {
+      const evt = e.evt || {};
+      if (evt.shiftKey || evt.ctrlKey || evt.metaKey) {
+        if (selectedNodes.has(node)) { removeNodeFromMultiSelection(node); }
+        else {
+          if (selectedNode) { const prev = selectedNode; deselectNode(); addNodeToMultiSelection(prev); }
+          addNodeToMultiSelection(node); showMultiSelectionNotice(selectedNodes.size);
+        }
+      } else {
+        if (selectedNodes.size > 0 && selectedNodes.has(node)) { showMultiSelectionNotice(selectedNodes.size); }
+        else { clearMultiSelection(); selectNode(node); }
+      }
+    }
+  });
+
+  // ── Doble clic: abrir editor de brazo ──
+  group.on('dblclick dbltap', () => { openFtthBranchEditorModal(node); });
+
+  // ── Hover: Tooltip flotante enriquecido con telemetría de ONUs y tráfico ──
+  group.on('mouseenter mousemove', (e) => {
+    document.body.style.cursor = linkMode ? 'crosshair' : 'pointer';
+    if (!capsule.isHighlighted) {
+      capsule.stroke('#38bdf8');
+      nodesLayer.batchDraw();
+    }
+
+    const tooltip = document.getElementById('canvas-gpon-tooltip');
+    if (tooltip) {
+      const evt = e.evt || window.event;
+      if (evt) {
+        tooltip.style.left = `${evt.clientX + 14}px`;
+        tooltip.style.top = `${evt.clientY + 14}px`;
+      }
+
+      // Poblado inicial inmediato
+      const titleEl = document.getElementById('tooltip-gpon-title');
+      const portEl = document.getElementById('tooltip-gpon-port');
+      const oltEl = document.getElementById('tooltip-gpon-olt');
+      const statusEl = document.getElementById('tooltip-gpon-status');
+      
+      if (titleEl) titleEl.textContent = `⚡ ${branchName}`;
+      if (portEl) portEl.textContent = gponPort;
+      if (oltEl) oltEl.textContent = extra.olt_name || extra.olt_ip || 'OLT';
+      if (statusEl) {
+        statusEl.textContent = isDown ? '● Link Down (Offline)' : '● Link Up (Operativo)';
+        statusEl.style.color = isDown ? '#f87171' : '#10b981';
+        statusEl.style.background = isDown ? 'rgba(239,68,68,0.2)' : 'rgba(16,185,129,0.2)';
+      }
+
+      tooltip.style.display = 'block';
+
+      // Carga asíncrona de telemetría viva de ONUs y tráfico
+      fetchGponBranchTelemetry(node.id).then(telem => {
+        if (!telem || tooltip.style.display === 'none') return;
+        
+        const inEl = document.getElementById('tooltip-gpon-traffic-in');
+        const outEl = document.getElementById('tooltip-gpon-traffic-out');
+        const volEl = document.getElementById('tooltip-gpon-volume');
+        const txEl = document.getElementById('tooltip-gpon-txpower');
+
+        if (inEl) inEl.textContent = telem.traffic_in_fmt || '—';
+        if (outEl) outEl.textContent = telem.traffic_out_fmt || '—';
+        if (volEl) volEl.textContent = telem.volume_total_fmt || '—';
+        if (txEl) txEl.textContent = telem.tx_power_dbm !== null ? `${telem.tx_power_dbm} dBm` : '—';
+
+        const typCountEl = document.getElementById('tooltip-gpon-typical-count');
+        const typAvgEl = document.getElementById('tooltip-gpon-typical-avg');
+        const atypCountEl = document.getElementById('tooltip-gpon-atypical-count');
+        const atypAvgEl = document.getElementById('tooltip-gpon-atypical-avg');
+
+        if (typCountEl) typCountEl.textContent = `${telem.typical_count || 0} ONUs`;
+        if (typAvgEl) typAvgEl.textContent = telem.typical_avg_dbm !== null ? `${telem.typical_avg_dbm} dBm` : '—';
+        if (atypCountEl) atypCountEl.textContent = `${telem.atypical_count || 0} ONUs`;
+        if (atypAvgEl) atypAvgEl.textContent = telem.atypical_avg_dbm !== null ? `${telem.atypical_avg_dbm} dBm` : '—';
+
+        if (statusEl) {
+          statusEl.textContent = telem.port_status === 'down' ? '● Link Down (Offline)' : (telem.atypical_count > 0 ? '● Alerta Óptica' : '● Link Up (Operativo)');
+          statusEl.style.color = telem.port_status === 'down' ? '#f87171' : (telem.atypical_count > 0 ? '#fbbf24' : '#10b981');
+          statusEl.style.background = telem.port_status === 'down' ? 'rgba(239,68,68,0.2)' : (telem.atypical_count > 0 ? 'rgba(245,158,11,0.2)' : 'rgba(16,185,129,0.2)');
+        }
+      });
+    }
+  });
+
+  group.on('mouseleave', () => {
+    document.body.style.cursor = 'default';
+    if (!capsule.isHighlighted) {
+      capsule.stroke(branchBorderColor);
+      nodesLayer.batchDraw();
+    }
+    const tooltip = document.getElementById('canvas-gpon-tooltip');
+    if (tooltip) tooltip.style.display = 'none';
+  });
+
+  nodesLayer.add(group);
+  nodeGroups.set(node.id, group);
+}
+
 function renderNode(node) {
+  // ── Nodo Nota: Sticky Note visual ──
+  if (node.device_type === 'note') {
+    return _renderNoteNode(node);
+  }
+
+  // ── Brazo FTTH / Ramal GPON ──
+  if (node.device_type === 'ftth_branch') {
+    return _renderFtthBranchNode(node);
+  }
+
   const isParentShortcut = node.device_type === 'parent_map' || !!node.extra_data?.is_parent_shortcut;
   const isSubmap = node.device_type === 'submap' || isParentShortcut;
   const { nodeWidth, nodeHeight, subLabelText, pins } = computeNodeDimensions(node);
@@ -1459,6 +1936,17 @@ function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
 // ─── Colores y Estados Fijos de Enlaces (Verde OK / Rojo Problema) ─────────────
 
 function getLinkColor(link, sourceNode, targetNode) {
+  // ── Enlaces hacia Brazo FTTH / Ramal GPON ──
+  const isGponBranch = (targetNode && targetNode.device_type === 'ftth_branch') || (sourceNode && sourceNode.device_type === 'ftth_branch') || !!(link && link.extra_data && link.extra_data.is_gpon_branch);
+  if (isGponBranch) {
+    const branchNode = (targetNode && targetNode.device_type === 'ftth_branch') ? targetNode : sourceNode;
+    const isDown = branchNode.status === 'down' || branchNode.ping_status === 'down' || branchNode.extra_data?.port_status === 'down' || branchNode.extra_data?.port_status_code === 2;
+    const hasAtyp = (branchNode.extra_data?.atypical_count || 0) > 0;
+    if (isDown) return '#ef4444'; // Rojo si el puerto GPON está caído
+    if (hasAtyp) return '#f59e0b'; // Amarillo si hay alertas ópticas
+    return '#10b981'; // Verde fibra GPON
+  }
+
   const isIntermap = !!(link && link.extra_data && (link.extra_data.is_intermap || link.extra_data.remote_node_id));
 
   const tgtPing = targetNode ? (targetNode.ping_status || targetNode.status || 'ok') : (link?.status || 'ok');
@@ -1507,29 +1995,35 @@ function createLinkPortBadge(text, color = '#38bdf8') {
     listening: false,
     perfectDrawEnabled: false
   });
-  const padX = 4;
-  const padY = 2;
+  const padX = 3.5;
+  const padY = 1.5;
   const txt = new Konva.Text({
     text: text,
-    fontSize: 8.5,
+    fontSize: 7.5,
     fontFamily: 'monospace',
     fontStyle: 'bold',
     fill: '#f8fafc',
     padding: 0
   });
+  const w = txt.width() + padX * 2;
+  const h = txt.height() + padY * 2;
   const bg = new Konva.Rect({
-    width: txt.width() + padX * 2,
-    height: txt.height() + padY * 2,
-    fill: 'rgba(15, 23, 42, 0.9)',
+    width: w,
+    height: h,
+    fill: 'rgba(15, 23, 42, 0.95)',
     stroke: color,
     strokeWidth: 1,
-    cornerRadius: 3
+    cornerRadius: 2.5,
+    shadowColor: 'rgba(0, 0, 0, 0.6)',
+    shadowBlur: 3,
+    shadowOffset: { x: 0, y: 1 },
+    shadowOpacity: 0.4
   });
   txt.x(padX);
   txt.y(padY);
   group.add(bg);
   group.add(txt);
-  group.offset({ x: (txt.width() + padX * 2) / 2, y: (txt.height() + padY * 2) / 2 });
+  group.offset({ x: w / 2, y: h / 2 });
   return group;
 }
 
@@ -1566,33 +2060,73 @@ function renderLink(link, nodesDict) {
   let tgtBadge = null;
 
   const updateBadgesPos = (ptsVec) => {
-    const p1x = ptsVec[0], p1y = ptsVec[1], p2x = ptsVec[2], p2y = ptsVec[3];
-    const dx = p2x - p1x;
-    const dy = p2y - p1y;
-    const len = Math.hypot(dx, dy);
-    if (len > 35) {
-      const offsetDist = Math.min(26, len * 0.22);
-      if (srcBadge) {
-        srcBadge.position({
-          x: p1x + (dx / len) * offsetDist,
-          y: p1y + (dy / len) * offsetDist
-        });
+    if (!ptsVec || ptsVec.length < 4) return;
+
+    // --- 1. UBICACIÓN Y ROTACIÓN DE ETIQUETA ORIGEN (SRC BADGE) ---
+    if (srcBadge) {
+      const p0x = ptsVec[0], p0y = ptsVec[1];
+      const p1x = ptsVec[2], p1y = ptsVec[3];
+      const dx0 = p1x - p0x;
+      const dy0 = p1y - p0y;
+      const segLen0 = Math.hypot(dx0, dy0);
+
+      if (segLen0 > 14) {
+        // Separación suficiente para no invadir el rectángulo del nodo origen
+        const offsetDist = segLen0 > 75 ? 38 : Math.max(20, segLen0 * 0.42);
+        const bx = p0x + (dx0 / segLen0) * offsetDist;
+        const by = p0y + (dy0 / segLen0) * offsetDist;
+
+        let angleDeg = Math.atan2(dy0, dx0) * (180 / Math.PI);
+        if (angleDeg > 90) angleDeg -= 180;
+        else if (angleDeg < -90) angleDeg += 180;
+
+        srcBadge.position({ x: bx, y: by });
+        srcBadge.rotation(angleDeg);
+        srcBadge.visible(true);
+        srcBadge.moveToTop();
+      } else {
+        srcBadge.visible(false);
       }
-      if (tgtBadge) {
-        tgtBadge.position({
-          x: p2x - (dx / len) * offsetDist,
-          y: p2y - (dy / len) * offsetDist
-        });
+    }
+
+    // --- 2. UBICACIÓN Y ROTACIÓN DE ETIQUETA DESTINO (TGT BADGE) ---
+    if (tgtBadge) {
+      const n = ptsVec.length;
+      const pLast1x = ptsVec[n - 4], pLast1y = ptsVec[n - 3];
+      const pLast2x = ptsVec[n - 2], pLast2y = ptsVec[n - 1];
+      const dx1 = pLast2x - pLast1x;
+      const dy1 = pLast2y - pLast1y;
+      const segLen1 = Math.hypot(dx1, dy1);
+
+      if (segLen1 > 14) {
+        // Separación suficiente para no tocar la punta de flecha ni el nodo destino
+        const offsetDist = segLen1 > 80 ? 42 : Math.max(22, segLen1 * 0.45);
+        const bx = pLast2x - (dx1 / segLen1) * offsetDist;
+        const by = pLast2y - (dy1 / segLen1) * offsetDist;
+
+        let angleDeg = Math.atan2(dy1, dx1) * (180 / Math.PI);
+        if (angleDeg > 90) angleDeg -= 180;
+        else if (angleDeg < -90) angleDeg += 180;
+
+        tgtBadge.position({ x: bx, y: by });
+        tgtBadge.rotation(angleDeg);
+        tgtBadge.visible(true);
+        tgtBadge.moveToTop();
+      } else {
+        tgtBadge.visible(false);
       }
     }
   };
+
+  // Agregar primero la línea y LUEGO las etiquetas encima para garantizar Z-index superior
+  linksLayer.add(line);
 
   if (link.source_interface) {
     srcBadge = createLinkPortBadge(link.source_interface, '#38bdf8');
     linksLayer.add(srcBadge);
   }
   if (link.target_interface) {
-    tgtBadge = createLinkPortBadge(link.target_interface, '#a855f7');
+    tgtBadge = createLinkPortBadge(link.target_interface, '#c084fc');
     linksLayer.add(tgtBadge);
   }
   updateBadgesPos(arrowPts);
@@ -1603,6 +2137,62 @@ function renderLink(link, nodesDict) {
     line.fill('#38bdf8');
     line.strokeWidth(3.5);
     linksLayer.batchDraw();
+
+    const isGponBranch = target.device_type === 'ftth_branch' || source.device_type === 'ftth_branch' || !!link.extra_data?.is_gpon_branch;
+    const gponTooltip = document.getElementById('canvas-gpon-tooltip');
+    const standardTooltip = document.getElementById('canvas-link-tooltip');
+
+    if (isGponBranch && gponTooltip) {
+      const ftthNode = target.device_type === 'ftth_branch' ? target : source;
+      const otherNode = target.device_type === 'ftth_branch' ? source : target;
+      const extra = ftthNode.extra_data || {};
+      const gponPort = extra.gpon_port || link.source_interface || 'GPON';
+
+      const evt = e.evt || window.event;
+      if (evt) {
+        gponTooltip.style.left = `${evt.clientX + 14}px`;
+        gponTooltip.style.top = `${evt.clientY + 14}px`;
+      }
+
+      const titleEl = document.getElementById('tooltip-gpon-title');
+      const portEl = document.getElementById('tooltip-gpon-port');
+      const oltEl = document.getElementById('tooltip-gpon-olt');
+      const statusEl = document.getElementById('tooltip-gpon-status');
+      
+      if (titleEl) titleEl.textContent = `⚡ ${extra.branch_name || ftthNode.name}`;
+      if (portEl) portEl.textContent = gponPort;
+      if (oltEl) oltEl.textContent = extra.olt_name || otherNode.name || 'OLT';
+
+      gponTooltip.style.display = 'block';
+      if (standardTooltip) standardTooltip.style.display = 'none';
+
+      fetchGponBranchTelemetry(ftthNode.id).then(telem => {
+        if (!telem || gponTooltip.style.display === 'none') return;
+        const inEl = document.getElementById('tooltip-gpon-traffic-in');
+        const outEl = document.getElementById('tooltip-gpon-traffic-out');
+        const volEl = document.getElementById('tooltip-gpon-volume');
+        if (inEl) inEl.textContent = telem.traffic_in_fmt || '—';
+        if (outEl) outEl.textContent = telem.traffic_out_fmt || '—';
+        if (volEl) volEl.textContent = telem.volume_total_fmt || '—';
+
+        const typCountEl = document.getElementById('tooltip-gpon-typical-count');
+        const typAvgEl = document.getElementById('tooltip-gpon-typical-avg');
+        const atypCountEl = document.getElementById('tooltip-gpon-atypical-count');
+        const atypAvgEl = document.getElementById('tooltip-gpon-atypical-avg');
+
+        if (typCountEl) typCountEl.textContent = `${telem.typical_count || 0} ONUs`;
+        if (typAvgEl) typAvgEl.textContent = telem.typical_avg_dbm !== null ? `${telem.typical_avg_dbm} dBm` : '—';
+        if (atypCountEl) atypCountEl.textContent = `${telem.atypical_count || 0} ONUs`;
+        if (atypAvgEl) atypAvgEl.textContent = telem.atypical_avg_dbm !== null ? `${telem.atypical_avg_dbm} dBm` : '—';
+
+        if (statusEl) {
+          statusEl.textContent = telem.port_status === 'down' ? '● Link Down (Offline)' : (telem.atypical_count > 0 ? '● Alerta Óptica' : '● Link Up (Operativo)');
+          statusEl.style.color = telem.port_status === 'down' ? '#f87171' : (telem.atypical_count > 0 ? '#fbbf24' : '#10b981');
+          statusEl.style.background = telem.port_status === 'down' ? 'rgba(239,68,68,0.2)' : (telem.atypical_count > 0 ? 'rgba(245,158,11,0.2)' : 'rgba(16,185,129,0.2)');
+        }
+      });
+      return;
+    }
 
     const tooltip = document.getElementById('canvas-link-tooltip');
     if (tooltip) {
@@ -1683,14 +2273,19 @@ function renderLink(link, nodesDict) {
 
     const tooltip = document.getElementById('canvas-link-tooltip');
     if (tooltip) tooltip.style.display = 'none';
+    const gponTooltip = document.getElementById('canvas-gpon-tooltip');
+    if (gponTooltip) gponTooltip.style.display = 'none';
   });
 
   line.on('click tap', (e) => {
     e.cancelBubble = true;
+    const tooltip = document.getElementById('canvas-link-tooltip');
+    if (tooltip) tooltip.style.display = 'none';
+    const gponTooltip = document.getElementById('canvas-gpon-tooltip');
+    if (gponTooltip) gponTooltip.style.display = 'none';
     openLinkPropertiesModal(link, source, target);
   });
 
-  linksLayer.add(line);
   linkLines.set(link.id, { line, srcBadge, tgtBadge, updateBadgesPos, sourceId: source.id, targetId: target.id, link, sourceNode: source, targetNode: target });
 }
 
@@ -1788,11 +2383,12 @@ function openLinkPropertiesModal(link, sourceNode, targetNode) {
     if (!selectEl) return;
     selectEl.innerHTML = '<option value="">⏳ Cargando puertos...</option>';
     let ifaces = [];
-    if (node && node.device_id) {
+    const devId = node ? (node.device_id || node.extra_data?.device_id || node.extra_data?.netbox_id) : null;
+    if (devId) {
       try {
-        ifaces = await API.getDeviceInterfaces(node.device_id);
+        ifaces = await API.getDeviceInterfaces(devId);
       } catch (err) {
-        console.warn(`Error obteniendo interfaces del dispositivo ${node.device_id}:`, err);
+        console.warn(`Error obteniendo interfaces del dispositivo ${devId}:`, err);
       }
     }
 
@@ -1965,7 +2561,7 @@ function openLinkPropertiesModal(link, sourceNode, targetNode) {
 
           const applySubmapDev = (dev) => {
             if (isSource) chosenSrcSubmapDev = dev; else chosenTgtSubmapDev = dev;
-            populatePhysicalPorts(dev, ifaceSelectEl, ifaceInputEl, currentIfaceName, currentIfaceId);
+            populateIfaceSelect(dev, ifaceSelectEl, ifaceInputEl, currentIfaceName, currentIfaceId);
             populateZabbixSelect(dev, zbxSelectEl, currentZbxIface, currentIfaceName);
           };
 
@@ -1979,7 +2575,7 @@ function openLinkPropertiesModal(link, sourceNode, targetNode) {
       }
     } else {
       if (subContainer) subContainer.style.display = 'none';
-      populatePhysicalPorts(node, ifaceSelectEl, ifaceInputEl, currentIfaceName, currentIfaceId);
+      populateIfaceSelect(node, ifaceSelectEl, ifaceInputEl, currentIfaceName, currentIfaceId);
       populateZabbixSelect(node, zbxSelectEl, currentZbxIface, currentIfaceName);
     }
   };
@@ -2476,6 +3072,8 @@ async function connectMultipleTargetNodes(sourceNode, targetNodes) {
 
     const isSourceNav = sourceNode.device_type === 'submap' || sourceNode.device_type === 'parent_map' || !!sourceNode.extra_data?.is_parent_shortcut;
     const isTargetNav = tgtNode.device_type === 'submap' || tgtNode.device_type === 'parent_map' || !!tgtNode.extra_data?.is_parent_shortcut;
+    const isSourceNote = sourceNode.device_type === 'note';
+    const isTargetNote = tgtNode.device_type === 'note';
 
     let linkExtra = {
       direction: 'source_to_target'
@@ -2485,6 +3083,13 @@ async function connectMultipleTargetNodes(sourceNode, targetNodes) {
       // Para conexiones múltiples hacia submapas se aplica enlace visual directo
       linkExtra.is_visual_only = true;
       linkExtra.is_simple_link = true;
+      linkExtra.sync_zabbix = false;
+    }
+
+    if (isSourceNote || isTargetNote) {
+      // Las notas actúan como puente visual; el enlace no se sincroniza a Zabbix/BSM
+      linkExtra.is_visual_only = true;
+      linkExtra.is_note_bridge = true;
       linkExtra.sync_zabbix = false;
     }
 
@@ -2566,10 +3171,11 @@ function promptPortConnectModal(sourceNode, targetNode) {
         if (chipsEl) chipsEl.innerHTML = '';
         if (badgeEl) badgeEl.textContent = 'Cargando...';
 
+        const devId = devNode ? (devNode.device_id || devNode.extra_data?.device_id || devNode.extra_data?.netbox_id) : null;
         let ifaces = [];
-        if (devNode && devNode.device_id) {
+        if (devId) {
           try {
-            ifaces = await API.getDeviceInterfaces(devNode.device_id);
+            ifaces = await API.getDeviceInterfaces(devId);
           } catch (e) {
             console.warn('Error fetching ifaces:', e);
           }
@@ -2754,11 +3360,102 @@ function promptPortConnectModal(sourceNode, targetNode) {
 async function connectSingleTargetNode(sourceNode, node) {
   const isSourceNav = sourceNode.device_type === 'submap' || sourceNode.device_type === 'parent_map' || !!sourceNode.extra_data?.is_parent_shortcut;
   const isTargetNav = node.device_type === 'submap' || node.device_type === 'parent_map' || !!node.extra_data?.is_parent_shortcut;
+  const isSourceNote = sourceNode.device_type === 'note';
+  const isTargetNote = node.device_type === 'note';
 
   let linkExtra = {};
   let srcIface = '';
   let tgtIface = '';
   let cableType = 'cat6';
+
+  const isSourceFtth = sourceNode.device_type === 'ftth_branch';
+  const isTargetFtth = node.device_type === 'ftth_branch';
+
+  // Si alguno de los nodos es un brazo FTTH / Ramal GPON, crear el enlace de fibra interactivo directo
+  if (isSourceFtth || isTargetFtth) {
+    const ftthNode = isTargetFtth ? node : sourceNode;
+    const otherNode = isTargetFtth ? sourceNode : node;
+    const gponPort = ftthNode.extra_data?.gpon_port || 'GPON';
+
+    linkExtra = {
+      direction: isTargetFtth ? 'source_to_target' : 'target_to_source',
+      is_gpon_branch: true,
+      cable_type: 'fiber',
+      gpon_port: gponPort,
+      gpon_index: ftthNode.extra_data?.gpon_index || '',
+      olt_ip: ftthNode.extra_data?.olt_ip || '',
+      olt_name: ftthNode.extra_data?.olt_name || ''
+    };
+    srcIface = isTargetFtth ? gponPort : '';
+    tgtIface = isTargetFtth ? '' : gponPort;
+    cableType = 'fiber';
+
+    try {
+      const alreadyLinked = currentMap.links && currentMap.links.some(l =>
+        (l.source_node_id === sourceNode.id && l.target_node_id === node.id) ||
+        (l.source_node_id === node.id && l.target_node_id === sourceNode.id)
+      );
+      if (!alreadyLinked) {
+        const newLink = await API.createLink({
+          map_id: currentMap.id,
+          source_node_id: sourceNode.id,
+          target_node_id: node.id,
+          source_interface: srcIface,
+          target_interface: tgtIface,
+          cable_type: cableType,
+          status: 'ok',
+          extra_data: linkExtra
+        });
+        if (!currentMap.links) currentMap.links = [];
+        currentMap.links.push(newLink);
+        const dict = new Map();
+        if (currentMap.nodes) currentMap.nodes.forEach(n => dict.set(n.id, n));
+        renderLink(newLink, dict);
+        if (linksLayer) linksLayer.batchDraw();
+      }
+    } catch(err) {
+      alert('Error creando enlace con brazo FTTH: ' + err.message);
+    } finally {
+      cancelLinkMode();
+    }
+    return;
+  }
+
+  // Si alguno de los nodos es una nota, crear el enlace visual directamente sin abrir el modal de puertos
+  if (isSourceNote || isTargetNote) {
+    linkExtra = {
+      direction: 'source_to_target',
+      is_visual_only: true,
+      is_note_bridge: true,
+      sync_zabbix: false
+    };
+    try {
+      const alreadyLinked = currentMap.links && currentMap.links.some(l =>
+        (l.source_node_id === sourceNode.id && l.target_node_id === node.id) ||
+        (l.source_node_id === node.id && l.target_node_id === sourceNode.id)
+      );
+      if (!alreadyLinked) {
+        const newLink = await API.createLink({
+          map_id: currentMap.id,
+          source_node_id: sourceNode.id,
+          target_node_id: node.id,
+          status: 'ok',
+          extra_data: linkExtra
+        });
+        if (!currentMap.links) currentMap.links = [];
+        currentMap.links.push(newLink);
+        const dict = new Map();
+        if (currentMap.nodes) currentMap.nodes.forEach(n => dict.set(n.id, n));
+        renderLink(newLink, dict);
+        if (linksLayer) linksLayer.batchDraw();
+      }
+    } catch(err) {
+      alert('Error creando enlace con nota: ' + err.message);
+    } finally {
+      cancelLinkMode();
+    }
+    return;
+  }
 
   // Solicitar selección interactiva de puertos físicos y resolución de submapas
   const portRes = await promptPortConnectModal(sourceNode, node);
@@ -2891,6 +3588,644 @@ async function connectSingleTargetNode(sourceNode, node) {
 
 let _realtimePollInterval = null;
 
+// ─── Helper: Panel de Propiedades para Nodo Nota ────────────────────────────
+function _selectNoteNode(node) {
+  const extra = node.extra_data || {};
+  const colorKey = extra.note_color || 'yellow';
+  const theme = NOTE_COLORS[colorKey] || NOTE_COLORS['yellow'];
+
+  const titleEl = document.getElementById('prop-node-title');
+  if (titleEl) titleEl.textContent = '📝 Nota';
+
+  const subtitleEl = document.getElementById('prop-node-subtitle');
+  if (subtitleEl) subtitleEl.textContent = 'Anotación visual del lienzo';
+
+  const badgeEl = document.getElementById('prop-node-type-badge');
+  if (badgeEl) {
+    badgeEl.textContent = 'Nota';
+    badgeEl.style.backgroundColor = theme.bg;
+    badgeEl.style.borderColor    = theme.border;
+    badgeEl.style.color          = theme.border;
+  }
+
+  // Ocultar campos que no aplican a notas
+  const ipRow = document.getElementById('prop-node-ip-link');
+  if (ipRow) ipRow.closest('.device-info-row') && (ipRow.closest('.device-info-row').style.display = 'none');
+  const netboxBtn = document.getElementById('btn-open-netbox');
+  if (netboxBtn) netboxBtn.style.display = 'none';
+  const zabbixBtn = document.getElementById('btn-open-zabbix');
+  if (zabbixBtn) zabbixBtn.style.display = 'none';
+  const webAdminBtn = document.getElementById('btn-open-device-web');
+  if (webAdminBtn) webAdminBtn.style.display = 'none';
+  const telemetryPanel = document.getElementById('telemetry-panel');
+  if (telemetryPanel) telemetryPanel.style.display = 'none';
+  const portsCard = document.getElementById('node-ports-card');
+  if (portsCard) portsCard.style.display = 'none';
+  const convertBox = document.getElementById('convert-submap-action-box');
+  if (convertBox) convertBox.style.display = 'none';
+  const submapBox = document.getElementById('submap-action-box');
+  if (submapBox) submapBox.style.display = 'none';
+
+  // Mostrar el panel de nota en el sidebar
+  let notePanel = document.getElementById('note-properties-panel');
+  if (!notePanel) {
+    notePanel = document.createElement('div');
+    notePanel.id = 'note-properties-panel';
+    notePanel.style.cssText = 'margin-top:8px;';
+    notePanel.innerHTML = `
+      <div style="background:rgba(15,23,42,0.6);border:1px solid var(--border-color);border-radius:8px;padding:10px;margin-bottom:6px;">
+        <div style="font-size:0.72rem;font-weight:700;color:#f8fafc;margin-bottom:6px;display:flex;align-items:center;gap:5px;">
+          <i class="fas fa-sticky-note"></i> Contenido de la Nota
+        </div>
+        <div id="note-preview-text" style="font-size:0.82rem;color:#e2e8f0;white-space:pre-wrap;word-break:break-word;min-height:36px;max-height:120px;overflow-y:auto;line-height:1.4;"></div>
+        <div style="margin-top:8px;display:flex;gap:6px;">
+          <button id="btn-edit-note-inline" class="btn btn-primary" style="flex:1;justify-content:center;font-size:0.76rem;padding:6px;">
+            <i class="fas fa-edit"></i> Editar Nota
+          </button>
+        </div>
+      </div>`;
+    const propertiesPanel = document.getElementById('node-properties-panel');
+    if (propertiesPanel) propertiesPanel.appendChild(notePanel);
+  }
+
+  notePanel.style.display = 'block';
+  const previewEl = document.getElementById('note-preview-text');
+  if (previewEl) previewEl.textContent = extra.note_text || node.name || '';
+
+  const btnEdit = document.getElementById('btn-edit-note-inline');
+  if (btnEdit) {
+    btnEdit.onclick = () => openNoteEditorModal(node);
+  }
+
+  document.getElementById('prop-node-coords').textContent = `X: ${Math.round(node.x)}, Y: ${Math.round(node.y)}`;
+  document.getElementById('prop-node-site').textContent = 'N/A';
+  document.getElementById('prop-node-role').textContent = 'Nota de lienzo';
+  document.getElementById('prop-node-mfr').textContent = '—';
+  document.getElementById('prop-node-model').textContent = '—';
+  document.getElementById('prop-node-serial').textContent = '—';
+  const statusEl = document.getElementById('prop-node-status');
+  if (statusEl) { statusEl.textContent = 'Visual'; statusEl.style.color = theme.border; }
+}
+
+// ─── Editor de Nota (Modal) ──────────────────────────────────────────────────
+function openNoteEditorModal(node) {
+  const modal = document.getElementById('modal-note-editor');
+  if (!modal) return;
+  const extra = node.extra_data || {};
+  const textarea = document.getElementById('note-editor-textarea');
+  const colorSelect = document.getElementById('note-editor-color');
+  if (textarea) textarea.value = extra.note_text || node.name || '';
+  if (colorSelect) colorSelect.value = extra.note_color || 'yellow';
+
+  modal.style.display = 'flex';
+
+  const btnSave = document.getElementById('btn-save-note');
+  const btnCancel = document.getElementById('btn-cancel-note');
+  const btnDelete = document.getElementById('btn-delete-note');
+  const btnClose = document.getElementById('btn-close-note-modal');
+
+  const closeModal = () => { modal.style.display = 'none'; };
+
+  if (btnClose) btnClose.onclick = closeModal;
+  if (btnCancel) btnCancel.onclick = closeModal;
+
+  if (btnSave) {
+    btnSave.onclick = async () => {
+      const newText = textarea ? textarea.value : '';
+      const newColor = colorSelect ? colorSelect.value : 'yellow';
+      const updatedExtra = Object.assign({}, extra, {
+        note_text: newText,
+        note_color: newColor
+      });
+      try {
+        await API.updateNode(node.id, { name: newText.split('\n')[0].slice(0, 80) || 'Nota', extra_data: updatedExtra });
+        node.name = newText.split('\n')[0].slice(0, 80) || 'Nota';
+        node.extra_data = updatedExtra;
+
+        // Re-renderizar el nodo nota en el canvas
+        const grp = nodeGroups.get(node.id);
+        if (grp) grp.destroy();
+        nodeGroups.delete(node.id);
+        _renderNoteNode(node);
+        nodesLayer.batchDraw();
+
+        // Actualizar preview en sidebar
+        const previewEl = document.getElementById('note-preview-text');
+        if (previewEl) previewEl.textContent = newText;
+
+        closeModal();
+      } catch(err) {
+        alert('Error guardando nota: ' + (err.message || err));
+      }
+    };
+  }
+
+  if (btnDelete) {
+    btnDelete.onclick = async () => {
+      if (!confirm('¿Eliminar esta nota del lienzo?')) return;
+      try {
+        await API.deleteNode(node.id);
+        const grp = nodeGroups.get(node.id);
+        if (grp) grp.destroy();
+        nodeGroups.delete(node.id);
+        if (currentMap && currentMap.nodes) {
+          currentMap.nodes = currentMap.nodes.filter(n => n.id !== node.id);
+        }
+        nodesLayer.batchDraw();
+        deselectNode();
+        closeModal();
+      } catch(err) {
+        alert('Error eliminando nota: ' + (err.message || err));
+      }
+    };
+  }
+}
+
+// ─── Helper: Panel de Propiedades para Brazo FTTH / Ramal GPON ─────────────
+function _selectFtthBranchNode(node) {
+  const extra = node.extra_data || {};
+  const branchName = extra.branch_name || node.name || 'Brazo FTTH';
+  const gponPort = extra.gpon_port || 'GPON';
+
+  const titleEl = document.getElementById('prop-node-title');
+  if (titleEl) titleEl.textContent = `⚡ ${branchName}`;
+
+  const subtitleEl = document.getElementById('prop-node-subtitle');
+  if (subtitleEl) subtitleEl.textContent = `Puerto: ${gponPort} · OLT: ${extra.olt_name || extra.olt_ip || 'Huizache'}`;
+
+  const badgeEl = document.getElementById('prop-node-type-badge');
+  if (badgeEl) {
+    badgeEl.textContent = 'Brazo FTTH';
+    badgeEl.style.backgroundColor = 'rgba(14, 165, 233, 0.15)';
+    badgeEl.style.borderColor = '#0284c7';
+    badgeEl.style.color = '#38bdf8';
+  }
+
+  // Ocultar campos que no aplican
+  const ipRow = document.getElementById('prop-node-ip-link');
+  if (ipRow) ipRow.closest('.device-info-row') && (ipRow.closest('.device-info-row').style.display = 'none');
+  const netboxBtn = document.getElementById('btn-open-netbox');
+  if (netboxBtn) netboxBtn.style.display = 'none';
+  const zabbixBtn = document.getElementById('btn-open-zabbix');
+  if (zabbixBtn) zabbixBtn.style.display = 'none';
+  const webAdminBtn = document.getElementById('btn-open-device-web');
+  if (webAdminBtn) webAdminBtn.style.display = 'none';
+  const telemetryPanel = document.getElementById('telemetry-panel');
+  if (telemetryPanel) telemetryPanel.style.display = 'none';
+  const portsCard = document.getElementById('node-ports-card');
+  if (portsCard) portsCard.style.display = 'none';
+  const convertBox = document.getElementById('convert-submap-action-box');
+  if (convertBox) convertBox.style.display = 'none';
+  const submapBox = document.getElementById('submap-action-box');
+  if (submapBox) submapBox.style.display = 'none';
+  const notePanel = document.getElementById('note-properties-panel');
+  if (notePanel) notePanel.style.display = 'none';
+
+  // Mostrar el panel de GPON en el sidebar
+  let gponPanel = document.getElementById('gpon-properties-panel');
+  if (!gponPanel) {
+    gponPanel = document.createElement('div');
+    gponPanel.id = 'gpon-properties-panel';
+    gponPanel.style.cssText = 'margin-top:8px;';
+    gponPanel.innerHTML = `
+      <div style="background:rgba(15,23,42,0.65);border:1px solid var(--border-color);border-radius:8px;padding:10px;margin-bottom:6px;">
+        
+        <!-- Estado del Puerto GPON -->
+        <div id="gpon-prop-status-box" style="display:flex;align-items:center;justify-content:space-between;background:rgba(16,185,129,0.12);border:1px solid rgba(16,185,129,0.3);border-radius:6px;padding:8px 10px;margin-bottom:8px;">
+          <div style="display:flex;align-items:center;gap:7px;">
+            <span id="gpon-prop-status-dot" style="width:9px;height:9px;border-radius:50%;background:#10b981;display:inline-block;"></span>
+            <strong id="gpon-prop-status-label" style="font-size:0.8rem;color:#10b981;">Puerto Link Up (Operativo)</strong>
+          </div>
+          <button id="btn-refresh-gpon-prop" title="Actualizar telemetría de ONUs" style="background:none;border:none;color:#64748b;cursor:pointer;font-size:0.75rem;">
+            <i class="fas fa-sync-alt"></i>
+          </button>
+        </div>
+
+        <!-- Tráfico & Volumen -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:8px;font-size:0.74rem;">
+          <div style="background:var(--bg-card);border-radius:5px;padding:5px 6px;">
+            <span style="color:var(--text-muted);font-size:0.62rem;display:block;">⬇ Bajada:</span>
+            <strong id="gpon-prop-traffic-in" style="color:#10b981;font-family:monospace;">—</strong>
+          </div>
+          <div style="background:var(--bg-card);border-radius:5px;padding:5px 6px;">
+            <span style="color:var(--text-muted);font-size:0.62rem;display:block;">⬆ Subida:</span>
+            <strong id="gpon-prop-traffic-out" style="color:#38bdf8;font-family:monospace;">—</strong>
+          </div>
+          <div style="background:var(--bg-card);border-radius:5px;padding:5px 6px;">
+            <span style="color:var(--text-muted);font-size:0.62rem;display:block;">Consumo Volumen:</span>
+            <strong id="gpon-prop-volume" style="color:#f8fafc;font-family:monospace;">—</strong>
+          </div>
+          <div style="background:var(--bg-card);border-radius:5px;padding:5px 6px;">
+            <span style="color:var(--text-muted);font-size:0.62rem;display:block;">Potencia TX SFP:</span>
+            <strong id="gpon-prop-txpower" style="color:#c084fc;font-family:monospace;">—</strong>
+          </div>
+        </div>
+
+        <!-- Niveles de Señal Óptica (Típicos vs Atípicos) -->
+        <div style="font-size:0.72rem;font-weight:700;color:#38bdf8;margin:8px 0 5px 0;display:flex;align-items:center;justify-content:space-between;">
+          <span><i class="fas fa-satellite-dish"></i> Clientes Ópticos (ONUs)</span>
+          <span id="gpon-prop-total-onus" style="font-size:0.65rem;color:#cbd5e1;background:rgba(255,255,255,0.08);padding:1px 5px;border-radius:4px;">0 ONUs</span>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px;">
+          <!-- Card Típicos -->
+          <div style="background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.3);border-radius:6px;padding:6px;text-align:center;">
+            <div style="font-size:0.62rem;color:#6ee7b7;font-weight:600;margin-bottom:2px;">CLIENTES TÍPICOS (> -27 dBm)</div>
+            <div id="gpon-prop-typical-count" style="font-size:1.1rem;font-weight:800;color:#10b981;">0</div>
+            <div style="font-size:0.65rem;color:#cbd5e1;margin-top:2px;">Prom: <strong id="gpon-prop-typical-avg" style="color:#10b981;">—</strong></div>
+          </div>
+          <!-- Card Atípicos -->
+          <div style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.3);border-radius:6px;padding:6px;text-align:center;">
+            <div style="font-size:0.62rem;color:#fca5a5;font-weight:600;margin-bottom:2px;">CLIENTES ATÍPICOS (≤ -27 dBm)</div>
+            <div id="gpon-prop-atypical-count" style="font-size:1.1rem;font-weight:800;color:#ef4444;">0</div>
+            <div style="font-size:0.65rem;color:#cbd5e1;margin-top:2px;">Prom: <strong id="gpon-prop-atypical-avg" style="color:#ef4444;">—</strong></div>
+          </div>
+        </div>
+
+        <!-- Muestra de ONUs -->
+        <div id="gpon-prop-onus-container" style="max-height:100px;overflow-y:auto;background:rgba(2,6,23,0.5);border:1px solid var(--border-color);border-radius:5px;padding:4px;font-size:0.65rem;font-family:monospace;display:none;flex-direction:column;gap:3px;margin-bottom:8px;">
+        </div>
+
+        <button id="btn-edit-gpon-branch" class="btn btn-primary" style="width:100%;justify-content:center;font-size:0.76rem;padding:7px;">
+          <i class="fas fa-edit"></i> Configurar Brazo FTTH
+        </button>
+      </div>`;
+    const propertiesPanel = document.getElementById('node-properties-panel');
+    if (propertiesPanel) propertiesPanel.appendChild(gponPanel);
+  }
+
+  gponPanel.style.display = 'block';
+
+  const updatePropData = (telem) => {
+    if (!telem) return;
+    const isDown = telem.port_status === 'down' || telem.port_status_code === 2;
+    const statusBox = document.getElementById('gpon-prop-status-box');
+    const statusDot = document.getElementById('gpon-prop-status-dot');
+    const statusLbl = document.getElementById('gpon-prop-status-label');
+
+    if (statusBox && statusDot && statusLbl) {
+      if (isDown) {
+        statusBox.style.background = 'rgba(239,68,68,0.15)';
+        statusBox.style.borderColor = 'rgba(239,68,68,0.4)';
+        statusDot.style.background = '#ef4444';
+        statusLbl.style.color = '#f87171';
+        statusLbl.textContent = 'Puerto Link Down (Caído / Offline)';
+      } else if (telem.atypical_count > 0) {
+        statusBox.style.background = 'rgba(245,158,11,0.15)';
+        statusBox.style.borderColor = 'rgba(245,158,11,0.4)';
+        statusDot.style.background = '#f59e0b';
+        statusLbl.style.color = '#fbbf24';
+        statusLbl.textContent = `Alerta Óptica (${telem.atypical_count} atípicos)`;
+      } else {
+        statusBox.style.background = 'rgba(16,185,129,0.12)';
+        statusBox.style.borderColor = 'rgba(16,185,129,0.3)';
+        statusDot.style.background = '#10b981';
+        statusLbl.style.color = '#10b981';
+        statusLbl.textContent = 'Puerto Link Up (Operativo)';
+      }
+    }
+
+    const inEl = document.getElementById('gpon-prop-traffic-in');
+    const outEl = document.getElementById('gpon-prop-traffic-out');
+    const volEl = document.getElementById('gpon-prop-volume');
+    const txEl = document.getElementById('gpon-prop-txpower');
+    const totalOnusEl = document.getElementById('gpon-prop-total-onus');
+
+    if (inEl) inEl.textContent = telem.traffic_in_fmt || '—';
+    if (outEl) outEl.textContent = telem.traffic_out_fmt || '—';
+    if (volEl) volEl.textContent = telem.volume_total_fmt || '—';
+    if (txEl) txEl.textContent = telem.tx_power_dbm !== null ? `${telem.tx_power_dbm} dBm` : '—';
+    if (totalOnusEl) totalOnusEl.textContent = `${telem.onus_online || 0} ONUs`;
+
+    const typCountEl = document.getElementById('gpon-prop-typical-count');
+    const typAvgEl = document.getElementById('gpon-prop-typical-avg');
+    const atypCountEl = document.getElementById('gpon-prop-atypical-count');
+    const atypAvgEl = document.getElementById('gpon-prop-atypical-avg');
+
+    if (typCountEl) typCountEl.textContent = telem.typical_count || 0;
+    if (typAvgEl) typAvgEl.textContent = telem.typical_avg_dbm !== null ? `${telem.typical_avg_dbm} dBm` : '—';
+    if (atypCountEl) atypCountEl.textContent = telem.atypical_count || 0;
+    if (atypAvgEl) atypAvgEl.textContent = telem.atypical_avg_dbm !== null ? `${telem.atypical_avg_dbm} dBm` : '—';
+
+    // Lista de muestras de ONUs
+    const onusCont = document.getElementById('gpon-prop-onus-container');
+    if (onusCont) {
+      if (telem.onus_sample && telem.onus_sample.length > 0) {
+        onusCont.style.display = 'flex';
+        onusCont.innerHTML = telem.onus_sample.map(o => {
+          const col = o.is_typical ? '#10b981' : '#ef4444';
+          const tag = o.is_typical ? 'TÍPICO' : 'ATÍPICO';
+          return `<div style="display:flex;justify-content:space-between;padding:1px 3px;border-bottom:1px solid rgba(255,255,255,0.05);">
+            <span style="color:#cbd5e1;">ONT #${o.ont_id}</span>
+            <span style="color:${col};font-weight:bold;">${o.rx_power_dbm} dBm [${tag}]</span>
+          </div>`;
+        }).join('');
+      } else {
+        onusCont.style.display = 'none';
+      }
+    }
+  };
+
+  fetchGponBranchTelemetry(node.id).then(updatePropData);
+
+  const btnRefresh = document.getElementById('btn-refresh-gpon-prop');
+  if (btnRefresh) {
+    btnRefresh.onclick = () => {
+      btnRefresh.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+      fetchGponBranchTelemetry(node.id, true).then(d => {
+        btnRefresh.innerHTML = '<i class="fas fa-sync-alt"></i>';
+        updatePropData(d);
+      });
+    };
+  }
+
+  const btnEdit = document.getElementById('btn-edit-gpon-branch');
+  if (btnEdit) {
+    btnEdit.onclick = () => openFtthBranchEditorModal(node);
+  }
+
+  document.getElementById('prop-node-coords').textContent = `X: ${Math.round(node.x)}, Y: ${Math.round(node.y)}`;
+  document.getElementById('prop-node-site').textContent = node.site_name || 'Huizache';
+  document.getElementById('prop-node-role').textContent = 'Brazo FTTH / Ramal GPON';
+  document.getElementById('prop-node-mfr').textContent = 'Huawei / GPON';
+  document.getElementById('prop-node-model').textContent = gponPort;
+  document.getElementById('prop-node-serial').textContent = extra.olt_name || 'OLT_HUAWEI';
+  const statusEl = document.getElementById('prop-node-status');
+  if (statusEl) {
+    const isDown = node.status === 'down' || node.ping_status === 'down' || extra.port_status === 'down';
+    statusEl.textContent = isDown ? 'Link Down' : 'Link Up';
+    statusEl.style.color = isDown ? 'var(--danger)' : 'var(--success)';
+  }
+}
+
+// ─── Editor / Creador de Brazo FTTH (Modal) ──────────────────────────────────
+async function openFtthBranchEditorModal(node) {
+  const modal = document.getElementById('modal-ftth-branch-editor');
+  if (!modal) return;
+  const extra = node.extra_data || {};
+
+  const inputName = document.getElementById('input-branch-name');
+  const selectOlt = document.getElementById('select-branch-olt');
+  const selectPort = document.getElementById('select-branch-gpon-port');
+  const inputThreshold = document.getElementById('input-branch-threshold');
+  const selectDir = document.getElementById('select-branch-arrow-dir');
+
+  if (inputName) inputName.value = extra.branch_name || node.name || 'Brazo FTTH';
+  if (inputThreshold) inputThreshold.value = extra.typical_threshold_dbm || -27.0;
+  if (selectDir) selectDir.value = extra.arrow_direction || 'left';
+
+  // Poblado de OLTs y equipos disponibles en el mapa actual
+  if (selectOlt) {
+    selectOlt.innerHTML = '<option value="">-- Seleccionar Equipo Origen (OLT) --</option>';
+    let candidateNodes = [];
+    if (currentMap && currentMap.nodes) {
+      // Excluir el propio nodo del brazo FTTH y notas
+      candidateNodes = currentMap.nodes.filter(n => n.id !== node.id && n.device_type !== 'note');
+      // Priorizar OLTs / GPON primero, luego el resto de equipos
+      candidateNodes.sort((a, b) => {
+        const isOltA = (a.extra_data?.role || a.device_type || a.name || '').toLowerCase().includes('olt');
+        const isOltB = (b.extra_data?.role || b.device_type || b.name || '').toLowerCase().includes('olt');
+        if (isOltA && !isOltB) return -1;
+        if (!isOltA && isOltB) return 1;
+        return a.name.localeCompare(b.name);
+      });
+    }
+
+    if (candidateNodes.length === 0) {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = 'No hay equipos disponibles en este mapa';
+      selectOlt.appendChild(opt);
+    } else {
+      candidateNodes.forEach(o => {
+        const opt = document.createElement('option');
+        opt.value = o.id;
+        opt.dataset.nodeId = o.id;
+        opt.dataset.oltName = o.name;
+        opt.dataset.oltIp = o.ip || '';
+        opt.textContent = `⚡ ${o.name} (${o.ip || 'Sin IP'})`;
+        if (extra.olt_node_id && o.id === extra.olt_node_id) {
+          opt.selected = true;
+        } else if (extra.olt_ip && o.ip && o.ip === extra.olt_ip) {
+          opt.selected = true;
+        } else if (extra.olt_name && o.name.toLowerCase() === extra.olt_name.toLowerCase()) {
+          opt.selected = true;
+        }
+        selectOlt.appendChild(opt);
+      });
+    }
+
+    const getSelectedOltQuery = () => {
+      const opt = selectOlt.selectedOptions[0];
+      if (!opt) return '10.20.0.2';
+      return opt.dataset.oltIp || opt.dataset.oltName || '10.20.0.2';
+    };
+
+    // Función para cargar puertos GPON de la OLT seleccionada
+    const loadGponPorts = async (oltVal) => {
+      if (!selectPort) return;
+      selectPort.innerHTML = '<option value="">⏳ Consultando puertos GPON de la OLT...</option>';
+      try {
+        const ports = await API.getOltGponPorts(oltVal);
+        selectPort.innerHTML = '';
+        if (ports && ports.length > 0) {
+          ports.forEach(p => {
+            const opt = document.createElement('option');
+            opt.value = p.name;
+            opt.dataset.index = p.index;
+            const downStr = p.status === 'down' ? ' [Link Down]' : ' [Link Up]';
+            const onusStr = p.onus_online ? ` (${p.onus_online} ONUs)` : '';
+            opt.textContent = `${p.name}${downStr}${onusStr}`;
+            if (extra.gpon_port && p.name.toLowerCase() === extra.gpon_port.toLowerCase()) opt.selected = true;
+            else if (extra.gpon_index && String(p.index) === String(extra.gpon_index)) opt.selected = true;
+            selectPort.appendChild(opt);
+          });
+        } else {
+          // Si no retornó puertos descubiertos, agregar puertos GPON 0/1/0 a 0/1/15
+          for (let i = 0; i <= 15; i++) {
+            const opt = document.createElement('option');
+            const pName = `GPON 0/1/${i}`;
+            opt.value = pName;
+            opt.textContent = pName;
+            if (extra.gpon_port === pName) opt.selected = true;
+            selectPort.appendChild(opt);
+          }
+        }
+      } catch (err) {
+        selectPort.innerHTML = '<option value="GPON 0/1/0">GPON 0/1/0</option>';
+      }
+    };
+
+    loadGponPorts(getSelectedOltQuery());
+
+    selectOlt.onchange = () => {
+      loadGponPorts(getSelectedOltQuery());
+    };
+  }
+
+  modal.style.display = 'flex';
+
+  const btnSave = document.getElementById('btn-save-ftth-branch');
+  const btnCancel = document.getElementById('btn-cancel-ftth-branch');
+  const btnDelete = document.getElementById('btn-delete-ftth-branch');
+  const btnClose = document.getElementById('btn-close-ftth-branch-modal');
+
+  const closeModal = () => { modal.style.display = 'none'; };
+
+  if (btnClose) btnClose.onclick = closeModal;
+  if (btnCancel) btnCancel.onclick = closeModal;
+
+  if (btnSave) {
+    btnSave.onclick = async () => {
+      const newName = inputName ? inputName.value.trim() : 'Brazo FTTH';
+      const selOltOpt = selectOlt && selectOlt.selectedOptions[0];
+      const selPortOpt = selectPort && selectPort.selectedOptions[0];
+
+      const gponPortVal = selectPort ? selectPort.value : 'GPON 0/1/0';
+      const gponIdxVal = selPortOpt ? (selPortOpt.dataset.index || '') : '';
+      const oltNodeIdVal = selOltOpt ? (selOltOpt.dataset.nodeId || selOltOpt.value) : '';
+      const oltIpVal = selOltOpt ? (selOltOpt.dataset.oltIp || '') : '';
+      const oltNameVal = selOltOpt ? (selOltOpt.dataset.oltName || '') : '';
+      const threshVal = inputThreshold ? parseFloat(inputThreshold.value) || -27.0 : -27.0;
+      const arrowDirVal = selectDir ? selectDir.value : 'left';
+
+      const updatedExtra = Object.assign({}, extra, {
+        branch_name: newName,
+        gpon_port: gponPortVal,
+        gpon_index: gponIdxVal,
+        olt_ip: oltIpVal,
+        olt_name: oltNameVal,
+        olt_node_id: oltNodeIdVal,
+        typical_threshold_dbm: threshVal,
+        arrow_direction: arrowDirVal
+      });
+
+      try {
+        await API.updateNode(node.id, {
+          name: newName,
+          device_type: 'ftth_branch',
+          extra_data: updatedExtra
+        });
+        node.name = newName;
+        node.device_type = 'ftth_branch';
+        node.extra_data = updatedExtra;
+
+        // Limpiar cache para refrescar
+        _gponTelemetryCache.delete(node.id);
+
+        // Re-renderizar nodo en canvas
+        const grp = nodeGroups.get(node.id);
+        if (grp) grp.destroy();
+        nodeGroups.delete(node.id);
+        _renderFtthBranchNode(node);
+
+        // ── Auto-vincular / Actualizar arista interactiva de fibra con la OLT ──
+        if (currentMap && currentMap.nodes && oltNodeIdVal) {
+          const oltNode = currentMap.nodes.find(n => n.id === oltNodeIdVal || (oltIpVal && n.ip === oltIpVal) || (oltNameVal && n.name === oltNameVal));
+          if (oltNode && oltNode.id !== node.id) {
+            // Buscar si ya existe enlace hacia este brazo
+            let existingLink = currentMap.links && currentMap.links.find(l =>
+              (l.source_node_id === node.id || l.target_node_id === node.id)
+            );
+
+            if (existingLink) {
+              const updatedLinkExtra = Object.assign({}, existingLink.extra_data, {
+                direction: 'source_to_target',
+                is_gpon_branch: true,
+                cable_type: 'fiber',
+                gpon_port: gponPortVal,
+                gpon_index: gponIdxVal,
+                olt_ip: oltIpVal,
+                olt_name: oltNameVal
+              });
+              await API.updateLink(existingLink.id, {
+                source_node_id: oltNode.id,
+                target_node_id: node.id,
+                source_interface: gponPortVal,
+                target_interface: '',
+                cable_type: 'fiber',
+                extra_data: updatedLinkExtra
+              });
+              existingLink.source_node_id = oltNode.id;
+              existingLink.target_node_id = node.id;
+              existingLink.source_interface = gponPortVal;
+              existingLink.target_interface = '';
+              existingLink.cable_type = 'fiber';
+              existingLink.extra_data = updatedLinkExtra;
+
+              // Destruir gráficos Konva previos del enlace y volver a dibujarlo
+              const oldLinkEntry = linkLines.get(existingLink.id);
+              if (oldLinkEntry) {
+                if (oldLinkEntry.line) oldLinkEntry.line.destroy();
+                if (oldLinkEntry.srcBadge) oldLinkEntry.srcBadge.destroy();
+                if (oldLinkEntry.tgtBadge) oldLinkEntry.tgtBadge.destroy();
+                linkLines.delete(existingLink.id);
+              }
+              const dict = new Map();
+              currentMap.nodes.forEach(n => dict.set(n.id, n));
+              renderLink(existingLink, dict);
+            } else {
+              // Crear nuevo enlace
+              const newLink = await API.createLink({
+                map_id: currentMap.id,
+                source_node_id: oltNode.id,
+                target_node_id: node.id,
+                source_interface: gponPortVal,
+                target_interface: '',
+                cable_type: 'fiber',
+                status: 'ok',
+                extra_data: {
+                  direction: 'source_to_target',
+                  is_gpon_branch: true,
+                  cable_type: 'fiber',
+                  gpon_port: gponPortVal,
+                  gpon_index: gponIdxVal,
+                  olt_ip: oltIpVal,
+                  olt_name: oltNameVal
+                }
+              });
+              if (!currentMap.links) currentMap.links = [];
+              currentMap.links.push(newLink);
+              const dict = new Map();
+              currentMap.nodes.forEach(n => dict.set(n.id, n));
+              renderLink(newLink, dict);
+            }
+          }
+        }
+
+        updateAllLinks();
+        if (linksLayer) linksLayer.batchDraw();
+        if (nodesLayer) nodesLayer.batchDraw();
+
+        selectNode(node);
+        closeModal();
+      } catch (err) {
+        alert('Error guardando brazo FTTH: ' + (err.message || err));
+      }
+    };
+  }
+
+  if (btnDelete) {
+    btnDelete.onclick = async () => {
+      if (!confirm('¿Eliminar este brazo FTTH del lienzo?')) return;
+      try {
+        await API.deleteNode(node.id);
+        const grp = nodeGroups.get(node.id);
+        if (grp) grp.destroy();
+        nodeGroups.delete(node.id);
+        if (currentMap && currentMap.nodes) {
+          currentMap.nodes = currentMap.nodes.filter(n => n.id !== node.id);
+        }
+        nodesLayer.batchDraw();
+        deselectNode();
+        closeModal();
+      } catch (err) {
+        alert('Error eliminando brazo FTTH: ' + (err.message || err));
+      }
+    };
+  }
+}
+
 function selectNode(node) {
   deselectNode();
   selectedNode = node;
@@ -2906,6 +4241,20 @@ function selectNode(node) {
 
   document.getElementById('no-selection-msg').style.display = 'none';
   document.getElementById('node-properties-panel').style.display = 'block';
+
+  // ── Panel especial para Nodo Nota ──
+  if (node.device_type === 'note') {
+    _selectNoteNode(node);
+    switchTab('tab-properties');
+    return;
+  }
+
+  // ── Panel especial para Brazo FTTH ──
+  if (node.device_type === 'ftth_branch') {
+    _selectFtthBranchNode(node);
+    switchTab('tab-properties');
+    return;
+  }
 
   let extra = node.extra_data || {};
   const isParentShortcut = node.device_type === 'parent_map' || !!extra.is_parent_shortcut;
@@ -3079,13 +4428,14 @@ function selectNode(node) {
   const portsLoading = document.getElementById('node-ports-loading');
 
   if (portsCard && portsGrid) {
-    if (node.device_id && !isParentShortcut && !isSubmap) {
+    const devId = node ? (node.device_id || node.extra_data?.device_id || node.extra_data?.netbox_id) : null;
+    if (devId && !isParentShortcut && !isSubmap) {
       portsCard.style.display = 'block';
       if (portsLoading) portsLoading.style.display = 'block';
       portsGrid.innerHTML = '';
       if (portsBadge) portsBadge.textContent = '...';
 
-      API.getDeviceInterfaces(node.device_id).then(ifaces => {
+      API.getDeviceInterfaces(devId).then(ifaces => {
         if (!selectedNode || selectedNode.id !== node.id) return;
         if (portsLoading) portsLoading.style.display = 'none';
         if (portsBadge) portsBadge.textContent = `${ifaces.length} Puertos`;
@@ -3160,11 +4510,28 @@ function deselectNode() {
     if (grp) {
       const box = grp.findOne('.box');
       if (box) {
-        const isParentShortcut = grp.isParentShortcut || false;
-        const isSubmap = grp.isSubmap || (selectedNode.device_type === 'submap');
-        const curPingStatus = selectedNode.ping_status || selectedNode.status;
-        box.stroke(isParentShortcut ? '#38bdf8' : getNodeStatusColor(curPingStatus, isSubmap));
-        box.strokeWidth(isParentShortcut ? 2 : 1.5);
+        if (selectedNode.device_type === 'note') {
+          // Restaurar borde de la nota al color del tema
+          const colorKey = selectedNode.extra_data?.note_color || 'yellow';
+          const theme = NOTE_COLORS[colorKey] || NOTE_COLORS['yellow'];
+          box.stroke(theme.border);
+          box.strokeWidth(1.5);
+        } else if (selectedNode.device_type === 'ftth_branch') {
+          // Restaurar borde del brazo FTTH
+          const isDown = selectedNode.status === 'down' || selectedNode.ping_status === 'down';
+          const hasAtyp = (selectedNode.extra_data?.atypical_count || 0) > 0;
+          const col = isDown ? '#ef4444' : (hasAtyp ? '#f59e0b' : '#10b981');
+          box.stroke(col);
+          box.strokeWidth(isDown ? 2 : 1.5);
+          const arrow = grp.findOne('.branchArrow');
+          if (arrow) arrow.stroke(col);
+        } else {
+          const isParentShortcut = grp.isParentShortcut || false;
+          const isSubmap = grp.isSubmap || (selectedNode.device_type === 'submap');
+          const curPingStatus = selectedNode.ping_status || selectedNode.status;
+          box.stroke(isParentShortcut ? '#38bdf8' : getNodeStatusColor(curPingStatus, isSubmap));
+          box.strokeWidth(isParentShortcut ? 2 : 1.5);
+        }
         box.isHighlighted = false;
       }
     }
@@ -3173,6 +4540,10 @@ function deselectNode() {
   }
   document.getElementById('no-selection-msg').style.display = 'block';
   document.getElementById('node-properties-panel').style.display = 'none';
+  const gponPanel = document.getElementById('gpon-properties-panel');
+  if (gponPanel) gponPanel.style.display = 'none';
+  const notePanel = document.getElementById('note-properties-panel');
+  if (notePanel) notePanel.style.display = 'none';
 }
 
 // ─── SELECCIÓN MÚLTIPLE (Marquee / Área de Selección con Clic Derecho y Shift-Click) ──────
@@ -3527,6 +4898,46 @@ function applyTelemetryToPanel(data) {
   const loss = data.packet_loss;
   safe('telemetry-loss', loss != null ? `${loss.toFixed(0)}%` : '—');
 
+  // Actualizar Diagnóstico Dual (Ping ICMP vs Telemetría SNMP)
+  const pingStatus = data.ping_status || (data.icmp_ping === 1 ? 'ok' : (data.icmp_ping === 0 ? 'down' : 'unknown'));
+  const snmpStatus = data.snmp_status || (data.snmp_available === 1 ? 'ok' : (data.snmp_available === 2 ? 'down' : 'unknown'));
+  const hasSnmpIssue = !!data.has_snmp_issue || (pingStatus === 'ok' && (snmpStatus === 'down' || snmpStatus === 'unknown' || data.snmp_available === 2));
+
+  const pingDot = document.getElementById('telemetry-ping-dot');
+  const pingText = document.getElementById('telemetry-ping-text');
+  const pingPill = document.getElementById('telemetry-ping-pill');
+  if (pingDot && pingText) {
+    const pColor = pingStatus === 'ok' ? '#10b981' : (pingStatus === 'warning' ? '#f59e0b' : (pingStatus === 'down' ? '#ef4444' : '#64748b'));
+    pingDot.style.background = pColor;
+    pingText.style.color = pColor;
+    pingText.textContent = pingStatus === 'ok' ? 'En línea (Ping OK)' : (pingStatus === 'warning' ? 'Ping Degradado' : (pingStatus === 'down' ? 'Sin Respuesta' : 'Sin datos'));
+    if (pingPill) pingPill.style.borderColor = pColor + '55';
+  }
+
+  const snmpDot = document.getElementById('telemetry-snmp-dot');
+  const snmpText = document.getElementById('telemetry-snmp-text');
+  const snmpPill = document.getElementById('telemetry-snmp-pill');
+  if (snmpDot && snmpText) {
+    const sColor = snmpStatus === 'ok' ? '#10b981' : (snmpStatus === 'warning' ? '#f59e0b' : (snmpStatus === 'down' ? '#ef4444' : '#64748b'));
+    snmpDot.style.background = sColor;
+    snmpText.style.color = sColor;
+    snmpText.textContent = snmpStatus === 'ok' ? 'Activo (v2c)' : (snmpStatus === 'down' || data.snmp_available === 2 ? 'Timeout / Falló' : (snmpStatus === 'warning' ? 'Alertas SNMP' : 'Sin datos'));
+    if (snmpPill) snmpPill.style.borderColor = sColor + '55';
+  }
+
+  const snmpWarnBox = document.getElementById('telemetry-snmp-warning-box');
+  const snmpWarnDesc = document.getElementById('telemetry-snmp-warning-desc');
+  if (snmpWarnBox) {
+    if (hasSnmpIssue) {
+      snmpWarnBox.style.display = 'block';
+      if (snmpWarnDesc) {
+        snmpWarnDesc.textContent = data.snmp_warning_message || (data.snmp_error ? `Fallo SNMP: ${data.snmp_error}` : 'El equipo responde a Ping ICMP por IP pero el agente SNMP no entrega datos (Timeout en puerto 161 o comunidad no coincide).');
+      }
+    } else {
+      snmpWarnBox.style.display = 'none';
+    }
+  }
+
   // 1. Parámetros Inalámbricos (Cambium / Altai / Ubiquiti / Mimosa)
   const wBox = document.getElementById('telemetry-wireless-box');
   const w = data.wireless;
@@ -3698,10 +5109,12 @@ function applyNodeStatusToCanvas(nodeId, statusData) {
 
   let pingStatus = 'ok';
   let snmpStatus = 'ok';
+  let hasSnmpIssue = false;
 
   if (typeof statusData === 'object' && statusData !== null) {
     pingStatus = statusData.ping_status || statusData.status || 'ok';
     snmpStatus = statusData.snmp_status || statusData.status || 'ok';
+    hasSnmpIssue = !!statusData.has_snmp_issue || (pingStatus === 'ok' && (snmpStatus === 'down' || snmpStatus === 'unknown' || statusData.snmp_available === 2));
   } else if (typeof statusData === 'string') {
     pingStatus = statusData;
     snmpStatus = statusData;
@@ -3716,6 +5129,28 @@ function applyNodeStatusToCanvas(nodeId, statusData) {
   if (boxShape && !boxShape.isHighlighted) {
     boxShape.stroke(pingColor);
   }
+
+  // Indicador visual de alerta SNMP en esquina si hay Ping pero fallo de SNMP
+  let snmpAlertBadge = grp.findOne('.snmpAlertBadge');
+  if (hasSnmpIssue && !isSubmap && !isParentShortcut) {
+    if (!snmpAlertBadge) {
+      const boxW = boxShape ? boxShape.width() : 130;
+      snmpAlertBadge = new Konva.Text({
+        x: boxW - 20,
+        y: 3,
+        text: '⚠️',
+        fontSize: 10,
+        listening: false,
+        name: 'snmpAlertBadge'
+      });
+      grp.add(snmpAlertBadge);
+    } else {
+      snmpAlertBadge.show();
+    }
+  } else if (snmpAlertBadge) {
+    snmpAlertBadge.hide();
+  }
+
   nodesLayer.batchDraw();
 }
 
@@ -3830,6 +5265,9 @@ async function loadMap(mapId) {
 
   // Renderizar nodos (capa superior)
   mapData.nodes.forEach(n => renderNode(n));
+
+  // Recalcular posiciones y etiquetas de enlaces con los nodos y cajas ya creados
+  updateAllLinks();
 
   linksLayer.batchDraw();
   nodesLayer.batchDraw();
@@ -5936,6 +7374,131 @@ window.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('modal-map').style.display = 'none';
   });
   document.getElementById('btn-confirm-save-map').addEventListener('click', handleSaveMap);
+
+  // Botón Añadir Nota en lienzo (Sticky Note)
+  const btnAddNote = document.getElementById('btn-add-note');
+  if (btnAddNote) {
+    btnAddNote.addEventListener('click', async () => {
+      if (!currentMap) { alert('Abre un mapa primero.'); return; }
+      const stageW = stage ? stage.width() : 600;
+      const stageH = stage ? stage.height() : 400;
+      const rawX = (stageW / 2 - (stage ? stage.x() : 0)) / (stage ? stage.scaleX() : 1);
+      const rawY = (stageH / 2 - (stage ? stage.y() : 0)) / (stage ? stage.scaleY() : 1);
+      const noteX = snapToGrid ? Math.round(rawX / GRID_SIZE) * GRID_SIZE : rawX;
+      const noteY = snapToGrid ? Math.round(rawY / GRID_SIZE) * GRID_SIZE : rawY;
+      try {
+        const newNote = await API.createNode({
+          map_id: currentMap.id,
+          name: 'Nueva Nota',
+          device_type: 'note',
+          x: noteX,
+          y: noteY,
+          status: 'ok',
+          extra_data: { note_text: 'Nueva Nota', note_color: 'yellow' }
+        });
+        currentMap.nodes.push(newNote);
+        _renderNoteNode(newNote);
+        nodesLayer.batchDraw();
+        selectNode(newNote);
+        openNoteEditorModal(newNote);
+      } catch(err) {
+        alert('Error creando nota: ' + err.message);
+      }
+    });
+  }
+
+  // Botón Añadir Brazo FTTH / Ramal GPON en lienzo
+  const btnAddFtthBranch = document.getElementById('btn-add-ftth-branch');
+  if (btnAddFtthBranch) {
+    btnAddFtthBranch.addEventListener('click', async () => {
+      if (!currentMap) { alert('Abre un mapa primero.'); return; }
+      const stageW = stage ? stage.width() : 600;
+      const stageH = stage ? stage.height() : 400;
+      const rawX = (stageW / 2 - (stage ? stage.x() : 0)) / (stage ? stage.scaleX() : 1);
+      const rawY = (stageH / 2 - (stage ? stage.y() : 0)) / (stage ? stage.scaleY() : 1);
+      const nodeX = snapToGrid ? Math.round(rawX / GRID_SIZE) * GRID_SIZE : rawX;
+      const nodeY = snapToGrid ? Math.round(rawY / GRID_SIZE) * GRID_SIZE : rawY;
+
+      // Buscar si hay una OLT en el mapa actual para pre-asociar
+      let defaultOltName = 'OLT_HUAWEI';
+      let defaultOltIp = '10.20.0.2';
+      let defaultOltId = '';
+      if (currentMap && currentMap.nodes) {
+        const matchedOlt = currentMap.nodes.find(n => (n.extra_data?.role || n.device_type || n.name || '').toLowerCase().includes('olt'));
+        if (matchedOlt) {
+          defaultOltName = matchedOlt.name;
+          defaultOltIp = matchedOlt.ip || defaultOltIp;
+          defaultOltId = matchedOlt.id;
+        }
+      }
+
+      try {
+        const newBranch = await API.createNode({
+          map_id: currentMap.id,
+          name: 'Brazo Huizache GPON',
+          device_type: 'ftth_branch',
+          x: nodeX,
+          y: nodeY,
+          status: 'ok',
+          extra_data: {
+            branch_name: 'Brazo Huizache GPON',
+            gpon_port: 'GPON 0/1/0',
+            gpon_index: '4194312192',
+            olt_name: defaultOltName,
+            olt_ip: defaultOltIp,
+            olt_node_id: defaultOltId,
+            typical_threshold_dbm: -27.0,
+            arrow_direction: 'left',
+            arrow_length: 38
+          }
+        });
+        currentMap.nodes.push(newBranch);
+        _renderFtthBranchNode(newBranch);
+        nodesLayer.batchDraw();
+
+        // ── Auto-vincular arista interactiva con la OLT ──
+        if (defaultOltId || defaultOltIp) {
+          const oltNode = currentMap.nodes.find(n => (defaultOltId && n.id === defaultOltId) || (defaultOltIp && n.ip === defaultOltIp) || n.name === defaultOltName);
+          if (oltNode && oltNode.id !== newBranch.id) {
+            try {
+              const newLink = await API.createLink({
+                map_id: currentMap.id,
+                source_node_id: oltNode.id,
+                target_node_id: newBranch.id,
+                source_interface: 'GPON 0/1/0',
+                target_interface: '',
+                cable_type: 'fiber',
+                status: 'ok',
+                extra_data: {
+                  direction: 'source_to_target',
+                  is_gpon_branch: true,
+                  cable_type: 'fiber',
+                  gpon_port: 'GPON 0/1/0',
+                  gpon_index: '4194312192',
+                  olt_ip: defaultOltIp,
+                  olt_name: defaultOltName
+                }
+              });
+              if (!currentMap.links) currentMap.links = [];
+              currentMap.links.push(newLink);
+              const dict = new Map();
+              currentMap.nodes.forEach(n => dict.set(n.id, n));
+              renderLink(newLink, dict);
+              updateAllLinks();
+              if (linksLayer) linksLayer.batchDraw();
+            } catch (linkErr) {
+              console.warn('Error auto-vinculando arista al crear:', linkErr);
+            }
+          }
+        }
+
+        selectNode(newBranch);
+        openFtthBranchEditorModal(newBranch);
+      } catch(err) {
+        alert('Error creando brazo FTTH: ' + err.message);
+      }
+    });
+  }
 
   // Botón Insertar Acceso a Mapa Padre en lienzo
   const btnEnsureParent = document.getElementById('btn-ensure-parent-node');

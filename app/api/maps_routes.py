@@ -1376,6 +1376,10 @@ async def sync_map_nodes_from_netbox(map_id: str, user: Dict[str, Any] = Depends
             did = nr["device_id"]
             name = nr["name"]
 
+            # Saltar nodos de navegación y notas (no son dispositivos reales de NetBox)
+            if nr["device_type"] in ("submap", "parent_map", "note"):
+                continue
+
             matched_dev = None
             if did and did in dev_by_id:
                 matched_dev = dev_by_id[did]

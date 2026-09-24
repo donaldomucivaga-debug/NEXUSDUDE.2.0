@@ -415,6 +415,19 @@ const API = {
     const res = await this.fetch(`/api/zabbix/spectrum/${mapId}`);
     if (res.ok) return await res.json();
     throw new Error(await res.text());
+  },
+
+  // --- Telemetría de Brazos FTTH / Puertos GPON ---
+  async getGponBranchTelemetry(nodeId) {
+    const res = await this.fetch(`/api/zabbix/gpon-branch/${nodeId}`);
+    if (res.ok) return await res.json();
+    return null;
+  },
+
+  async getOltGponPorts(oltIpOrName) {
+    const res = await this.fetch(`/api/zabbix/olt/${encodeURIComponent(oltIpOrName)}/gpon-ports`);
+    if (res.ok) return await res.json();
+    return [];
   }
 };
 

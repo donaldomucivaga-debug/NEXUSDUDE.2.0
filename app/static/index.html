@@ -62,6 +62,16 @@
         <span>Imantar (20px)</span>
       </button>
 
+      <button class="btn" id="btn-add-note" title="Añadir Nota/Anotación al lienzo" style="background: rgba(234,179,8,0.15); border-color: #ca8a04; color: #fde047;">
+        <i class="fas fa-sticky-note"></i>
+        <span>Añadir Nota</span>
+      </button>
+
+      <button class="btn" id="btn-add-ftth-branch" title="Añadir Brazo FTTH / Ramal GPON al lienzo" style="background: rgba(14, 165, 233, 0.15); border-color: #0284c7; color: #38bdf8;">
+        <i class="fas fa-code-branch"></i>
+        <span>+ Brazo FTTH</span>
+      </button>
+
       <button class="btn btn-purple" id="btn-open-zabbix-sync" title="Sincronizar topología jerárquica con Zabbix Services (BSM)">
         <i class="fas fa-satellite-dish"></i>
         <span>Sincronizar Zabbix</span>
@@ -258,6 +268,35 @@
                 <button id="btn-refresh-telemetry" title="Actualizar telemetría en tiempo real" style="background: none; border: none; color: #64748b; cursor: pointer; padding: 2px 4px; font-size: 0.7rem;" onclick="refreshSelectedNodeTelemetry()">
                   <i class="fas fa-sync-alt"></i>
                 </button>
+              </div>
+
+              <!-- Diagnóstico Dual: Conectividad ICMP Ping vs Telemetría SNMP -->
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin-bottom: 6px;">
+                <div id="telemetry-ping-pill" style="background: rgba(16,185,129,0.1); border: 1px solid rgba(16,185,129,0.3); border-radius: 6px; padding: 5px 6px; display: flex; align-items: center; gap: 5px;">
+                  <span id="telemetry-ping-dot" style="width: 7px; height: 7px; border-radius: 50%; background: #10b981; display: inline-block; flex-shrink: 0;"></span>
+                  <div style="font-size: 0.65rem; line-height: 1.1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                    <div style="color: var(--text-muted); font-size: 0.58rem;">ICMP PING</div>
+                    <strong id="telemetry-ping-text" style="color: #10b981;">En línea</strong>
+                  </div>
+                </div>
+                <div id="telemetry-snmp-pill" style="background: rgba(56,189,248,0.1); border: 1px solid rgba(56,189,248,0.3); border-radius: 6px; padding: 5px 6px; display: flex; align-items: center; gap: 5px;">
+                  <span id="telemetry-snmp-dot" style="width: 7px; height: 7px; border-radius: 50%; background: #38bdf8; display: inline-block; flex-shrink: 0;"></span>
+                  <div style="font-size: 0.65rem; line-height: 1.1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                    <div style="color: var(--text-muted); font-size: 0.58rem;">SNMP AGENT</div>
+                    <strong id="telemetry-snmp-text" style="color: #38bdf8;">Conectado</strong>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Banner de Advertencia cuando hay Ping pero NO SNMP -->
+              <div id="telemetry-snmp-warning-box" style="display: none; background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.4); border-radius: 6px; padding: 6px 8px; margin-bottom: 6px; font-size: 0.68rem; color: #fde68a;">
+                <div style="display: flex; align-items: flex-start; gap: 6px;">
+                  <i class="fas fa-exclamation-triangle" style="color: #f59e0b; margin-top: 2px; flex-shrink: 0;"></i>
+                  <div>
+                    <strong style="color: #fbbf24; display: block;">Ping OK · Sin telemetría SNMP</strong>
+                    <span id="telemetry-snmp-warning-desc" style="color: #fde68a; font-size: 0.64rem;">El equipo responde a Ping pero el agente SNMP no entrega datos (Timeout / Comunidad no coincide).</span>
+                  </div>
+                </div>
               </div>
 
               <!-- Métricas ICMP en 3 cards -->
@@ -1493,8 +1532,212 @@
     </div>
   </div>
 
+  <!-- ═══ Modal Editor de Nota (Sticky Note) ═══ -->
+  <div class="modal-overlay" id="modal-note-editor" style="display: none;">
+    <div class="modal-card" style="width: 440px;">
+      <div class="modal-header">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <i class="fas fa-sticky-note" style="color: #fde047; font-size: 1.2rem;"></i>
+          <h3 class="modal-title">Editar Nota de Lienzo</h3>
+        </div>
+        <button class="modal-close" id="btn-close-note-modal">&times;</button>
+      </div>
+      <div class="modal-form" style="padding: 14px 18px; gap: 12px;">
+
+        <!-- Textarea de texto -->
+        <div class="prop-row">
+          <label class="prop-label"><i class="fas fa-align-left"></i> Descripción / Contenido</label>
+          <textarea id="note-editor-textarea"
+            rows="5"
+            class="input-text"
+            style="resize: vertical; font-family: system-ui, -apple-system, sans-serif; font-size: 0.85rem; line-height: 1.5;"
+            placeholder="Escribe tu nota aquí...&#10;Puedes usar múltiples líneas."
+          ></textarea>
+        </div>
+
+        <!-- Selector de color de transparencia -->
+        <div class="prop-row">
+          <label class="prop-label"><i class="fas fa-palette"></i> Color de la Nota</label>
+          <div id="note-color-swatches" style="display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px;">
+            <!-- Swatches de colores generados al seleccionar -->
+            <label title="Amarillo" style="cursor:pointer;">
+              <input type="radio" name="note-color-radio" value="yellow" style="display:none;">
+              <span style="display:inline-block; width:26px; height:26px; border-radius:50%; background:rgba(234,179,8,0.55); border:2px solid #ca8a04; transition:transform .1s;" onclick="document.getElementById('note-editor-color').value='yellow'; this.closest('#note-color-swatches').querySelectorAll('span').forEach(s=>s.style.transform=''); this.style.transform='scale(1.25) translateY(-2px)';"></span>
+            </label>
+            <label title="Azul" style="cursor:pointer;">
+              <input type="radio" name="note-color-radio" value="blue" style="display:none;">
+              <span style="display:inline-block; width:26px; height:26px; border-radius:50%; background:rgba(56,189,248,0.55); border:2px solid #0284c7; transition:transform .1s;" onclick="document.getElementById('note-editor-color').value='blue'; this.closest('#note-color-swatches').querySelectorAll('span').forEach(s=>s.style.transform=''); this.style.transform='scale(1.25) translateY(-2px)';"></span>
+            </label>
+            <label title="Verde" style="cursor:pointer;">
+              <input type="radio" name="note-color-radio" value="green" style="display:none;">
+              <span style="display:inline-block; width:26px; height:26px; border-radius:50%; background:rgba(34,197,94,0.55); border:2px solid #16a34a; transition:transform .1s;" onclick="document.getElementById('note-editor-color').value='green'; this.closest('#note-color-swatches').querySelectorAll('span').forEach(s=>s.style.transform=''); this.style.transform='scale(1.25) translateY(-2px)';"></span>
+            </label>
+            <label title="Rojo" style="cursor:pointer;">
+              <input type="radio" name="note-color-radio" value="red" style="display:none;">
+              <span style="display:inline-block; width:26px; height:26px; border-radius:50%; background:rgba(239,68,68,0.55); border:2px solid #dc2626; transition:transform .1s;" onclick="document.getElementById('note-editor-color').value='red'; this.closest('#note-color-swatches').querySelectorAll('span').forEach(s=>s.style.transform=''); this.style.transform='scale(1.25) translateY(-2px)';"></span>
+            </label>
+            <label title="Morado" style="cursor:pointer;">
+              <input type="radio" name="note-color-radio" value="purple" style="display:none;">
+              <span style="display:inline-block; width:26px; height:26px; border-radius:50%; background:rgba(168,85,247,0.55); border:2px solid #9333ea; transition:transform .1s;" onclick="document.getElementById('note-editor-color').value='purple'; this.closest('#note-color-swatches').querySelectorAll('span').forEach(s=>s.style.transform=''); this.style.transform='scale(1.25) translateY(-2px)';"></span>
+            </label>
+            <label title="Gris" style="cursor:pointer;">
+              <input type="radio" name="note-color-radio" value="gray" style="display:none;">
+              <span style="display:inline-block; width:26px; height:26px; border-radius:50%; background:rgba(148,163,184,0.55); border:2px solid #64748b; transition:transform .1s;" onclick="document.getElementById('note-editor-color').value='gray'; this.closest('#note-color-swatches').querySelectorAll('span').forEach(s=>s.style.transform=''); this.style.transform='scale(1.25) translateY(-2px)';"></span>
+            </label>
+            <label title="Naranja" style="cursor:pointer;">
+              <input type="radio" name="note-color-radio" value="orange" style="display:none;">
+              <span style="display:inline-block; width:26px; height:26px; border-radius:50%; background:rgba(249,115,22,0.55); border:2px solid #ea580c; transition:transform .1s;" onclick="document.getElementById('note-editor-color').value='orange'; this.closest('#note-color-swatches').querySelectorAll('span').forEach(s=>s.style.transform=''); this.style.transform='scale(1.25) translateY(-2px)';"></span>
+            </label>
+          </div>
+          <!-- Hidden select to hold value -->
+          <select id="note-editor-color" style="display:none;">
+            <option value="yellow">Amarillo</option>
+            <option value="blue">Azul</option>
+            <option value="green">Verde</option>
+            <option value="red">Rojo</option>
+            <option value="purple">Morado</option>
+            <option value="gray">Gris</option>
+            <option value="orange">Naranja</option>
+          </select>
+        </div>
+
+        <!-- Nota informativa -->
+        <div style="font-size: 0.72rem; color: var(--text-muted); background: rgba(15,23,42,0.5); border: 1px solid var(--border-color); border-radius: 6px; padding: 7px 10px;">
+          <i class="fas fa-info-circle" style="color: #38bdf8;"></i>
+          Las notas son <strong>solo visuales</strong>. No se sincronizan con Zabbix ni NetBox.
+          Puedes conectarlas a nodos con aristas; actúan como <strong>puente transparente</strong> en la topología.
+        </div>
+
+        <div class="modal-footer" style="justify-content: space-between;">
+          <button class="btn btn-danger" id="btn-delete-note" style="padding: 7px 12px; font-size: 0.76rem;">
+            <i class="fas fa-trash-alt"></i> Eliminar Nota
+          </button>
+          <div style="display: flex; gap: 6px;">
+            <button class="btn" id="btn-cancel-note">Cancelar</button>
+            <button class="btn btn-primary" id="btn-save-note">
+              <i class="fas fa-save"></i> Guardar
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tooltip Flotante de Brazo FTTH / Telemetría GPON -->
+  <div id="canvas-gpon-tooltip" style="display: none; position: fixed; z-index: 9999; pointer-events: none; background: rgba(15, 23, 42, 0.96); backdrop-filter: blur(10px); border: 1px solid rgba(14, 165, 233, 0.45); border-radius: 8px; padding: 11px 15px; box-shadow: 0 10px 30px rgba(0,0,0,0.7); max-width: 400px; font-family: system-ui, -apple-system, sans-serif;">
+    <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 6px; margin-bottom: 6px;">
+      <span style="font-size: 0.8rem; font-weight: 700; color: #38bdf8; display: flex; align-items: center; gap: 5px;" id="tooltip-gpon-title">
+        <i class="fas fa-code-branch"></i> Brazo FTTH
+      </span>
+      <span id="tooltip-gpon-status" class="badge" style="font-size: 0.65rem; background: rgba(16,185,129,0.2); color: #10b981; border: 1px solid rgba(16,185,129,0.4);">
+        ● Link Up (Operativo)
+      </span>
+    </div>
+
+    <!-- OLT y Puerto GPON -->
+    <div style="font-size: 0.72rem; color: #e2e8f0; margin-bottom: 6px; display: flex; justify-content: space-between;">
+      <span>OLT: <strong id="tooltip-gpon-olt" style="color: #38bdf8;">OLT_HUAWEI</strong></span>
+      <span>Puerto: <strong id="tooltip-gpon-port" style="color: #c084fc; font-family: monospace;">GPON 0/1/0</strong></span>
+    </div>
+
+    <!-- Tráfico en Tiempo Real -->
+    <div style="background: rgba(2, 6, 23, 0.5); border-radius: 6px; padding: 6px 8px; font-size: 0.72rem; margin-bottom: 6px;">
+      <div style="display: flex; justify-content: space-between; font-weight: 700;">
+        <span style="color: #10b981;"><i class="fas fa-arrow-down"></i> <span id="tooltip-gpon-traffic-in">—</span></span>
+        <span style="color: #38bdf8;"><i class="fas fa-arrow-up"></i> <span id="tooltip-gpon-traffic-out">—</span></span>
+        <span style="color: #cbd5e1;"><i class="fas fa-database"></i> <span id="tooltip-gpon-volume">—</span></span>
+      </div>
+    </div>
+
+    <!-- Diagnóstico de Clientes Ópticos (Típicos vs Atípicos) -->
+    <div style="background: rgba(14, 165, 233, 0.08); border: 1px solid rgba(14, 165, 233, 0.25); border-radius: 6px; padding: 7px 9px; font-size: 0.72rem;">
+      <div style="font-size: 0.68rem; font-weight: 700; color: #38bdf8; margin-bottom: 4px; display: flex; justify-content: space-between;">
+        <span>📊 Diagnóstico de Señal (Clientes ONUs)</span>
+        <span style="color: #94a3b8; font-size: 0.6rem;">Umbral: > -27 dBm</span>
+      </div>
+      <div style="display: flex; justify-content: space-between; margin-bottom: 2px;">
+        <span style="color: #6ee7b7;">● Clientes Típicos: <strong id="tooltip-gpon-typical-count" style="color: #10b981;">—</strong></span>
+        <span style="color: #e2e8f0;">Prom: <strong id="tooltip-gpon-typical-avg" style="color: #10b981; font-family: monospace;">—</strong></span>
+      </div>
+      <div style="display: flex; justify-content: space-between;">
+        <span style="color: #fca5a5;">● Clientes Atípicos (≤ -27 dBm): <strong id="tooltip-gpon-atypical-count" style="color: #ef4444;">—</strong></span>
+        <span style="color: #e2e8f0;">Prom: <strong id="tooltip-gpon-atypical-avg" style="color: #ef4444; font-family: monospace;">—</strong></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ Modal Editor de Brazo FTTH / Ramal GPON ═══ -->
+  <div class="modal-overlay" id="modal-ftth-branch-editor" style="display: none;">
+    <div class="modal-card" style="width: 460px;">
+      <div class="modal-header">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <i class="fas fa-code-branch" style="color: #38bdf8; font-size: 1.2rem;"></i>
+          <h3 class="modal-title">Configurar Brazo FTTH / Ramal GPON</h3>
+        </div>
+        <button class="modal-close" id="btn-close-ftth-branch-modal">&times;</button>
+      </div>
+      <div class="modal-form" style="padding: 14px 18px; gap: 12px;">
+
+        <!-- Nombre del Brazo -->
+        <div class="prop-row">
+          <label class="prop-label"><i class="fas fa-tag"></i> Nombre del Brazo / Ramal</label>
+          <input type="text" id="input-branch-name" class="input-text" placeholder="Ej. Brazo Huizache Centro / Ramal Norte">
+        </div>
+
+        <!-- OLT Asociada -->
+        <div class="prop-row">
+          <label class="prop-label"><i class="fas fa-server"></i> OLT Asociada</label>
+          <select id="select-branch-olt" class="input-select"></select>
+        </div>
+
+        <!-- Puerto GPON -->
+        <div class="prop-row">
+          <label class="prop-label"><i class="fas fa-ethernet"></i> Puerto GPON de la OLT</label>
+          <select id="select-branch-gpon-port" class="input-select"></select>
+        </div>
+
+        <!-- Umbral de Señal Atípica -->
+        <div class="prop-row">
+          <label class="prop-label"><i class="fas fa-sliders-h"></i> Umbral Señal Aceptable (dBm)</label>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <input type="number" id="input-branch-threshold" class="input-text" step="0.5" value="-27.0" style="width: 110px;">
+            <span style="font-size: 0.72rem; color: var(--text-muted);">Valores menores o iguales (≤ -27 dBm) se clasificarán como <strong>Atípicos</strong></span>
+          </div>
+        </div>
+
+        <!-- Orientación de la Flecha -->
+        <div class="prop-row">
+          <label class="prop-label"><i class="fas fa-arrows-alt"></i> Orientación de la Flecha / Ramal</label>
+          <select id="select-branch-arrow-dir" class="input-select">
+            <option value="left">Izquierda (➔ Hacia la derecha)</option>
+            <option value="right">Derecha (⬅ Hacia la izquierda)</option>
+          </select>
+        </div>
+
+        <!-- Nota informativa -->
+        <div style="font-size: 0.72rem; color: var(--text-muted); background: rgba(15,23,42,0.5); border: 1px solid var(--border-color); border-radius: 6px; padding: 7px 10px;">
+          <i class="fas fa-info-circle" style="color: #38bdf8;"></i>
+          El brazo se pintará en <strong>rojo</strong> si el puerto GPON está <code>Link Down</code> (SNMP 2), o en <strong>amarillo</strong> si detecta ONUs con señal deficiente (≤ -27 dBm).
+        </div>
+
+        <div class="modal-footer" style="justify-content: space-between;">
+          <button class="btn btn-danger" id="btn-delete-ftth-branch" style="padding: 7px 12px; font-size: 0.76rem;">
+            <i class="fas fa-trash-alt"></i> Eliminar Brazo
+          </button>
+          <div style="display: flex; gap: 6px;">
+            <button class="btn" id="btn-cancel-ftth-branch">Cancelar</button>
+            <button class="btn btn-primary" id="btn-save-ftth-branch">
+              <i class="fas fa-save"></i> Guardar Brazo
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Scripts -->
-  <script src="/static/js/api.js?v=3.3"></script>
-  <script src="/static/js/app.js?v=3.3"></script>
+  <script src="/static/js/api.js?v=3.7"></script>
+  <script src="/static/js/app.js?v=3.7"></script>
 </body>
 </html>
+

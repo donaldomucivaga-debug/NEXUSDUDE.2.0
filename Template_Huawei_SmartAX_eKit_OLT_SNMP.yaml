@@ -1,0 +1,365 @@
+zabbix_export:
+  version: '7.0'
+  template_groups:
+  - uuid: a2524b3d5bce4df39e790514c5445761
+    name: Plantillas Personalizadas
+  - uuid: 68716c669dcc4f0f8a8237fb3a3d6e05
+    name: Templates/Telecommunications
+  templates:
+  - uuid: 16dbc2eaf9e1480cae757ef7d1a05a1b
+    template: Template_Huawei_SmartAX_eKit_OLT_SNMP
+    name: Template Huawei SmartAX & eKit OLT SNMP
+    description: 'Plantilla optimizada para OLTs Huawei SmartAX y eKit (EA5800-X15,
+      EA5800-X7, EA5800-X2, EA5801E-GP04, EA5801E-GP08, EA5801E-GP16, MA5801).
+
+      Monitorea salud de hardware (CPU, Memoria, Temperatura), estado de placas, interfaces
+      64-bit, telemetria optica GPON DDM (TX Power, Temp SFP, Voltaje) y conteo de
+      ONUs online.
+
+      '
+    groups:
+    - name: Plantillas Personalizadas
+    - name: Templates/Telecommunications
+    items:
+    - uuid: b612dab709b54984a9bedc3cf19acfa0
+      name: Descripción del Sistema (sysDescr)
+      type: SNMP_AGENT
+      snmp_oid: 1.3.6.1.2.1.1.1.0
+      key: system.descr
+      history: 7d
+      value_type: CHAR
+      trends: '0'
+      description: Software y versión VRP.
+      tags:
+      - tag: scope
+        value: system
+    - uuid: 5aa873fb285b4e3d8fbbd086fcafd52d
+      name: Nombre del Sistema (sysName)
+      type: SNMP_AGENT
+      snmp_oid: 1.3.6.1.2.1.1.5.0
+      key: system.name
+      history: 7d
+      value_type: CHAR
+      trends: '0'
+      description: Nombre del equipo OLT.
+      tags:
+      - tag: scope
+        value: system
+    - uuid: d486a51a01594b07aefbaea0cb492720
+      name: Tiempo de Actividad del Sistema (Uptime)
+      type: SNMP_AGENT
+      snmp_oid: 1.3.6.1.2.1.1.3.0
+      key: system.uptime
+      history: 7d
+      units: uptime
+      description: Tiempo encendido de la OLT.
+      preprocessing:
+      - type: MULTIPLIER
+        parameters:
+        - '0.01'
+      tags:
+      - tag: scope
+        value: system
+      triggers:
+      - uuid: 40e50752cc0e4b6bbd5a7c02a3d838fc
+        expression: last(/Template_Huawei_SmartAX_eKit_OLT_SNMP/system.uptime)<10m
+        name: 'OLT Huawei: Se ha reiniciado recientemente (Uptime < 10m)'
+        priority: WARNING
+    discovery_rules:
+    - uuid: 528ab250dd5a4a0f9b7fb6f4a71c915a
+      name: Descubrimiento de Telemetría Óptica GPON (DDM)
+      type: SNMP_AGENT
+      snmp_oid: discovery[{#PON_INDEX},1.3.6.1.4.1.2011.6.128.1.1.2.23.1.4]
+      key: gpon.optical.discovery
+      delay: 1h
+      item_prototypes:
+      - uuid: 1d22f1e162a14d8ebe9dbacccf498d59
+        name: 'GPON [{#SNMPINDEX}]: ONUs Online (Activas)'
+        type: SNMP_AGENT
+        snmp_oid: 1.3.6.1.4.1.2011.6.128.1.1.2.21.1.2.{#SNMPINDEX}
+        key: gpon.ont.online[{#SNMPINDEX}]
+        history: 7d
+        tags:
+        - tag: component
+          value: gpon
+      - uuid: 4b57eb335b3a4efe843eeff112e2a91e
+        name: 'GPON [{#SNMPINDEX}]: Total ONUs Registradas'
+        type: SNMP_AGENT
+        snmp_oid: 1.3.6.1.4.1.2011.6.128.1.1.2.21.1.1.{#SNMPINDEX}
+        key: gpon.ont.registered[{#SNMPINDEX}]
+        history: 7d
+        tags:
+        - tag: component
+          value: gpon
+      - uuid: 39c1f8a8201540d7aa87a43bb0049a45
+        name: 'GPON [{#SNMPINDEX}]: Temperatura Módulo SFP'
+        type: SNMP_AGENT
+        snmp_oid: 1.3.6.1.4.1.2011.6.128.1.1.2.23.1.1.{#SNMPINDEX}
+        key: gpon.optical.temp[{#SNMPINDEX}]
+        history: 7d
+        value_type: FLOAT
+        units: °C
+        tags:
+        - tag: component
+          value: optical
+      - uuid: e750d04548844981b3890d573ca6ae40
+        name: 'GPON [{#SNMPINDEX}]: Potencia Óptica TX'
+        type: SNMP_AGENT
+        snmp_oid: 1.3.6.1.4.1.2011.6.128.1.1.2.23.1.4.{#SNMPINDEX}
+        key: gpon.optical.txpower[{#SNMPINDEX}]
+        history: 7d
+        value_type: FLOAT
+        units: dBm
+        preprocessing:
+        - type: MULTIPLIER
+          parameters:
+          - '0.01'
+        tags:
+        - tag: component
+          value: optical
+        trigger_prototypes:
+        - uuid: 886eba7fc2794652945c69276be4b8d1
+          expression: last(/Template_Huawei_SmartAX_eKit_OLT_SNMP/gpon.optical.txpower[{#SNMPINDEX}])<{$PON_TX_MIN}
+          name: 'GPON [{#SNMPINDEX}]: Potencia TX Óptica baja (< {$PON_TX_MIN} dBm)'
+          priority: WARNING
+    - uuid: 8732547078c54fbd9387b8c989258204
+      name: Descubrimiento de Tarjetas y Controladoras
+      type: SNMP_AGENT
+      snmp_oid: discovery[{#SLOT_IDX},1.3.6.1.4.1.2011.2.6.7.1.1.2.1.7,{#BOARD_NAME},1.3.6.1.4.1.2011.2.6.7.1.1.2.1.7]
+      key: huawei.board.discovery
+      delay: 1h
+      item_prototypes:
+      - uuid: a7c89acab9504d85b11ec2acf2fe03d8
+        name: 'Slot [{#SLOT_IDX}] {#BOARD_NAME}: Uso de CPU'
+        type: SNMP_AGENT
+        snmp_oid: 1.3.6.1.4.1.2011.2.6.7.1.1.2.1.5.{#SNMPINDEX}
+        key: huawei.board.cpu[{#SNMPINDEX}]
+        history: 7d
+        value_type: FLOAT
+        units: '%'
+        tags:
+        - tag: component
+          value: cpu
+        trigger_prototypes:
+        - uuid: 4ebb6e0ce8d642f7a5dcd293c48cce73
+          expression: min(/Template_Huawei_SmartAX_eKit_OLT_SNMP/huawei.board.cpu[{#SNMPINDEX}],5m)>{$CPU_UTIL_WARN}
+          name: 'Slot [{#SLOT_IDX}] {#BOARD_NAME}: Uso de CPU elevado (> {$CPU_UTIL_WARN}%)'
+          priority: WARNING
+      - uuid: c1daff3891794b6699271b5316efd6e3
+        name: 'Slot [{#SLOT_IDX}] {#BOARD_NAME}: Uso de Memoria RAM'
+        type: SNMP_AGENT
+        snmp_oid: 1.3.6.1.4.1.2011.2.6.7.1.1.2.1.10.{#SNMPINDEX}
+        key: huawei.board.mem[{#SNMPINDEX}]
+        history: 7d
+        value_type: FLOAT
+        units: '%'
+        tags:
+        - tag: component
+          value: memory
+        trigger_prototypes:
+        - uuid: 2ff70db2cf2a49f9ae7c75e058cec469
+          expression: min(/Template_Huawei_SmartAX_eKit_OLT_SNMP/huawei.board.mem[{#SNMPINDEX}],5m)>{$MEM_UTIL_WARN}
+          name: 'Slot [{#SLOT_IDX}] {#BOARD_NAME}: Uso de Memoria elevado (> {$MEM_UTIL_WARN}%)'
+          priority: WARNING
+      - uuid: b63d82f959ca417eb3bc0a519c510ac3
+        name: 'Slot [{#SLOT_IDX}] {#BOARD_NAME}: Estado Operativo'
+        type: SNMP_AGENT
+        snmp_oid: 1.3.6.1.4.1.2011.2.6.7.1.1.2.1.8.{#SNMPINDEX}
+        key: huawei.board.status[{#SNMPINDEX}]
+        history: 7d
+        tags:
+        - tag: component
+          value: health
+      - uuid: 91aa8ff2bafc4383818adc8628c27686
+        name: 'Slot [{#SLOT_IDX}] {#BOARD_NAME}: Temperatura'
+        type: SNMP_AGENT
+        snmp_oid: 1.3.6.1.4.1.2011.2.6.7.1.1.2.1.6.{#SNMPINDEX}
+        key: huawei.board.temp[{#SNMPINDEX}]
+        history: 7d
+        value_type: FLOAT
+        units: °C
+        tags:
+        - tag: component
+          value: temperature
+        trigger_prototypes:
+        - uuid: fc763e8e1a8f473880092ab7c58e13e6
+          expression: min(/Template_Huawei_SmartAX_eKit_OLT_SNMP/huawei.board.temp[{#SNMPINDEX}],5m)>{$TEMP_WARN}
+          name: 'Slot [{#SLOT_IDX}] {#BOARD_NAME}: Alta temperatura (> {$TEMP_WARN}°C)'
+          priority: HIGH
+    - uuid: 82a0929b7ec0458ba11cf805f34f94ee
+      name: Descubrimiento de Interfaces y Tráfico
+      type: SNMP_AGENT
+      snmp_oid: discovery[{#IFNAME},1.3.6.1.2.1.31.1.1.1.1,{#IFALIAS},1.3.6.1.2.1.31.1.1.1.18]
+      key: net.if.discovery
+      delay: 1h
+      filter:
+        evaltype: AND
+        conditions:
+        - macro: '{#IFNAME}'
+          value: ^(GPON|ethernet|10ge|ge).*
+          formulaid: A
+      item_prototypes:
+      - uuid: 66c259223cba467dbae647c6204f103c
+        name: 'Interface [{#IFNAME}]: Tráfico Ingress'
+        type: SNMP_AGENT
+        snmp_oid: 1.3.6.1.2.1.31.1.1.1.6.{#SNMPINDEX}
+        key: net.if.in[{#SNMPINDEX}]
+        history: 7d
+        value_type: FLOAT
+        units: bps
+        preprocessing:
+        - type: CHANGE_PER_SECOND
+          parameters:
+          - ''
+        - type: MULTIPLIER
+          parameters:
+          - '8'
+        tags:
+        - tag: component
+          value: traffic
+      - uuid: 325f9fca24b74b8c8293c0c8313ae9a6
+        name: 'Interface [{#IFNAME}]: Tráfico Egress'
+        type: SNMP_AGENT
+        snmp_oid: 1.3.6.1.2.1.31.1.1.1.10.{#SNMPINDEX}
+        key: net.if.out[{#SNMPINDEX}]
+        history: 7d
+        value_type: FLOAT
+        units: bps
+        preprocessing:
+        - type: CHANGE_PER_SECOND
+          parameters:
+          - ''
+        - type: MULTIPLIER
+          parameters:
+          - '8'
+        tags:
+        - tag: component
+          value: traffic
+      - uuid: 7c93b2cdead34ddd8518662ff8ae501d
+        name: 'Interface [{#IFNAME}]: Link Status'
+        type: SNMP_AGENT
+        snmp_oid: 1.3.6.1.2.1.2.2.1.8.{#SNMPINDEX}
+        key: net.if.status[{#SNMPINDEX}]
+        history: 7d
+        tags:
+        - tag: component
+          value: link
+        trigger_prototypes:
+        - uuid: 22f89f9e027e4b72b96f14b1b15fc87d
+          expression: last(/Template_Huawei_SmartAX_eKit_OLT_SNMP/net.if.status[{#SNMPINDEX}])=2
+          name: 'Interface [{#IFNAME}]: Enlace caído (Link Down)'
+          priority: AVERAGE
+          manual_close: 'YES'
+      - uuid: ae877d4a76814943b901670a971bc846
+        name: 'Interface [{#IFNAME}]: Bytes Ingress (Acumulado)'
+        type: SNMP_AGENT
+        snmp_oid: 1.3.6.1.2.1.31.1.1.1.6.{#SNMPINDEX}
+        key: net.if.in_bytes[{#SNMPINDEX}]
+        history: 7d
+        trends: 365d
+        value_type: FLOAT
+        units: B
+        tags:
+        - tag: component
+          value: traffic_volume
+        trigger_prototypes:
+        - uuid: 31bd31f9e5334a279001ae311b716874
+          expression: last(/Template_Huawei_SmartAX_eKit_OLT_SNMP/net.if.in_bytes[{#SNMPINDEX}])
+            - min(/Template_Huawei_SmartAX_eKit_OLT_SNMP/net.if.in_bytes[{#SNMPINDEX}],30d)>1099511627776
+          name: 'Interface [{#IFNAME}]: Consumo Mensual Ingress superó 1 TB'
+          priority: INFO
+          manual_close: 'YES'
+        - uuid: 38c650216858474eb2c67d5a1ee6185a
+          expression: last(/Template_Huawei_SmartAX_eKit_OLT_SNMP/net.if.in_bytes[{#SNMPINDEX}])
+            - min(/Template_Huawei_SmartAX_eKit_OLT_SNMP/net.if.in_bytes[{#SNMPINDEX}],30d)>3298534883328
+          name: 'Interface [{#IFNAME}]: Consumo Mensual Ingress superó 3 TB'
+          priority: WARNING
+          manual_close: 'YES'
+        - uuid: 5a2c6d1f86bb4d82a3562810b25606f2
+          expression: last(/Template_Huawei_SmartAX_eKit_OLT_SNMP/net.if.in_bytes[{#SNMPINDEX}])
+            - min(/Template_Huawei_SmartAX_eKit_OLT_SNMP/net.if.in_bytes[{#SNMPINDEX}],30d)>5497558138880
+          name: 'Interface [{#IFNAME}]: Consumo Mensual Ingress superó 5 TB'
+          priority: HIGH
+          manual_close: 'YES'
+      - uuid: 959ae2aa9a124c0296317cf6b88a9922
+        name: 'Interface [{#IFNAME}]: Bytes Egress (Acumulado)'
+        type: SNMP_AGENT
+        snmp_oid: 1.3.6.1.2.1.31.1.1.1.10.{#SNMPINDEX}
+        key: net.if.out_bytes[{#SNMPINDEX}]
+        history: 7d
+        trends: 365d
+        value_type: FLOAT
+        units: B
+        tags:
+        - tag: component
+          value: traffic_volume
+    - uuid: 35ee2e01c7f44cbb8a19474f94ec6b75
+      name: Descubrimiento de ONUs y Niveles de Señal Óptica (Clientes FTTH)
+      type: SNMP_AGENT
+      snmp_oid: discovery[{#ONT_DESC},1.3.6.1.4.1.2011.6.128.1.1.2.43.1.9,{#ONT_SN},1.3.6.1.4.1.2011.6.128.1.1.2.43.1.3]
+      key: gpon.ont.optical.discovery
+      delay: 10m
+      item_prototypes:
+      - uuid: ce571b2bd0134f10ae28f15d21a59b37
+        name: 'ONT [{#ONT_SN}] ({#ONT_DESC}): Potencia Óptica Rx'
+        type: SNMP_AGENT
+        snmp_oid: 1.3.6.1.4.1.2011.6.128.1.1.2.51.1.4.{#SNMPINDEX}
+        key: gpon.ont.rxpower[{#SNMPINDEX}]
+        history: 7d
+        trends: 365d
+        value_type: FLOAT
+        units: dBm
+        preprocessing:
+        - type: MULTIPLIER
+          parameters:
+          - '0.01'
+        tags:
+        - tag: component
+          value: ont_optical
+        trigger_prototypes:
+        - uuid: ca95682c2b924cf4ac1f4f11a5e9e62f
+          expression: last(/Template_Huawei_SmartAX_eKit_OLT_SNMP/gpon.ont.rxpower[{#SNMPINDEX}])<=-27
+            and last(/Template_Huawei_SmartAX_eKit_OLT_SNMP/gpon.ont.rxpower[{#SNMPINDEX}])>-100
+          name: 'ONT [{#ONT_SN}] ({#ONT_DESC}): Señal óptica atípica / deficiente (Rx <= -27 dBm)'
+          priority: WARNING
+          manual_close: 'YES'
+      - uuid: eb840502dc8b46a9a3b6f0012b1d7ae4
+        name: 'ONT [{#ONT_SN}] ({#ONT_DESC}): Potencia Óptica Tx'
+        type: SNMP_AGENT
+        snmp_oid: 1.3.6.1.4.1.2011.6.128.1.1.2.51.1.6.{#SNMPINDEX}
+        key: gpon.ont.txpower[{#SNMPINDEX}]
+        history: 7d
+        trends: 365d
+        value_type: FLOAT
+        units: dBm
+        preprocessing:
+        - type: MULTIPLIER
+          parameters:
+          - '0.01'
+        tags:
+        - tag: component
+          value: ont_optical
+      - uuid: a82d6194cb024843b0d1e39a5f4f8101
+        name: 'ONT [{#ONT_SN}] ({#ONT_DESC}): Causa de Última Caída'
+        type: SNMP_AGENT
+        snmp_oid: 1.3.6.1.4.1.2011.6.128.1.1.2.46.1.15.{#SNMPINDEX}
+        key: gpon.ont.downcause[{#SNMPINDEX}]
+        history: 7d
+        trends: 365d
+        value_type: UNSIGNED
+        tags:
+        - tag: component
+          value: ont_diagnostics
+    macros:
+    - macro: '{$CPU_UTIL_WARN}'
+      value: '80'
+      description: Umbral de advertencia CPU (%)
+    - macro: '{$MEM_UTIL_WARN}'
+      value: '85'
+      description: Umbral de advertencia Memoria (%)
+    - macro: '{$PON_TX_MIN}'
+      value: '1.5'
+      description: Potencia TX minima recomendada (dBm)
+    - macro: '{$TEMP_WARN}'
+      value: '70'
+      description: Umbral de advertencia Temperatura (°C)
