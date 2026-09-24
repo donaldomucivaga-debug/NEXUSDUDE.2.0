@@ -95,6 +95,70 @@ graph LR
 
 ---
 
+## 🗺️ Plan de Implementación: Módulo de Diagnóstico y Análisis Profundo de OLTs (FTTH / GPON)
+
+Se describe a continuación la hoja de ruta y especificación de diseño para el **Módulo de Diagnóstico Dedicado de OLTs**, una vista avanzada en segundo plano / pantalla completa que permite a los operadores e ingenieros de NOC diagnosticar a fondo el estado de los puertos GPON y clientes ONT directamente desde la OLT en tiempo real.
+
+```mermaid
+flowchart TD
+    A["NOC / Operador"] -->|"Clic en ⚡ Diagnóstico OLT"| B["Vista / Dashboard Dedicado de OLTs"]
+    B --> C["Selector Dinámico Multi-OLT (Zabbix/NetBox)"]
+    C -->|"Auto-detecta IP & SNMP Community"| D["Panel de Puertos GPON (0/1/0 a 0/1/15)"]
+    D --> E["Métricas de Puerto (Tráfico Mbps, Volumen GB/TB, ONUs Online/Offline)"]
+    D -->|"Selección de Puerto Específico"| F["Tabla Maestra de Clientes / ONUs (SNMP Bulkwalk Ultra-Rápido)"]
+    F --> G1["Niveles Ópticos (Rx/Tx dBm con Semáforo)"]
+    F --> G2["Causa Raíz de Caída (⚡ Dying-Gasp vs ✂️ LOSi)"]
+    F --> G3["Distancia (Metros) y Modelo ONT (EG8021V5, etc.)"]
+    F --> G4["Agrupación Inteligente por Bote / Caja NAP / Zona"]
+    F --> G5["Filtros Rápidos (Atenuados, Sin Luz, Corte Fibra, Duplicados)"]
+    F --> G6["Consumo de Ancho de Banda & GB por Cliente (Opcional)"]
+```
+
+### 📋 Fases del Plan de Implementación
+
+#### 🔹 Fase 1: Arquitectura Multi-OLT y Descubrimiento Dinámico
+- **Soporte Multi-OLT:** Detección automática de todas las OLTs registradas en Zabbix y NetBox (ej. *OLT Huizache 10.20.0.2*, *OLT Central*, etc.), extrayendo dinámicamente su IP, modelo (Huawei SmartAX/EA5800, V-SOL) y comunidad SNMP de forma segura sin credenciales cableadas en código (*hardcoded*).
+- **Endpoint de Resumen Global:** `GET /api/zabbix/olt/diagnostic-summary` que entrega el estado general de todas las OLTs, slots activos y conteo total de clientes.
+
+#### 🔹 Fase 2: Grid y Matriz de Puertos GPON (Slots & Tarjetas)
+- **Vista de Puertos (0/1/0 a 0/1/15):** Panel con tarjetas interactivas de cada puerto GPON mostrando:
+  - Estado Operativo: `Up` (Verde) / `Down` (Rojo).
+  - Tráfico en Tiempo Real: `Mbps In` y `Mbps Out`.
+  - Volumen de Datos Acumulado: Megabytes, Gigabytes y Terabytes (`GB / TB`) con alertas de umbral.
+  - Conteo de Clientes: `ONUs Online` / `ONUs Offline` / `Total Asignadas`.
+  - Nivel Óptico Promedio del Puerto ($dBm$).
+
+#### 🔹 Fase 3: Tabla Maestra de Diagnóstico Detallado de ONUs por Puerto
+- **Endpoint de Consulta a Fondo:** `GET /api/zabbix/olt/{olt_ip}/port/{port_index}/onts-detailed` optimizado con `snmpbulkwalk -Cr32` (<0.2 segundos por puerto de 128 ONUs).
+- **Columnas de Datos en Tiempo Real:**
+  1. **Identificador y Contrato:** ONT ID, Descripción del Cliente (ej. `10089 - Vazquez Torres Lucero`).
+  2. **Hardware:** Serial Number (Hex-STRING `HWTC...`) y Modelo (`EG8021V5`, `EG8041V5`, `EG8010H`).
+  3. **Nivel Óptico de Recepción ($P_{\text{rx}}$) y Transmisión ($P_{\text{tx}}$):** Formateado en dBm con semáforo:
+     - 🟢 **Óptima:** $> -24\text{ dBm}$
+     - 🟡 **Aceptable / Precaución:** $-24\text{ a } -27\text{ dBm}$
+     - 🔴 **Crítica / Atenuada:** $\le -27\text{ dBm}$
+  4. **Distancia de Fibra:** Medición precisa en metros ($m$).
+  5. **Diagnóstico de Falla / Última Causa de Caída (*Last Down Cause*):**
+     - ⚡ **Dying-Gasp:** Corte de suministro eléctrico en casa del cliente (la red de fibra está íntegra).
+     - ✂️ **LOSi / LOBi:** Corte físico de fibra óptica o desconexión del cable drop/manga.
+     - 🔄 **Manual Reset / Deactivated:** Reinicio manual o bloqueo administrativo.
+  6. **Consumo por Cliente (Opcional / Bajo Demanda):** Medición de caudal de tráfico instantáneo y volumen acumulado (GB) por ONT.
+
+#### 🔹 Fase 4: Inteligencia de Agrupación por Bote de Conexión / Caja NAP / Zona
+- **Algoritmo de Agrupación Automática:** Análisis y agrupamiento de ONUs por prefijos y etiquetas de zona detectadas en las descripciones (ej. `ZONA_2_POZAS`, `ENTRONQUE_HUIZACHE`, `MANGA_PRINCIPAL`, etc.).
+- Permite a los técnicos de campo saber al instante qué botes o splitters tienen afectaciones masivas por falta de luz o cortes de fibra específicos.
+
+#### 🔹 Fase 5: Filtros Rápidos de Diagnóstico en un Clic
+- Botones de filtrado rápido sobre la tabla:
+  - 🔍 **Todos**
+  - 🔴 **Señal Crítica ($\le -27\text{ dBm}$)**
+  - ⚡ **Sin Energía Eléctrica (Dying-Gasp)**
+  - ✂️ **Cortes de Fibra (LOSi/LOBi)**
+  - ⚠️ **Descripciones Duplicadas** (Detección de contratos duplicados o reutilización indebida de ONTs)
+  - 🔌 **Fuera de Línea (Offline)**
+
+---
+
 ## 🛠️ Comandos de Operación
 
 ### Iniciar o Reconstruir el Servicio
@@ -128,16 +192,16 @@ nexusdude/
 │   │   ├── auth_routes.py        # Autenticación y validación SSO
 │   │   ├── inventory_routes.py   # Endpoints de NetBox y puertos
 │   │   ├── maps_routes.py        # CRUD de mapas, nodos, notas y enlaces
-│   │   └── zabbix_routes.py      # Telemetría de aristas, nodos y brazos FTTH
+│   │   └── zabbix_routes.py      # Telemetría de aristas, nodos, brazos FTTH y Diagnóstico OLT
 │   ├── services/
 │   │   ├── inventory_service.py  # Sincronización y cables NetBox
-│   │   └── zabbix_service.py     # Extracción SNMP Bulkwalk, DDM, GPON y métricas
+│   │   └── zabbix_service.py     # Extracción SNMP Bulkwalk, DDM, GPON, diagnóstico profundo de ONTs
 │   ├── static/
-│   │   ├── index.html            # UI principal, modales, notas y tooltips
-│   │   ├── css/style.css         # Estilos visuales The Dude Moderno
+│   │   ├── index.html            # UI principal, lienzo, modales y Dashboard de Diagnóstico OLT
+│   │   ├── css/style.css         # Estilos visuales The Dude Moderno y tablas de diagnóstico
 │   │   └── js/
 │   │       ├── api.js            # Cliente REST API autenticado
-│   │       └── app.js            # Renderizado Konva, brazos FTTH, eventos y canvas
+│   │       └── app.js            # Renderizado Konva, brazos FTTH, eventos y suite de diagnóstico
 │   ├── database.py               # Esquema SQLite, migraciones y roles
 │   ├── models.py                 # Modelos Pydantic
 │   └── main.py                   # Inicialización FastAPI
