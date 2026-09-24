@@ -281,6 +281,8 @@ async def get_map_detail(map_id: str, user: Dict[str, Any] = Depends(get_current
                 netbox_cable_id=r["netbox_cable_id"] if "netbox_cable_id" in keys else None,
                 cable_type=r["cable_type"] if "cable_type" in keys else "cat6",
                 cable_status=r["cable_status"] if "cable_status" in keys else "connected",
+                zabbix_src_interface=r["zabbix_src_interface"] if "zabbix_src_interface" in keys else None,
+                zabbix_tgt_interface=r["zabbix_tgt_interface"] if "zabbix_tgt_interface" in keys else None,
                 status=r["status"],
                 rtt_ms=r["rtt_ms"],
                 loss_percent=r["loss_percent"],
@@ -1091,14 +1093,16 @@ async def create_link(link_data: LinkCreate, user: Dict[str, Any] = Depends(get_
                 source_interface, target_interface,
                 source_interface_id, target_interface_id,
                 netbox_cable_id, cable_type, cable_status,
+                zabbix_src_interface, zabbix_tgt_interface,
                 status, rtt_ms, loss_percent, extra_data
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             link_id, link_data.map_id, link_data.source_node_id, link_data.target_node_id,
             link_data.source_interface, link_data.target_interface,
             src_if_id, tgt_if_id,
             netbox_cable_id, cable_type, cable_status,
+            link_data.zabbix_src_interface, link_data.zabbix_tgt_interface,
             link_data.status or "ok", link_data.rtt_ms or 0.0, link_data.loss_percent or 0.0, extra_str
         ))
         await db.commit()
@@ -1118,6 +1122,8 @@ async def create_link(link_data: LinkCreate, user: Dict[str, Any] = Depends(get_
             netbox_cable_id=r["netbox_cable_id"] if "netbox_cable_id" in keys else None,
             cable_type=r["cable_type"] if "cable_type" in keys else "cat6",
             cable_status=r["cable_status"] if "cable_status" in keys else "connected",
+            zabbix_src_interface=r["zabbix_src_interface"] if "zabbix_src_interface" in keys else None,
+            zabbix_tgt_interface=r["zabbix_tgt_interface"] if "zabbix_tgt_interface" in keys else None,
             status=r["status"],
             rtt_ms=r["rtt_ms"],
             loss_percent=r["loss_percent"],
@@ -1128,7 +1134,7 @@ async def create_link(link_data: LinkCreate, user: Dict[str, Any] = Depends(get_
 
 @router.put("/links/{link_id}", response_model=LinkOut)
 async def update_link(link_id: str, link_data: LinkUpdate, user: Dict[str, Any] = Depends(get_current_user)):
-    """Actualiza propiedades de un enlace (interfaces, dirección de servicio, extra_data)."""
+    """Actualiza propiedades de un enlace (interfaces, telemetría Zabbix, dirección de servicio, extra_data)."""
     async with get_db_connection() as db:
         cursor = await db.execute("SELECT * FROM links WHERE id = ?", (link_id,))
         r = await cursor.fetchone()
@@ -1143,6 +1149,8 @@ async def update_link(link_id: str, link_data: LinkUpdate, user: Dict[str, Any] 
         new_cable_id = link_data.netbox_cable_id if link_data.netbox_cable_id is not None else (r["netbox_cable_id"] if "netbox_cable_id" in keys else None)
         new_cable_type = link_data.cable_type if link_data.cable_type is not None else (r["cable_type"] if "cable_type" in keys else "cat6")
         new_cable_status = link_data.cable_status if link_data.cable_status is not None else (r["cable_status"] if "cable_status" in keys else "connected")
+        new_zbx_src = link_data.zabbix_src_interface if link_data.zabbix_src_interface is not None else (r["zabbix_src_interface"] if "zabbix_src_interface" in keys else None)
+        new_zbx_tgt = link_data.zabbix_tgt_interface if link_data.zabbix_tgt_interface is not None else (r["zabbix_tgt_interface"] if "zabbix_tgt_interface" in keys else None)
         new_status = link_data.status if link_data.status is not None else r["status"]
         new_rtt = link_data.rtt_ms if link_data.rtt_ms is not None else r["rtt_ms"]
         new_loss = link_data.loss_percent if link_data.loss_percent is not None else r["loss_percent"]
@@ -1156,6 +1164,7 @@ async def update_link(link_id: str, link_data: LinkUpdate, user: Dict[str, Any] 
             SET source_interface = ?, target_interface = ?,
                 source_interface_id = ?, target_interface_id = ?,
                 netbox_cable_id = ?, cable_type = ?, cable_status = ?,
+                zabbix_src_interface = ?, zabbix_tgt_interface = ?,
                 status = ?, rtt_ms = ?, loss_percent = ?,
                 extra_data = ?, updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
@@ -1163,6 +1172,7 @@ async def update_link(link_id: str, link_data: LinkUpdate, user: Dict[str, Any] 
             new_src_iface, new_tgt_iface,
             new_src_if_id, new_tgt_if_id,
             new_cable_id, new_cable_type, new_cable_status,
+            new_zbx_src, new_zbx_tgt,
             new_status, new_rtt, new_loss,
             json.dumps(cur_extra), link_id
         ))
@@ -1183,6 +1193,8 @@ async def update_link(link_id: str, link_data: LinkUpdate, user: Dict[str, Any] 
             netbox_cable_id=u["netbox_cable_id"] if "netbox_cable_id" in u_keys else None,
             cable_type=u["cable_type"] if "cable_type" in u_keys else "cat6",
             cable_status=u["cable_status"] if "cable_status" in u_keys else "connected",
+            zabbix_src_interface=u["zabbix_src_interface"] if "zabbix_src_interface" in u_keys else None,
+            zabbix_tgt_interface=u["zabbix_tgt_interface"] if "zabbix_tgt_interface" in u_keys else None,
             status=u["status"],
             rtt_ms=u["rtt_ms"],
             loss_percent=u["loss_percent"],

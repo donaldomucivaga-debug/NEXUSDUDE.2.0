@@ -1582,5 +1582,334 @@ class ZabbixService:
             "devices": devices_with_rf
         }
 
+    async def get_node_zabbix_interfaces(self, node_id: str) -> List[Dict[str, Any]]:
+        """
+        Obtiene las interfaces de red/radio/ópticas monitoreadas en Zabbix para un nodo.
+        Retorna la lista de fuentes de datos disponibles para vincular a las aristas (enlaces).
+        """
+        await self.refresh_zabbix_hosts_cache()
+
+        async with get_db_connection() as db:
+            c = await db.execute("SELECT id, name, ip, device_type, extra_data FROM nodes WHERE id = ?", (node_id,))
+            n = await c.fetchone()
+            if not n:
+                return []
+
+        h = self.find_zabbix_host(n["name"], n["ip"])
+        if not h:
+            return []
+
+        hid = str(h["hostid"])
+        items = await self._call_api("item.get", {
+            "hostids": [hid],
+            "output": ["itemid", "name", "key_", "lastvalue", "units", "status", "lastclock"],
+            "limit": 300
+        })
+
+        interfaces_dict: Dict[str, Dict[str, Any]] = {}
+
+        def fmt_bps(val):
+            try:
+                num = float(val)
+                if num >= 1_000_000_000:
+                    return f"{num / 1_000_000_000:.2f} Gbps"
+                elif num >= 1_000_000:
+                    return f"{num / 1_000_000:.2f} Mbps"
+                elif num >= 1_000:
+                    return f"{num / 1_000:.1f} Kbps"
+                else:
+                    return f"{num:.0f} bps"
+            except Exception:
+                return "0 bps"
+
+        for it in items:
+            name = it.get("name", "")
+            key = it.get("key_", "")
+            val = it.get("lastvalue")
+
+            # 1. Interfaces SNMP Estándar o Ethernet / SFP
+            if "net.if.in[" in key or "net.if.out[" in key or "sensor.optical." in key or "net.if.status[" in key or "net.if.speed[" in key or ("Interface" in name and any(k in name.lower() for k in ["traffic", "bits", "bytes", "octets", "speed", "optical", "status"])):
+                if_name = None
+                m_key = re.search(r'\[([^\]]+)\]', key)
+                if m_key:
+                    param = m_key.group(1).split(",")[-1].strip()
+                    if not param.startswith("if") or len(param) < 15:
+                        if_name = param
+
+                if not if_name or if_name.startswith("if"):
+                    m_name = re.match(r'(?:Interface|Port|Interfaz)\s+([^:]+)', name, re.IGNORECASE)
+                    if m_name:
+                        if_name = m_name.group(1).strip()
+                    else:
+                        m_name2 = re.match(r'^([^:]+):', name)
+                        if m_name2 and not any(k in m_name2.group(1).lower() for k in ["icmp", "system", "cpu", "memory", "ping"]):
+                            if_name = m_name2.group(1).strip()
+
+                if not if_name:
+                    if_name = key.split("[")[0] if "[" in key else name
+
+                if if_name not in interfaces_dict:
+                    is_opt = any(k in if_name.lower() or k in name.lower() for k in ["sfp", "optical", "fiber", "xg", "ge25", "ge26", "ge27", "ge28"])
+                    interfaces_dict[if_name] = {
+                        "name": if_name,
+                        "key": if_name,
+                        "display_name": f"⚡ {if_name}" if is_opt else f"🔌 {if_name}",
+                        "type": "optical" if is_opt else "ethernet",
+                        "status": "up",
+                        "speed": "1 Gbps",
+                        "traffic_in_bps": 0,
+                        "traffic_out_bps": 0,
+                        "traffic_in_fmt": "—",
+                        "traffic_out_fmt": "—",
+                        "optical": {},
+                        "wireless": {},
+                        "item_ids": []
+                    }
+
+                entry = interfaces_dict[if_name]
+                entry["item_ids"].append(it.get("itemid"))
+
+                if "net.if.in" in key or "bits received" in name.lower() or "inbound" in name.lower():
+                    try:
+                        entry["traffic_in_bps"] = float(val) if val else 0
+                        entry["traffic_in_fmt"] = fmt_bps(val)
+                    except Exception:
+                        pass
+                elif "net.if.out" in key or "bits sent" in name.lower() or "outbound" in name.lower():
+                    try:
+                        entry["traffic_out_bps"] = float(val) if val else 0
+                        entry["traffic_out_fmt"] = fmt_bps(val)
+                    except Exception:
+                        pass
+                elif "net.if.status" in key or "operational status" in name.lower():
+                    entry["status"] = "up" if val in ("1", "up", "UP") else ("down" if val in ("2", "down", "DOWN") else "unknown")
+                elif "net.if.speed" in key or "speed" in name.lower():
+                    entry["speed"] = fmt_bps(val) if val else entry["speed"]
+                elif "sensor.optical.rx_power" in key or "rx power" in name.lower() or "rx_power" in key:
+                    try:
+                        entry["optical"]["rx_power_dbm"] = round(float(val), 2)
+                    except Exception:
+                        pass
+                elif "sensor.optical.tx_power" in key or "tx power" in name.lower() or "tx_power" in key:
+                    try:
+                        entry["optical"]["tx_power_dbm"] = round(float(val), 2)
+                    except Exception:
+                        pass
+                elif "sensor.optical.temperature" in key or "temperature" in name.lower():
+                    try:
+                        entry["optical"]["temp_c"] = round(float(val), 1)
+                    except Exception:
+                        pass
+                elif "sensor.optical.voltage" in key or "voltage" in name.lower():
+                    try:
+                        entry["optical"]["voltage_v"] = round(float(val), 2)
+                    except Exception:
+                        pass
+                elif "sensor.optical.bias" in key or "bias" in name.lower():
+                    try:
+                        entry["optical"]["bias_ma"] = round(float(val), 2)
+                    except Exception:
+                        pass
+
+            # 2. Interfaces Wireless / Radio (Cambium ePMP / Ubiquiti / Mimosa / Altai)
+            elif any(k in key for k in ["cambium.radio", "cambium.cpe", "ubnt.radio", "mimosa.radio", "altai.radio"]):
+                if "Wireless (RF)" not in interfaces_dict:
+                    interfaces_dict["Wireless (RF)"] = {
+                        "name": "Wireless (RF)",
+                        "key": "wireless_rf",
+                        "display_name": "📡 Enlace Inalámbrico (RF)",
+                        "type": "wireless",
+                        "status": "up",
+                        "speed": "—",
+                        "traffic_in_bps": 0,
+                        "traffic_out_bps": 0,
+                        "traffic_in_fmt": "—",
+                        "traffic_out_fmt": "—",
+                        "optical": {},
+                        "wireless": {},
+                        "item_ids": []
+                    }
+
+                w_entry = interfaces_dict["Wireless (RF)"]
+                w_entry["item_ids"].append(it.get("itemid"))
+
+                if "rssi" in key or "signal" in key:
+                    try:
+                        w_entry["wireless"]["rssi_dbm"] = round(float(val), 1)
+                    except Exception:
+                        pass
+                elif "snr" in key:
+                    try:
+                        w_entry["wireless"]["snr_db"] = round(float(val), 1)
+                    except Exception:
+                        pass
+                elif "freq" in key:
+                    w_entry["wireless"]["freq_mhz"] = val
+                elif "chwidth" in key or "bandwidth" in key:
+                    w_entry["wireless"]["bandwidth"] = val
+                elif "rx_mcs" in key:
+                    w_entry["wireless"]["rx_mcs"] = val
+                elif "tx_mcs" in key:
+                    w_entry["wireless"]["tx_mcs"] = val
+                elif "distance" in key:
+                    w_entry["wireless"]["distance_km"] = val
+
+            # 3. LAN Port de Antenas
+            elif key in ("cambium.lan.speed", "net.if.status[LAN]", "net.if.in[LAN]", "net.if.out[LAN]", "net.if.status[eth0]", "net.if.in[eth0]", "net.if.out[eth0]"):
+                lan_name = "eth0 / LAN"
+                if lan_name not in interfaces_dict:
+                    interfaces_dict[lan_name] = {
+                        "name": lan_name,
+                        "key": "eth0",
+                        "display_name": f"🔌 {lan_name}",
+                        "type": "ethernet",
+                        "status": "up",
+                        "speed": "1 Gbps",
+                        "traffic_in_bps": 0,
+                        "traffic_out_bps": 0,
+                        "traffic_in_fmt": "—",
+                        "traffic_out_fmt": "—",
+                        "optical": {},
+                        "wireless": {},
+                        "item_ids": []
+                    }
+                lan_entry = interfaces_dict[lan_name]
+                lan_entry["item_ids"].append(it.get("itemid"))
+                if "in" in key:
+                    try:
+                        lan_entry["traffic_in_bps"] = float(val) if val else 0
+                        lan_entry["traffic_in_fmt"] = fmt_bps(val)
+                    except Exception:
+                        pass
+                elif "out" in key:
+                    try:
+                        lan_entry["traffic_out_bps"] = float(val) if val else 0
+                        lan_entry["traffic_out_fmt"] = fmt_bps(val)
+                    except Exception:
+                        pass
+                elif "speed" in key:
+                    lan_entry["speed"] = val or "1 Gbps"
+
+        result_list = list(interfaces_dict.values())
+        result_list.sort(key=lambda x: (0 if x["type"] == "optical" else (1 if x["type"] == "ethernet" else 2), x["name"]))
+        return result_list
+
+    async def get_link_telemetry(self, link_id: str) -> Dict[str, Any]:
+        """Obtiene la telemetría en tiempo real de una arista (enlace) combinando ambos extremos."""
+        async with get_db_connection() as db:
+            c = await db.execute("""
+                SELECT l.*,
+                       sn.name as src_name, sn.ip as src_ip, sn.device_type as src_type, sn.device_id as src_dev_id,
+                       tn.name as tgt_name, tn.ip as tgt_ip, tn.device_type as tgt_type, tn.device_id as tgt_dev_id
+                FROM links l
+                LEFT JOIN nodes sn ON l.source_node_id = sn.id
+                LEFT JOIN nodes tn ON l.target_node_id = tn.id
+                WHERE l.id = ?
+            """, (link_id,))
+            row = await c.fetchone()
+            if not row:
+                raise Exception(f"Enlace {link_id} no encontrado")
+
+        link = dict(row)
+        src_node_id = link["source_node_id"]
+        tgt_node_id = link["target_node_id"]
+
+        # Obtener interfaces de Zabbix para origen y destino
+        src_ifaces = await self.get_node_zabbix_interfaces(src_node_id)
+        tgt_ifaces = await self.get_node_zabbix_interfaces(tgt_node_id)
+
+        # Encontrar telemetría coincidente para el puerto asignado
+        src_match = None
+        tgt_match = None
+
+        target_src_name = (link.get("zabbix_src_interface") or link.get("source_interface") or "").strip().lower()
+        target_tgt_name = (link.get("zabbix_tgt_interface") or link.get("target_interface") or "").strip().lower()
+
+        if target_src_name:
+            for iface in src_ifaces:
+                if iface["name"].lower() == target_src_name or iface["key"].lower() == target_src_name or target_src_name in iface["name"].lower():
+                    src_match = iface
+                    break
+
+        if target_tgt_name:
+            for iface in tgt_ifaces:
+                if iface["name"].lower() == target_tgt_name or iface["key"].lower() == target_tgt_name or target_tgt_name in iface["name"].lower():
+                    tgt_match = iface
+                    break
+
+        # Si no hubo coincidencia explícita pero solo hay una interfaz disponible, asignarla
+        if not src_match and len(src_ifaces) == 1:
+            src_match = src_ifaces[0]
+        if not tgt_match and len(tgt_ifaces) == 1:
+            tgt_match = tgt_ifaces[0]
+
+        # Determinar estado combinado del enlace
+        is_down = (src_match and src_match.get("status") == "down") or (tgt_match and tgt_match.get("status") == "down")
+        link_status = "down" if is_down else "ok"
+
+        # Construir resumen para el tooltip
+        parts = []
+        traffic_in = src_match.get("traffic_in_fmt") if src_match else (tgt_match.get("traffic_in_fmt") if tgt_match else "—")
+        traffic_out = src_match.get("traffic_out_fmt") if src_match else (tgt_match.get("traffic_out_fmt") if tgt_match else "—")
+
+        if traffic_in != "—" or traffic_out != "—":
+            parts.append(f"⬇ In: {traffic_in} | ⬆ Out: {traffic_out}")
+
+        optical_info = (src_match.get("optical") if src_match else None) or (tgt_match.get("optical") if tgt_match else None)
+        if optical_info and optical_info.get("rx_power_dbm") is not None:
+            parts.append(f"📡 Rx: {optical_info.get('rx_power_dbm')} dBm")
+
+        wireless_info = (src_match.get("wireless") if src_match else None) or (tgt_match.get("wireless") if tgt_match else None)
+        if wireless_info and wireless_info.get("rssi_dbm") is not None:
+            parts.append(f"📶 RSSI: {wireless_info.get('rssi_dbm')} dBm")
+
+        cable_type_label = link.get("cable_type", "cat6").upper()
+        summary_text = " · ".join(parts) if parts else f"Enlace {cable_type_label} (Operativo)"
+
+        return {
+            "link_id": link_id,
+            "status": link_status,
+            "cable": {
+                "netbox_cable_id": link.get("netbox_cable_id"),
+                "cable_type": link.get("cable_type", "cat6"),
+                "cable_status": link.get("cable_status", "connected")
+            },
+            "source": {
+                "node_id": src_node_id,
+                "node_name": link.get("src_name"),
+                "interface": link.get("source_interface"),
+                "zabbix_interface": link.get("zabbix_src_interface"),
+                "telemetry": src_match
+            },
+            "target": {
+                "node_id": tgt_node_id,
+                "node_name": link.get("tgt_name"),
+                "interface": link.get("target_interface"),
+                "zabbix_interface": link.get("zabbix_tgt_interface"),
+                "telemetry": tgt_match
+            },
+            "summary": summary_text
+        }
+
+    async def get_map_links_telemetry(self, map_id: str) -> Dict[str, Any]:
+        """Obtiene la telemetría en lote de todos los enlaces de un mapa."""
+        async with get_db_connection() as db:
+            c = await db.execute("SELECT id FROM links WHERE map_id = ?", (map_id,))
+            rows = await c.fetchall()
+
+        links_telemetry = {}
+        for r in rows:
+            try:
+                lid = r["id"]
+                links_telemetry[lid] = await self.get_link_telemetry(lid)
+            except Exception as e:
+                logger.warning(f"Error procesando telemetría para enlace {r['id']}: {e}")
+
+        return {
+            "map_id": map_id,
+            "count": len(links_telemetry),
+            "links": links_telemetry
+        }
+
 zabbix_service = ZabbixService()
 

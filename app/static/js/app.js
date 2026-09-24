@@ -1597,12 +1597,80 @@ function renderLink(link, nodesDict) {
   }
   updateBadgesPos(arrowPts);
 
-  line.on('mouseenter', () => {
+  line.on('mouseenter mousemove', (e) => {
     document.body.style.cursor = 'pointer';
     line.stroke('#38bdf8');
     line.fill('#38bdf8');
     line.strokeWidth(3.5);
     linksLayer.batchDraw();
+
+    const tooltip = document.getElementById('canvas-link-tooltip');
+    if (tooltip) {
+      const evt = e.evt || window.event;
+      if (evt) {
+        tooltip.style.left = `${evt.clientX + 14}px`;
+        tooltip.style.top = `${evt.clientY + 14}px`;
+      }
+
+      const sNodeName = source.name || 'Nodo A';
+      const tNodeName = target.name || 'Nodo B';
+      const srcEl = document.getElementById('tooltip-link-src');
+      const tgtEl = document.getElementById('tooltip-link-tgt');
+      const srcPortEl = document.getElementById('tooltip-link-src-port');
+      const tgtPortEl = document.getElementById('tooltip-link-tgt-port');
+      const cableEl = document.getElementById('tooltip-link-cable');
+      const cableBadge = document.getElementById('tooltip-link-cable-badge');
+
+      if (srcEl) srcEl.textContent = sNodeName;
+      if (tgtEl) tgtEl.textContent = tNodeName;
+      if (srcPortEl) srcPortEl.textContent = link.source_interface ? `[${link.source_interface}]` : '';
+      if (tgtPortEl) tgtPortEl.textContent = link.target_interface ? `[${link.target_interface}]` : '';
+      if (cableEl) cableEl.textContent = (link.cable_type || 'cat6').toUpperCase();
+      if (cableBadge) cableBadge.textContent = link.netbox_cable_id ? `NetBox Cable #${link.netbox_cable_id}` : 'Lógico / Visual';
+
+      API.getLinkTelemetry(link.id).then(telem => {
+        if (!telem) return;
+        const statusEl = document.getElementById('tooltip-link-status');
+        if (statusEl) {
+          statusEl.textContent = telem.status === 'down' ? '● Caído (Down)' : '● Operativo (Up)';
+          statusEl.style.color = telem.status === 'down' ? '#f87171' : '#10b981';
+          statusEl.style.background = telem.status === 'down' ? 'rgba(239,68,68,0.2)' : 'rgba(16,185,129,0.2)';
+        }
+
+        const tIn = telem.source?.telemetry?.traffic_in_fmt || telem.target?.telemetry?.traffic_in_fmt || '—';
+        const tOut = telem.source?.telemetry?.traffic_out_fmt || telem.target?.telemetry?.traffic_out_fmt || '—';
+        const inEl = document.getElementById('tooltip-traffic-in');
+        const outEl = document.getElementById('tooltip-traffic-out');
+        if (inEl) inEl.textContent = tIn;
+        if (outEl) outEl.textContent = tOut;
+
+        const optRow = document.getElementById('tooltip-optical-row');
+        const optData = telem.source?.telemetry?.optical || telem.target?.telemetry?.optical;
+        if (optData && optData.rx_power_dbm !== undefined && optRow) {
+          optRow.style.display = 'flex';
+          const rxEl = document.getElementById('tooltip-optical-rx');
+          const txEl = document.getElementById('tooltip-optical-tx');
+          if (rxEl) rxEl.textContent = `${optData.rx_power_dbm} dBm`;
+          if (txEl) txEl.textContent = optData.tx_power_dbm !== undefined ? `${optData.tx_power_dbm} dBm` : '—';
+        } else if (optRow) {
+          optRow.style.display = 'none';
+        }
+
+        const wRow = document.getElementById('tooltip-wireless-row');
+        const wData = telem.source?.telemetry?.wireless || telem.target?.telemetry?.wireless;
+        if (wData && wData.rssi_dbm !== undefined && wRow) {
+          wRow.style.display = 'flex';
+          const rssiEl = document.getElementById('tooltip-wireless-rssi');
+          const snrEl = document.getElementById('tooltip-wireless-snr');
+          if (rssiEl) rssiEl.textContent = `${wData.rssi_dbm} dBm`;
+          if (snrEl) snrEl.textContent = wData.snr_db !== undefined ? `${wData.snr_db} dB` : '—';
+        } else if (wRow) {
+          wRow.style.display = 'none';
+        }
+      }).catch(() => {});
+
+      tooltip.style.display = 'block';
+    }
   });
 
   line.on('mouseleave', () => {
@@ -1612,6 +1680,9 @@ function renderLink(link, nodesDict) {
     line.fill(curColor);
     line.strokeWidth(isIntermap ? 2.5 : 2);
     linksLayer.batchDraw();
+
+    const tooltip = document.getElementById('canvas-link-tooltip');
+    if (tooltip) tooltip.style.display = 'none';
   });
 
   line.on('click tap', (e) => {
@@ -1643,6 +1714,13 @@ function openLinkPropertiesModal(link, sourceNode, targetNode) {
   const inputTgtIface = document.getElementById('input-link-tgt-iface');
   const selectCableType = document.getElementById('select-link-cable-type');
   const badgeNetbox = document.getElementById('link-netbox-cable-badge');
+
+  const selectZbxSrc = document.getElementById('select-link-zbx-src-iface');
+  const selectZbxTgt = document.getElementById('select-link-zbx-tgt-iface');
+  const previewIn = document.getElementById('link-preview-in');
+  const previewOut = document.getElementById('link-preview-out');
+  const previewExtra = document.getElementById('link-preview-extra');
+  const zbxStatusBadge = document.getElementById('link-zbx-status-badge');
 
   const radioSrcToTgt = document.getElementById('radio-dir-source-to-target');
   const radioTgtToSrc = document.getElementById('radio-dir-target-to-source');
@@ -1771,8 +1849,84 @@ function openLinkPropertiesModal(link, sourceNode, targetNode) {
     };
   };
 
+  // Carga asíncrona de interfaces monitoreadas desde Zabbix
+  const populateZabbixSelect = async (node, selectEl, currentZbxIface, fallbackPhysicalName) => {
+    if (!selectEl) return;
+    selectEl.innerHTML = '<option value="">⏳ Cargando Zabbix...</option>';
+    let ifaces = [];
+    try {
+      ifaces = await API.getNodeZabbixInterfaces(node.id);
+    } catch (e) {
+      console.warn('Error fetching zabbix ifaces:', e);
+    }
+
+    selectEl.innerHTML = '<option value="">-- Detectar Automáticamente --</option>';
+    let matchFound = false;
+
+    if (Array.isArray(ifaces) && ifaces.length > 0) {
+      ifaces.forEach(iface => {
+        const opt = document.createElement('option');
+        opt.value = iface.name;
+        const speedText = iface.speed && iface.speed !== '—' ? ` (${iface.speed})` : '';
+        const trafficText = (iface.traffic_in_fmt && iface.traffic_in_fmt !== '—') ? ` [⬇ ${iface.traffic_in_fmt} / ⬆ ${iface.traffic_out_fmt}]` : '';
+        const optText = iface.optical && iface.optical.rx_power_dbm !== undefined ? ` [Rx: ${iface.optical.rx_power_dbm} dBm]` : '';
+        const wText = iface.wireless && iface.wireless.rssi_dbm !== undefined ? ` [RSSI: ${iface.wireless.rssi_dbm} dBm]` : '';
+
+        opt.textContent = `${iface.display_name}${speedText}${trafficText}${optText}${wText}`;
+
+        if (currentZbxIface && (iface.name.toLowerCase() === currentZbxIface.toLowerCase() || iface.key.toLowerCase() === currentZbxIface.toLowerCase())) {
+          opt.selected = true;
+          matchFound = true;
+        } else if (!currentZbxIface && fallbackPhysicalName && (iface.name.toLowerCase() === fallbackPhysicalName.toLowerCase() || iface.key.toLowerCase() === fallbackPhysicalName.toLowerCase())) {
+          opt.selected = true;
+          matchFound = true;
+        }
+        selectEl.appendChild(opt);
+      });
+    }
+
+    if (currentZbxIface && !matchFound) {
+      const customOpt = document.createElement('option');
+      customOpt.value = currentZbxIface;
+      customOpt.textContent = `⚡ ${currentZbxIface} (Configurado)`;
+      customOpt.selected = true;
+      selectEl.appendChild(customOpt);
+    }
+  };
+
   populateIfaceSelect(sourceNode, selectSrcIface, inputSrcIface, link.source_interface, link.source_interface_id);
   populateIfaceSelect(targetNode, selectTgtIface, inputTgtIface, link.target_interface, link.target_interface_id);
+
+  populateZabbixSelect(sourceNode, selectZbxSrc, link.zabbix_src_interface, link.source_interface);
+  populateZabbixSelect(targetNode, selectZbxTgt, link.zabbix_tgt_interface, link.target_interface);
+
+  // Consultar telemetría viva del enlace para el preview en modal
+  API.getLinkTelemetry(link.id).then(telemetry => {
+    if (!telemetry) return;
+    if (previewIn) previewIn.textContent = telemetry.source?.telemetry?.traffic_in_fmt || telemetry.target?.telemetry?.traffic_in_fmt || '—';
+    if (previewOut) previewOut.textContent = telemetry.source?.telemetry?.traffic_out_fmt || telemetry.target?.telemetry?.traffic_out_fmt || '—';
+    if (previewExtra) {
+      let extraTxt = [];
+      const opt = telemetry.source?.telemetry?.optical || telemetry.target?.telemetry?.optical;
+      if (opt && opt.rx_power_dbm !== undefined) extraTxt.push(`Rx: ${opt.rx_power_dbm} dBm`);
+      const w = telemetry.source?.telemetry?.wireless || telemetry.target?.telemetry?.wireless;
+      if (w && w.rssi_dbm !== undefined) extraTxt.push(`RSSI: ${w.rssi_dbm} dBm`);
+      if (extraTxt.length > 0) previewExtra.textContent = extraTxt.join(' · ');
+    }
+    if (zbxStatusBadge) {
+      if (telemetry.status === 'down') {
+        zbxStatusBadge.textContent = '● Caído (Down)';
+        zbxStatusBadge.style.color = '#f87171';
+        zbxStatusBadge.style.background = 'rgba(239, 68, 68, 0.2)';
+        zbxStatusBadge.style.borderColor = 'rgba(239, 68, 68, 0.4)';
+      } else {
+        zbxStatusBadge.textContent = '● Operativo (Up)';
+        zbxStatusBadge.style.color = '#10b981';
+        zbxStatusBadge.style.background = 'rgba(16, 185, 129, 0.15)';
+        zbxStatusBadge.style.borderColor = 'rgba(16, 185, 129, 0.3)';
+      }
+    }
+  }).catch(() => {});
 
   modal.style.display = 'flex';
 
@@ -1822,6 +1976,8 @@ function openLinkPropertiesModal(link, sourceNode, targetNode) {
       }
 
       const cableType = selectCableType ? selectCableType.value : (link.cable_type || 'cat6');
+      const zbxSrcIface = selectZbxSrc ? selectZbxSrc.value.trim() : '';
+      const zbxTgtIface = selectZbxTgt ? selectZbxTgt.value.trim() : '';
       const visualOnly = checkVisualOnly ? checkVisualOnly.checked : false;
 
       const updatedExtra = Object.assign({}, link.extra_data || {}, {
@@ -1838,6 +1994,8 @@ function openLinkPropertiesModal(link, sourceNode, targetNode) {
           source_interface_id: srcIfaceId,
           target_interface_id: tgtIfaceId,
           cable_type: cableType,
+          zabbix_src_interface: zbxSrcIface || null,
+          zabbix_tgt_interface: zbxTgtIface || null,
           extra_data: updatedExtra
         };
 
@@ -1851,6 +2009,8 @@ function openLinkPropertiesModal(link, sourceNode, targetNode) {
         link.netbox_cable_id = res.netbox_cable_id ?? link.netbox_cable_id;
         link.cable_type = res.cable_type ?? cableType;
         link.cable_status = res.cable_status ?? link.cable_status;
+        link.zabbix_src_interface = res.zabbix_src_interface ?? zbxSrcIface;
+        link.zabbix_tgt_interface = res.zabbix_tgt_interface ?? zbxTgtIface;
 
         // Re-renderizar el enlace para actualizar etiquetas de puertos y flechas
         const linkEntry = linkLines.get(link.id);

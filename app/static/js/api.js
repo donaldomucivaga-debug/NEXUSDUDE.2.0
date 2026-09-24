@@ -350,6 +350,24 @@ const API = {
     return null;
   },
 
+  async getNodeZabbixInterfaces(nodeId) {
+    const res = await this.fetch(`/api/zabbix/nodes/${nodeId}/interfaces`);
+    if (res.ok) return await res.json();
+    return [];
+  },
+
+  async getLinkTelemetry(linkId) {
+    const res = await this.fetch(`/api/zabbix/links/${linkId}/telemetry`);
+    if (res.ok) return await res.json();
+    return null;
+  },
+
+  async getMapLinksTelemetry(mapId) {
+    const res = await this.fetch(`/api/zabbix/maps/${mapId}/links-telemetry`);
+    if (res.ok) return await res.json();
+    return { map_id: mapId, count: 0, links: {} };
+  },
+
   // --- RBAC & Gestión de Roles / Permisos ---
   async getRoles() {
     const res = await this.fetch('/api/rbac/roles');

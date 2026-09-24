@@ -121,3 +121,38 @@ async def get_map_spectrum(map_id: str = "default-map", user: Dict[str, Any] = D
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error obteniendo datos de espectro: {str(e)}")
 
+@router.get("/nodes/{node_id}/interfaces")
+async def get_node_zabbix_interfaces(node_id: str, user: Dict[str, Any] = Depends(get_current_user)):
+    """
+    Obtiene la lista de interfaces de red, radio y ópticas monitoreadas en Zabbix para un nodo.
+    Permite seleccionar fuentes de datos vivas para vincular a los enlaces / aristas de la topología.
+    """
+    try:
+        ifaces = await zabbix_service.get_node_zabbix_interfaces(node_id)
+        return ifaces
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error obteniendo interfaces de Zabbix: {str(e)}")
+
+@router.get("/links/{link_id}/telemetry")
+async def get_link_telemetry(link_id: str, user: Dict[str, Any] = Depends(get_current_user)):
+    """
+    Obtiene la telemetría viva en tiempo real de una arista (enlace):
+    tráfico de subida/bajada, estado de puerto, potencia óptica DDM (Rx/Tx) o señal inalámbrica (RSSI/SNR).
+    """
+    try:
+        telemetry = await zabbix_service.get_link_telemetry(link_id)
+        return telemetry
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error obteniendo telemetría del enlace: {str(e)}")
+
+@router.get("/maps/{map_id}/links-telemetry")
+async def get_map_links_telemetry(map_id: str, user: Dict[str, Any] = Depends(get_current_user)):
+    """
+    Obtiene la telemetría en lote de todas las aristas de un mapa para renderizado y animación continua.
+    """
+    try:
+        data = await zabbix_service.get_map_links_telemetry(map_id)
+        return data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error obteniendo telemetría de enlaces del mapa: {str(e)}")
+

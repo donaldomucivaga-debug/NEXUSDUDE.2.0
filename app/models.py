@@ -89,7 +89,7 @@ class DeviceInterfaceOut(BaseModel):
     cable_status: Optional[str] = None
     cable_type: Optional[str] = None
 
-# --- Enlaces (Aristas entre nodos con sincronización NetBox) ---
+# --- Enlaces (Aristas entre nodos con sincronización NetBox & Telemetría Zabbix) ---
 class LinkBase(BaseModel):
     source_node_id: str
     target_node_id: str
@@ -100,6 +100,8 @@ class LinkBase(BaseModel):
     netbox_cable_id: Optional[int] = None
     cable_type: Optional[str] = "cat6"
     cable_status: Optional[str] = "connected"
+    zabbix_src_interface: Optional[str] = None
+    zabbix_tgt_interface: Optional[str] = None
     status: Optional[str] = "ok"
     rtt_ms: Optional[float] = 0.0
     loss_percent: Optional[float] = 0.0
@@ -118,6 +120,8 @@ class LinkUpdate(BaseModel):
     netbox_cable_id: Optional[int] = None
     cable_type: Optional[str] = None
     cable_status: Optional[str] = None
+    zabbix_src_interface: Optional[str] = None
+    zabbix_tgt_interface: Optional[str] = None
     status: Optional[str] = None
     rtt_ms: Optional[float] = None
     loss_percent: Optional[float] = None

@@ -67,6 +67,8 @@ async def init_db():
                 netbox_cable_id INTEGER,
                 cable_type TEXT DEFAULT 'cat6',
                 cable_status TEXT DEFAULT 'connected',
+                zabbix_src_interface TEXT,
+                zabbix_tgt_interface TEXT,
                 status TEXT DEFAULT 'ok',
                 rtt_ms REAL DEFAULT 0.0,
                 loss_percent REAL DEFAULT 0.0,
@@ -79,7 +81,7 @@ async def init_db():
             );
         """)
 
-        # Auto-migración para columnas de NetBox si la tabla ya existía
+        # Auto-migración para columnas de NetBox y Zabbix si la tabla ya existía
         try:
             await db.execute("ALTER TABLE links ADD COLUMN source_interface_id INTEGER;")
         except Exception:
@@ -98,6 +100,14 @@ async def init_db():
             pass
         try:
             await db.execute("ALTER TABLE links ADD COLUMN cable_status TEXT DEFAULT 'connected';")
+        except Exception:
+            pass
+        try:
+            await db.execute("ALTER TABLE links ADD COLUMN zabbix_src_interface TEXT;")
+        except Exception:
+            pass
+        try:
+            await db.execute("ALTER TABLE links ADD COLUMN zabbix_tgt_interface TEXT;")
         except Exception:
             pass
 

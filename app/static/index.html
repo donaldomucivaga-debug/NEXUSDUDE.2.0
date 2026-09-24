@@ -955,6 +955,47 @@
           </div>
         </div>
 
+        <!-- Monitoreo & Telemetría en Tiempo Real (Zabbix Data Source) -->
+        <div style="background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(56, 189, 248, 0.3); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px;">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <label style="font-size: 0.75rem; font-weight: 700; color: #38bdf8; margin: 0; display: flex; align-items: center; gap: 6px;">
+              <i class="fas fa-chart-line" style="color: #38bdf8;"></i> Telemetría en Vivo & Fuente de Datos (Zabbix):
+            </label>
+            <span id="link-zbx-status-badge" class="badge" style="font-size: 0.65rem; background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3);">
+              ● Conectado
+            </span>
+          </div>
+          <div style="font-size: 0.68rem; color: var(--text-muted);">
+            Vincular la arista a las interfaces monitoreadas en Zabbix para obtener tráfico en tiempo real, potencia óptica DDM (Rx/Tx) o señal inalámbrica.
+          </div>
+
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+            <div>
+              <label style="font-size: 0.7rem; color: #94a3b8; font-weight: 600; display: block; margin-bottom: 2px;" id="link-lbl-zbx-src">Fuente Zabbix en Origen:</label>
+              <select class="input-text" id="select-link-zbx-src-iface" style="width: 100%; font-size: 0.76rem; padding: 5px 8px; background: #0f172a; color: #f8fafc;">
+                <option value="">-- Detectar Automáticamente --</option>
+              </select>
+            </div>
+            <div>
+              <label style="font-size: 0.7rem; color: #94a3b8; font-weight: 600; display: block; margin-bottom: 2px;" id="link-lbl-zbx-tgt">Fuente Zabbix en Destino:</label>
+              <select class="input-text" id="select-link-zbx-tgt-iface" style="width: 100%; font-size: 0.76rem; padding: 5px 8px; background: #0f172a; color: #f8fafc;">
+                <option value="">-- Detectar Automáticamente --</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Preview de Telemetría en Vivo -->
+          <div id="link-zbx-telemetry-preview" style="background: rgba(2, 6, 23, 0.6); border: 1px dashed rgba(56, 189, 248, 0.3); border-radius: 6px; padding: 6px 10px; font-size: 0.72rem; color: #e2e8f0; display: flex; justify-content: space-between; align-items: center;">
+            <div id="link-preview-traffic">
+              <span style="color: #10b981;"><i class="fas fa-arrow-down"></i> <strong id="link-preview-in">—</strong></span> &nbsp;
+              <span style="color: #38bdf8;"><i class="fas fa-arrow-up"></i> <strong id="link-preview-out">—</strong></span>
+            </div>
+            <div id="link-preview-extra" style="color: #cbd5e1; font-family: monospace; font-size: 0.68rem;">
+              Telemetría Zabbix viva
+            </div>
+          </div>
+        </div>
+
         <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px;">
           <button type="button" class="btn btn-danger" id="btn-delete-link-modal" style="font-size: 0.78rem; padding: 6px 12px;">
             <i class="fas fa-trash-alt"></i> Eliminar Enlace
@@ -1384,6 +1425,52 @@
       <a href="https://10.9.1.6:5001/#/login" class="btn btn-primary" style="justify-content: center; padding: 12px;">
         <i class="fas fa-sign-in-alt"></i> Iniciar Sesión en Nexus Orchestrator
       </a>
+    </div>
+  </div>
+
+  <!-- Tooltip Flotante de Arista / Telemetría en Tiempo Real de Enlace -->
+  <div id="canvas-link-tooltip" style="display: none; position: fixed; z-index: 9999; pointer-events: none; background: rgba(15, 23, 42, 0.95); backdrop-filter: blur(8px); border: 1px solid rgba(56, 189, 248, 0.4); border-radius: 8px; padding: 10px 14px; box-shadow: 0 10px 25px rgba(0,0,0,0.6); max-width: 380px; font-family: system-ui, -apple-system, sans-serif;">
+    <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 6px; margin-bottom: 6px;">
+      <span style="font-size: 0.78rem; font-weight: 700; color: #38bdf8; display: flex; align-items: center; gap: 5px;" id="tooltip-link-title">
+        <i class="fas fa-network-wired"></i> Enlace Físico
+      </span>
+      <span id="tooltip-link-status" class="badge" style="font-size: 0.65rem; background: rgba(16,185,129,0.2); color: #10b981; border: 1px solid rgba(16,185,129,0.4);">
+        ● Up
+      </span>
+    </div>
+    
+    <!-- Extremos Físicos y Puertos NetBox -->
+    <div style="font-size: 0.72rem; color: #e2e8f0; margin-bottom: 6px; line-height: 1.4;">
+      <div style="display: flex; justify-content: space-between;">
+        <span>Origen: <strong id="tooltip-link-src" style="color: #38bdf8;">—</strong></span>
+        <span id="tooltip-link-src-port" style="color: #94a3b8; font-family: monospace;">[—]</span>
+      </div>
+      <div style="display: flex; justify-content: space-between;">
+        <span>Destino: <strong id="tooltip-link-tgt" style="color: #a855f7;">—</strong></span>
+        <span id="tooltip-link-tgt-port" style="color: #94a3b8; font-family: monospace;">[—]</span>
+      </div>
+    </div>
+
+    <!-- Cable Físico (NetBox) -->
+    <div style="display: flex; justify-content: space-between; align-items: center; background: rgba(2, 6, 23, 0.5); padding: 4px 6px; border-radius: 4px; font-size: 0.68rem; margin-bottom: 6px;">
+      <span style="color: #94a3b8;">Cable: <strong id="tooltip-link-cable" style="color: #f8fafc;">UTP Cat 6</strong></span>
+      <span id="tooltip-link-cable-badge" style="color: #38bdf8; font-family: monospace;">NetBox Sync</span>
+    </div>
+
+    <!-- Telemetría en Vivo Zabbix -->
+    <div id="tooltip-link-telemetry-box" style="background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.2); border-radius: 6px; padding: 6px 8px; font-size: 0.72rem;">
+      <div style="display: flex; justify-content: space-between; font-weight: 700; margin-bottom: 3px;">
+        <span style="color: #10b981;"><i class="fas fa-arrow-down"></i> <span id="tooltip-traffic-in">—</span></span>
+        <span style="color: #38bdf8;"><i class="fas fa-arrow-up"></i> <span id="tooltip-traffic-out">—</span></span>
+      </div>
+      <div id="tooltip-optical-row" style="display: none; justify-content: space-between; font-size: 0.68rem; color: #cbd5e1; font-family: monospace; border-top: 1px dashed rgba(255,255,255,0.1); padding-top: 3px; margin-top: 3px;">
+        <span>Rx Power: <strong id="tooltip-optical-rx" style="color: #38bdf8;">—</strong></span>
+        <span>Tx Power: <strong id="tooltip-optical-tx" style="color: #a855f7;">—</strong></span>
+      </div>
+      <div id="tooltip-wireless-row" style="display: none; justify-content: space-between; font-size: 0.68rem; color: #cbd5e1; font-family: monospace; border-top: 1px dashed rgba(255,255,255,0.1); padding-top: 3px; margin-top: 3px;">
+        <span>RSSI: <strong id="tooltip-wireless-rssi" style="color: #10b981;">—</strong></span>
+        <span>SNR: <strong id="tooltip-wireless-snr" style="color: #38bdf8;">—</strong></span>
+      </div>
     </div>
   </div>
 
