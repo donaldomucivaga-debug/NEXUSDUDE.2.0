@@ -884,15 +884,60 @@
           </label>
         </div>
 
-        <!-- Interfaces / Detalles opcionales -->
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
-          <div>
-            <label style="font-size: 0.72rem; color: var(--text-muted); font-weight: 600;" id="link-lbl-src-iface">Interfaz en Nodo A:</label>
-            <input type="text" class="input-text" id="input-link-src-iface" placeholder="ej. sfp-sfpplus1, ether1" style="width: 100%; font-size: 0.78rem; padding: 6px 8px;">
+        <!-- Sincronización NetBox & Selección de Puertos / Interfaces -->
+        <div style="background: rgba(15, 23, 42, 0.7); border: 1px solid var(--border-color); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 10px;">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <label style="font-size: 0.75rem; font-weight: 700; color: #f8fafc; margin: 0; display: flex; align-items: center; gap: 6px;">
+              <i class="fas fa-network-wired" style="color: #38bdf8;"></i> Puertos y Conexión Física (NetBox):
+            </label>
+            <span id="link-netbox-cable-badge" class="badge" style="font-size: 0.68rem; background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3);">
+              NetBox Sync
+            </span>
           </div>
-          <div>
-            <label style="font-size: 0.72rem; color: var(--text-muted); font-weight: 600;" id="link-lbl-tgt-iface">Interfaz en Nodo B:</label>
-            <input type="text" class="input-text" id="input-link-tgt-iface" placeholder="ej. ether1, wlan1" style="width: 100%; font-size: 0.78rem; padding: 6px 8px;">
+
+          <!-- Selectores de Puertos de Origen y Destino -->
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+            <div>
+              <label style="font-size: 0.72rem; color: var(--text-muted); font-weight: 600; display: block; margin-bottom: 4px;" id="link-lbl-src-iface">Puerto en Nodo A:</label>
+              <div style="display: flex; gap: 4px;">
+                <select class="input-text" id="select-link-src-iface" style="width: 100%; font-size: 0.78rem; padding: 6px 8px; background: #0f172a; color: #f8fafc;">
+                  <option value="">-- Seleccionar Puerto --</option>
+                </select>
+              </div>
+              <input type="text" class="input-text" id="input-link-src-iface" placeholder="O escribir puerto manual..." style="width: 100%; font-size: 0.74rem; padding: 4px 8px; margin-top: 4px; display: none;">
+            </div>
+
+            <div>
+              <label style="font-size: 0.72rem; color: var(--text-muted); font-weight: 600; display: block; margin-bottom: 4px;" id="link-lbl-tgt-iface">Puerto en Nodo B:</label>
+              <div style="display: flex; gap: 4px;">
+                <select class="input-text" id="select-link-tgt-iface" style="width: 100%; font-size: 0.78rem; padding: 6px 8px; background: #0f172a; color: #f8fafc;">
+                  <option value="">-- Seleccionar Puerto --</option>
+                </select>
+              </div>
+              <input type="text" class="input-text" id="input-link-tgt-iface" placeholder="O escribir puerto manual..." style="width: 100%; font-size: 0.74rem; padding: 4px 8px; margin-top: 4px; display: none;">
+            </div>
+          </div>
+
+          <!-- Tipo de Cable & Estado -->
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+            <div>
+              <label style="font-size: 0.7rem; color: var(--text-muted); font-weight: 600; display: block; margin-bottom: 2px;">Tipo de Cable:</label>
+              <select class="input-text" id="select-link-cable-type" style="width: 100%; font-size: 0.76rem; padding: 5px 8px; background: #0f172a; color: #f8fafc;">
+                <option value="cat6">UTP Cat 6 (Cobre)</option>
+                <option value="cat5e">UTP Cat 5e (Cobre)</option>
+                <option value="smf">Fibra Óptica Single-Mode (SMF)</option>
+                <option value="mmf">Fibra Óptica Multi-Mode (MMF)</option>
+                <option value="dac">Direct Attach Copper (DAC 10G/25G)</option>
+              </select>
+            </div>
+            <div>
+              <label style="font-size: 0.7rem; color: var(--text-muted); font-weight: 600; display: block; margin-bottom: 2px;">Estado del Cable:</label>
+              <select class="input-text" id="select-link-cable-status" style="width: 100%; font-size: 0.76rem; padding: 5px 8px; background: #0f172a; color: #f8fafc;">
+                <option value="connected">Conectado (Active)</option>
+                <option value="planned">Planificado (Planned)</option>
+                <option value="decommissioned">Desconectado</option>
+              </select>
+            </div>
           </div>
         </div>
 

@@ -75,12 +75,31 @@ class NodeOut(NodeBase):
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
-# --- Enlaces (Aristas entre nodos) ---
+# --- Interfaces de Dispositivos (Puertos NetBox) ---
+class DeviceInterfaceOut(BaseModel):
+    id: Optional[int] = None
+    name: str
+    type: Optional[str] = "1000base-t"
+    enabled: bool = True
+    mgmt_only: bool = False
+    is_connected: bool = False
+    connected_device: Optional[str] = None
+    connected_interface: Optional[str] = None
+    cable_id: Optional[int] = None
+    cable_status: Optional[str] = None
+    cable_type: Optional[str] = None
+
+# --- Enlaces (Aristas entre nodos con sincronización NetBox) ---
 class LinkBase(BaseModel):
     source_node_id: str
     target_node_id: str
     source_interface: Optional[str] = None
     target_interface: Optional[str] = None
+    source_interface_id: Optional[int] = None
+    target_interface_id: Optional[int] = None
+    netbox_cable_id: Optional[int] = None
+    cable_type: Optional[str] = "cat6"
+    cable_status: Optional[str] = "connected"
     status: Optional[str] = "ok"
     rtt_ms: Optional[float] = 0.0
     loss_percent: Optional[float] = 0.0
@@ -94,6 +113,11 @@ class LinkUpdate(BaseModel):
     target_node_id: Optional[str] = None
     source_interface: Optional[str] = None
     target_interface: Optional[str] = None
+    source_interface_id: Optional[int] = None
+    target_interface_id: Optional[int] = None
+    netbox_cable_id: Optional[int] = None
+    cable_type: Optional[str] = None
+    cable_status: Optional[str] = None
     status: Optional[str] = None
     rtt_ms: Optional[float] = None
     loss_percent: Optional[float] = None

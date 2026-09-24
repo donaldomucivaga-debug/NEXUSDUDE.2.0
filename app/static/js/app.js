@@ -1570,8 +1570,12 @@ function openLinkPropertiesModal(link, sourceNode, targetNode) {
 
   const lblSrcIface = document.getElementById('link-lbl-src-iface');
   const lblTgtIface = document.getElementById('link-lbl-tgt-iface');
+  const selectSrcIface = document.getElementById('select-link-src-iface');
+  const selectTgtIface = document.getElementById('select-link-tgt-iface');
   const inputSrcIface = document.getElementById('input-link-src-iface');
   const inputTgtIface = document.getElementById('input-link-tgt-iface');
+  const selectCableType = document.getElementById('select-link-cable-type');
+  const badgeNetbox = document.getElementById('link-netbox-cable-badge');
 
   const radioSrcToTgt = document.getElementById('radio-dir-source-to-target');
   const radioTgtToSrc = document.getElementById('radio-dir-target-to-source');
@@ -1593,10 +1597,35 @@ function openLinkPropertiesModal(link, sourceNode, targetNode) {
   if (tgtNamePadre) tgtNamePadre.textContent = tName;
   if (srcNameHijo) srcNameHijo.textContent = sName;
 
-  if (lblSrcIface) lblSrcIface.textContent = `Interfaz en ${sName}:`;
-  if (lblTgtIface) lblTgtIface.textContent = `Interfaz en ${tName}:`;
-  if (inputSrcIface) inputSrcIface.value = link.source_interface || '';
-  if (inputTgtIface) inputTgtIface.value = link.target_interface || '';
+  if (lblSrcIface) lblSrcIface.textContent = `Puerto en ${sName}:`;
+  if (lblTgtIface) lblTgtIface.textContent = `Puerto en ${tName}:`;
+
+  if (inputSrcIface) {
+    inputSrcIface.value = link.source_interface || '';
+    inputSrcIface.style.display = 'none';
+  }
+  if (inputTgtIface) {
+    inputTgtIface.value = link.target_interface || '';
+    inputTgtIface.style.display = 'none';
+  }
+
+  if (selectCableType) {
+    selectCableType.value = link.cable_type || 'cat6';
+  }
+
+  if (badgeNetbox) {
+    if (link.netbox_cable_id) {
+      badgeNetbox.textContent = `NetBox Cable #${link.netbox_cable_id} (${link.cable_status || 'connected'})`;
+      badgeNetbox.style.background = 'rgba(16, 185, 129, 0.15)';
+      badgeNetbox.style.color = '#10b981';
+      badgeNetbox.style.borderColor = 'rgba(16, 185, 129, 0.3)';
+    } else {
+      badgeNetbox.textContent = 'Sin Cable en NetBox';
+      badgeNetbox.style.background = 'rgba(148, 163, 184, 0.1)';
+      badgeNetbox.style.color = 'var(--text-muted)';
+      badgeNetbox.style.borderColor = 'var(--border-color)';
+    }
+  }
 
   const curDir = link.extra_data?.direction || 'source_to_target';
   if (curDir === 'target_to_source') {
@@ -1609,6 +1638,75 @@ function openLinkPropertiesModal(link, sourceNode, targetNode) {
   const isVisualOnly = !!(link.extra_data?.is_visual_only || link.extra_data?.sync_zabbix === false || link.extra_data?.is_simple_link);
   if (checkVisualOnly) checkVisualOnly.checked = isVisualOnly;
 
+  // Carga asíncrona de puertos disponibles desde NetBox
+  const populateIfaceSelect = async (node, selectEl, inputEl, currentIfaceName, currentIfaceId) => {
+    if (!selectEl) return;
+    selectEl.innerHTML = '<option value="">⏳ Cargando puertos...</option>';
+    let ifaces = [];
+    if (node && node.device_id) {
+      try {
+        ifaces = await API.getDeviceInterfaces(node.device_id);
+      } catch (err) {
+        console.warn(`Error obteniendo interfaces del dispositivo ${node.device_id}:`, err);
+      }
+    }
+
+    selectEl.innerHTML = '';
+    const defOpt = document.createElement('option');
+    defOpt.value = '';
+    defOpt.textContent = '-- Seleccionar Puerto --';
+    selectEl.appendChild(defOpt);
+
+    let matchFound = false;
+    if (Array.isArray(ifaces) && ifaces.length > 0) {
+      ifaces.forEach(iface => {
+        const opt = document.createElement('option');
+        opt.value = iface.name;
+        opt.dataset.ifaceId = iface.id;
+        const speedStr = iface.type ? ` (${iface.type})` : '';
+        const connStr = iface.is_connected && iface.id !== currentIfaceId ? ' [Ocupado]' : '';
+        opt.textContent = `${iface.name}${speedStr}${connStr}`;
+        if (currentIfaceId && iface.id === currentIfaceId) {
+          opt.selected = true;
+          matchFound = true;
+        } else if (!currentIfaceId && currentIfaceName && (iface.name === currentIfaceName || iface.name.toLowerCase() === currentIfaceName.toLowerCase())) {
+          opt.selected = true;
+          matchFound = true;
+        }
+        selectEl.appendChild(opt);
+      });
+    }
+
+    const manualOpt = document.createElement('option');
+    manualOpt.value = '__manual__';
+    manualOpt.textContent = '✏️ Puerto Personalizado...';
+    if (currentIfaceName && !matchFound) {
+      manualOpt.selected = true;
+      if (inputEl) {
+        inputEl.style.display = 'block';
+        inputEl.value = currentIfaceName;
+      }
+    }
+    selectEl.appendChild(manualOpt);
+
+    selectEl.onchange = () => {
+      if (selectEl.value === '__manual__') {
+        if (inputEl) {
+          inputEl.style.display = 'block';
+          inputEl.focus();
+        }
+      } else {
+        if (inputEl) {
+          inputEl.style.display = 'none';
+          inputEl.value = selectEl.value;
+        }
+      }
+    };
+  };
+
+  populateIfaceSelect(sourceNode, selectSrcIface, inputSrcIface, link.source_interface, link.source_interface_id);
+  populateIfaceSelect(targetNode, selectTgtIface, inputTgtIface, link.target_interface, link.target_interface_id);
+
   modal.style.display = 'flex';
 
   const cleanUp = () => {
@@ -1617,6 +1715,8 @@ function openLinkPropertiesModal(link, sourceNode, targetNode) {
     if (btnCancel) btnCancel.onclick = null;
     if (btnSave) btnSave.onclick = null;
     if (btnDelete) btnDelete.onclick = null;
+    if (selectSrcIface) selectSrcIface.onchange = null;
+    if (selectTgtIface) selectTgtIface.onchange = null;
   };
 
   if (btnClose) btnClose.onclick = cleanUp;
@@ -1625,8 +1725,36 @@ function openLinkPropertiesModal(link, sourceNode, targetNode) {
   if (btnSave) {
     btnSave.onclick = async () => {
       const chosenDir = radioTgtToSrc && radioTgtToSrc.checked ? 'target_to_source' : 'source_to_target';
-      const srcIface = inputSrcIface ? inputSrcIface.value.trim() : '';
-      const tgtIface = inputTgtIface ? inputTgtIface.value.trim() : '';
+
+      let srcIface = '';
+      let srcIfaceId = null;
+      if (selectSrcIface && selectSrcIface.value === '__manual__') {
+        srcIface = inputSrcIface ? inputSrcIface.value.trim() : '';
+      } else if (selectSrcIface && selectSrcIface.value) {
+        srcIface = selectSrcIface.value;
+        const selectedOpt = selectSrcIface.options[selectSrcIface.selectedIndex];
+        if (selectedOpt && selectedOpt.dataset.ifaceId) {
+          srcIfaceId = parseInt(selectedOpt.dataset.ifaceId, 10);
+        }
+      } else if (inputSrcIface) {
+        srcIface = inputSrcIface.value.trim();
+      }
+
+      let tgtIface = '';
+      let tgtIfaceId = null;
+      if (selectTgtIface && selectTgtIface.value === '__manual__') {
+        tgtIface = inputTgtIface ? inputTgtIface.value.trim() : '';
+      } else if (selectTgtIface && selectTgtIface.value) {
+        tgtIface = selectTgtIface.value;
+        const selectedOpt = selectTgtIface.options[selectTgtIface.selectedIndex];
+        if (selectedOpt && selectedOpt.dataset.ifaceId) {
+          tgtIfaceId = parseInt(selectedOpt.dataset.ifaceId, 10);
+        }
+      } else if (inputTgtIface) {
+        tgtIface = inputTgtIface.value.trim();
+      }
+
+      const cableType = selectCableType ? selectCableType.value : (link.cable_type || 'cat6');
       const visualOnly = checkVisualOnly ? checkVisualOnly.checked : false;
 
       const updatedExtra = Object.assign({}, link.extra_data || {}, {
@@ -1637,15 +1765,25 @@ function openLinkPropertiesModal(link, sourceNode, targetNode) {
       });
 
       try {
-        const res = await API.updateLink(link.id, {
+        const updatePayload = {
           source_interface: srcIface,
           target_interface: tgtIface,
+          source_interface_id: srcIfaceId,
+          target_interface_id: tgtIfaceId,
+          cable_type: cableType,
           extra_data: updatedExtra
-        });
+        };
+
+        const res = await API.updateLink(link.id, updatePayload);
 
         link.extra_data = updatedExtra;
-        link.source_interface = srcIface;
-        link.target_interface = tgtIface;
+        link.source_interface = res.source_interface ?? srcIface;
+        link.target_interface = res.target_interface ?? tgtIface;
+        link.source_interface_id = res.source_interface_id ?? srcIfaceId;
+        link.target_interface_id = res.target_interface_id ?? tgtIfaceId;
+        link.netbox_cable_id = res.netbox_cable_id ?? link.netbox_cable_id;
+        link.cable_type = res.cable_type ?? cableType;
+        link.cable_status = res.cable_status ?? link.cable_status;
 
         // Actualizar la flecha en el lienzo
         const linkEntry = linkLines.get(link.id);
@@ -5013,21 +5151,22 @@ window.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  // Botón Sincronizar Nodos del mapa actual con NetBox en Toolbar
+  // Botón Sincronizar Nodos y Enlaces del mapa actual con NetBox en Toolbar
   const btnSyncNetbox = document.getElementById('btn-sync-netbox-nodes');
   if (btnSyncNetbox) {
     btnSyncNetbox.addEventListener('click', async () => {
       if (!currentMap) return;
       const origHtml = btnSyncNetbox.innerHTML;
       btnSyncNetbox.disabled = true;
-      btnSyncNetbox.innerHTML = '<i class="fas fa-spinner fa-spin"></i> <span>Sincronizando...</span>';
+      btnSyncNetbox.innerHTML = '<i class="fas fa-spinner fa-spin"></i> <span>Sincronizando NetBox...</span>';
 
       try {
         await API.refreshInventory();
         await loadInventoryFilters();
-        const res = await API.syncMapNetboxNodes(currentMap.id);
+        const resNodes = await API.syncMapNetboxNodes(currentMap.id);
+        const resCables = await API.syncMapNetboxCables(currentMap.id);
         await loadMap(currentMap.id);
-        alert(res.message || 'Nodos actualizados con éxito desde NetBox');
+        alert(`Sincronización NetBox completada:\n• Nodos: ${resNodes.message || 'Actualizados'}\n• Enlaces Físicos / Cables: ${resCables.message || 'Actualizados'}`);
       } catch (err) {
         alert('Error sincronizando con NetBox: ' + err.message);
       } finally {

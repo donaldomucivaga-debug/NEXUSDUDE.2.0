@@ -262,6 +262,20 @@ const API = {
     return null;
   },
 
+  async getDeviceInterfaces(deviceId) {
+    const res = await this.fetch(`/api/inventory/devices/${deviceId}/interfaces`);
+    if (res.ok) return await res.json();
+    return [];
+  },
+
+  async syncMapNetboxCables(mapId) {
+    const res = await this.fetch(`/api/maps/${mapId}/sync-netbox-cables`, {
+      method: 'POST'
+    });
+    if (res.ok) return await res.json();
+    throw new Error(await res.text());
+  },
+
   async getInventorySites() {
     const res = await this.fetch('/api/inventory/sites');
     if (res.ok) return await res.json();

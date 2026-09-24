@@ -16,6 +16,15 @@ async def get_inventory_device_by_id(
         raise HTTPException(status_code=404, detail="Dispositivo no encontrado en NetBox")
     return dev
 
+@router.get("/devices/{device_id}/interfaces")
+async def get_device_interfaces(
+    device_id: int,
+    user: Dict[str, Any] = Depends(get_current_user)
+):
+    """Retorna la lista de puertos/interfaces físicas de un dispositivo en NetBox con su estado de ocupación."""
+    interfaces = await inventory_service.get_device_interfaces(device_id)
+    return interfaces
+
 @router.get("/devices")
 async def get_inventory_devices(
     query: Optional[str] = Query(None, description="Búsqueda por texto (nombre, ip, modelo)"),

@@ -53,7 +53,7 @@ async def init_db():
             );
         """)
 
-        # Tabla de Enlaces / Aristas entre nodos
+        # Tabla de Enlaces / Aristas entre nodos con sincronización NetBox
         await db.execute("""
             CREATE TABLE IF NOT EXISTS links (
                 id TEXT PRIMARY KEY,
@@ -62,6 +62,11 @@ async def init_db():
                 target_node_id TEXT NOT NULL,
                 source_interface TEXT,
                 target_interface TEXT,
+                source_interface_id INTEGER,
+                target_interface_id INTEGER,
+                netbox_cable_id INTEGER,
+                cable_type TEXT DEFAULT 'cat6',
+                cable_status TEXT DEFAULT 'connected',
                 status TEXT DEFAULT 'ok',
                 rtt_ms REAL DEFAULT 0.0,
                 loss_percent REAL DEFAULT 0.0,
@@ -73,6 +78,28 @@ async def init_db():
                 FOREIGN KEY (target_node_id) REFERENCES nodes(id) ON DELETE CASCADE
             );
         """)
+
+        # Auto-migración para columnas de NetBox si la tabla ya existía
+        try:
+            await db.execute("ALTER TABLE links ADD COLUMN source_interface_id INTEGER;")
+        except Exception:
+            pass
+        try:
+            await db.execute("ALTER TABLE links ADD COLUMN target_interface_id INTEGER;")
+        except Exception:
+            pass
+        try:
+            await db.execute("ALTER TABLE links ADD COLUMN netbox_cable_id INTEGER;")
+        except Exception:
+            pass
+        try:
+            await db.execute("ALTER TABLE links ADD COLUMN cable_type TEXT DEFAULT 'cat6';")
+        except Exception:
+            pass
+        try:
+            await db.execute("ALTER TABLE links ADD COLUMN cable_status TEXT DEFAULT 'connected';")
+        except Exception:
+            pass
 
         # Tabla de Roles (Niveles de Usuarios y Permisos)
         await db.execute("""

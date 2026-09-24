@@ -268,6 +268,7 @@ async def get_map_detail(map_id: str, user: Dict[str, Any] = Depends(get_current
         links = []
         for r in links_rows:
             extra = json.loads(r["extra_data"]) if r["extra_data"] else None
+            keys = r.keys()
             links.append(LinkOut(
                 id=r["id"],
                 map_id=r["map_id"],
@@ -275,6 +276,11 @@ async def get_map_detail(map_id: str, user: Dict[str, Any] = Depends(get_current
                 target_node_id=r["target_node_id"],
                 source_interface=r["source_interface"],
                 target_interface=r["target_interface"],
+                source_interface_id=r["source_interface_id"] if "source_interface_id" in keys else None,
+                target_interface_id=r["target_interface_id"] if "target_interface_id" in keys else None,
+                netbox_cable_id=r["netbox_cable_id"] if "netbox_cable_id" in keys else None,
+                cable_type=r["cable_type"] if "cable_type" in keys else "cat6",
+                cable_status=r["cable_status"] if "cable_status" in keys else "connected",
                 status=r["status"],
                 rtt_ms=r["rtt_ms"],
                 loss_percent=r["loss_percent"],
@@ -1034,27 +1040,72 @@ async def bulk_delete_nodes(req: BulkDeleteNodesRequest, user: Dict[str, Any] = 
         return {"status": "success", "deleted_count": len(req.node_ids), "deleted_ids": req.node_ids}
 
 
-# --- Endpoints de Enlaces ---
+# --- Endpoints de Enlaces con Sincronización Bidireccional NetBox ---
 
 @router.post("/links", response_model=LinkOut, status_code=status.HTTP_201_CREATED)
 async def create_link(link_data: LinkCreate, user: Dict[str, Any] = Depends(get_current_user)):
-    """Crea una arista/enlace entre dos nodos."""
+    """Crea un enlace entre dos nodos y sincroniza el cable físico correspondiente en NetBox si ambos nodos son dispositivos."""
     link_id = f"link-{uuid.uuid4().hex[:8]}"
-    extra_str = json.dumps(link_data.extra_data) if link_data.extra_data else None
+    extra_data = link_data.extra_data or {}
+
+    netbox_cable_id = link_data.netbox_cable_id
+    src_if_id = link_data.source_interface_id
+    tgt_if_id = link_data.target_interface_id
+    cable_type = link_data.cable_type or "cat6"
+    cable_status = link_data.cable_status or "connected"
 
     async with get_db_connection() as db:
+        # 1. Obtener los nodos para verificar si corresponden a dispositivos de NetBox
+        c_nodes = await db.execute("SELECT id, device_id, name FROM nodes WHERE id IN (?, ?)", (link_data.source_node_id, link_data.target_node_id))
+        nodes_rows = await c_nodes.fetchall()
+        node_map = {n["id"]: n for n in nodes_rows}
+
+        src_node = node_map.get(link_data.source_node_id)
+        tgt_node = node_map.get(link_data.target_node_id)
+
+        # 2. Si ambos nodos tienen device_id en NetBox y se especificaron interfaces, crear el cable en NetBox
+        if src_node and tgt_node and src_node["device_id"] and tgt_node["device_id"] and link_data.source_interface and link_data.target_interface and not netbox_cable_id:
+            try:
+                cable_res = await inventory_service.create_netbox_cable(
+                    dev1_id=src_node["device_id"],
+                    if1_name=link_data.source_interface,
+                    dev2_id=tgt_node["device_id"],
+                    if2_name=link_data.target_interface,
+                    cable_type=cable_type,
+                    description=f"Enlace creado desde NexusDude (Mapa: {link_data.map_id})"
+                )
+                netbox_cable_id = cable_res.get("cable_id")
+                src_if_id = cable_res.get("if1_id")
+                tgt_if_id = cable_res.get("if2_id")
+                cable_status = cable_res.get("cable_status", cable_status)
+                cable_type = cable_res.get("cable_type", cable_type)
+            except Exception as e:
+                # Si NetBox falla (ej. puerto ya cableado), registramos el warning pero permitimos guardar el enlace lógico con aviso
+                extra_data["netbox_sync_warning"] = str(e)
+
+        extra_str = json.dumps(extra_data) if extra_data else None
+
         await db.execute("""
-            INSERT INTO links (id, map_id, source_node_id, target_node_id, source_interface, target_interface, status, rtt_ms, loss_percent, extra_data)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO links (
+                id, map_id, source_node_id, target_node_id,
+                source_interface, target_interface,
+                source_interface_id, target_interface_id,
+                netbox_cable_id, cable_type, cable_status,
+                status, rtt_ms, loss_percent, extra_data
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             link_id, link_data.map_id, link_data.source_node_id, link_data.target_node_id,
-            link_data.source_interface, link_data.target_interface, link_data.status,
-            link_data.rtt_ms, link_data.loss_percent, extra_str
+            link_data.source_interface, link_data.target_interface,
+            src_if_id, tgt_if_id,
+            netbox_cable_id, cable_type, cable_status,
+            link_data.status or "ok", link_data.rtt_ms or 0.0, link_data.loss_percent or 0.0, extra_str
         ))
         await db.commit()
 
         cursor = await db.execute("SELECT * FROM links WHERE id = ?", (link_id,))
         r = await cursor.fetchone()
+        keys = r.keys()
         return LinkOut(
             id=r["id"],
             map_id=r["map_id"],
@@ -1062,6 +1113,11 @@ async def create_link(link_data: LinkCreate, user: Dict[str, Any] = Depends(get_
             target_node_id=r["target_node_id"],
             source_interface=r["source_interface"],
             target_interface=r["target_interface"],
+            source_interface_id=r["source_interface_id"] if "source_interface_id" in keys else None,
+            target_interface_id=r["target_interface_id"] if "target_interface_id" in keys else None,
+            netbox_cable_id=r["netbox_cable_id"] if "netbox_cable_id" in keys else None,
+            cable_type=r["cable_type"] if "cable_type" in keys else "cat6",
+            cable_status=r["cable_status"] if "cable_status" in keys else "connected",
             status=r["status"],
             rtt_ms=r["rtt_ms"],
             loss_percent=r["loss_percent"],
@@ -1079,8 +1135,14 @@ async def update_link(link_id: str, link_data: LinkUpdate, user: Dict[str, Any] 
         if not r:
             raise HTTPException(status_code=404, detail="Enlace no encontrado")
 
+        keys = r.keys()
         new_src_iface = link_data.source_interface if link_data.source_interface is not None else r["source_interface"]
         new_tgt_iface = link_data.target_interface if link_data.target_interface is not None else r["target_interface"]
+        new_src_if_id = link_data.source_interface_id if link_data.source_interface_id is not None else (r["source_interface_id"] if "source_interface_id" in keys else None)
+        new_tgt_if_id = link_data.target_interface_id if link_data.target_interface_id is not None else (r["target_interface_id"] if "target_interface_id" in keys else None)
+        new_cable_id = link_data.netbox_cable_id if link_data.netbox_cable_id is not None else (r["netbox_cable_id"] if "netbox_cable_id" in keys else None)
+        new_cable_type = link_data.cable_type if link_data.cable_type is not None else (r["cable_type"] if "cable_type" in keys else "cat6")
+        new_cable_status = link_data.cable_status if link_data.cable_status is not None else (r["cable_status"] if "cable_status" in keys else "connected")
         new_status = link_data.status if link_data.status is not None else r["status"]
         new_rtt = link_data.rtt_ms if link_data.rtt_ms is not None else r["rtt_ms"]
         new_loss = link_data.loss_percent if link_data.loss_percent is not None else r["loss_percent"]
@@ -1091,14 +1153,24 @@ async def update_link(link_id: str, link_data: LinkUpdate, user: Dict[str, Any] 
 
         await db.execute("""
             UPDATE links
-            SET source_interface = ?, target_interface = ?, status = ?, rtt_ms = ?, loss_percent = ?,
+            SET source_interface = ?, target_interface = ?,
+                source_interface_id = ?, target_interface_id = ?,
+                netbox_cable_id = ?, cable_type = ?, cable_status = ?,
+                status = ?, rtt_ms = ?, loss_percent = ?,
                 extra_data = ?, updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
-        """, (new_src_iface, new_tgt_iface, new_status, new_rtt, new_loss, json.dumps(cur_extra), link_id))
+        """, (
+            new_src_iface, new_tgt_iface,
+            new_src_if_id, new_tgt_if_id,
+            new_cable_id, new_cable_type, new_cable_status,
+            new_status, new_rtt, new_loss,
+            json.dumps(cur_extra), link_id
+        ))
         await db.commit()
 
         c_u = await db.execute("SELECT * FROM links WHERE id = ?", (link_id,))
         u = await c_u.fetchone()
+        u_keys = u.keys()
         return LinkOut(
             id=u["id"],
             map_id=u["map_id"],
@@ -1106,6 +1178,11 @@ async def update_link(link_id: str, link_data: LinkUpdate, user: Dict[str, Any] 
             target_node_id=u["target_node_id"],
             source_interface=u["source_interface"],
             target_interface=u["target_interface"],
+            source_interface_id=u["source_interface_id"] if "source_interface_id" in u_keys else None,
+            target_interface_id=u["target_interface_id"] if "target_interface_id" in u_keys else None,
+            netbox_cable_id=u["netbox_cable_id"] if "netbox_cable_id" in u_keys else None,
+            cable_type=u["cable_type"] if "cable_type" in u_keys else "cat6",
+            cable_status=u["cable_status"] if "cable_status" in u_keys else "connected",
             status=u["status"],
             rtt_ms=u["rtt_ms"],
             loss_percent=u["loss_percent"],
@@ -1116,11 +1193,91 @@ async def update_link(link_id: str, link_data: LinkUpdate, user: Dict[str, Any] 
 
 @router.delete("/links/{link_id}")
 async def delete_link(link_id: str, user: Dict[str, Any] = Depends(get_current_user)):
-    """Elimina un enlace entre nodos."""
+    """Elimina un enlace entre nodos y desconecta el cable correspondiente en NetBox si existía."""
     async with get_db_connection() as db:
+        cursor = await db.execute("SELECT netbox_cable_id FROM links WHERE id = ?", (link_id,))
+        r = await cursor.fetchone()
+        if r and "netbox_cable_id" in r.keys() and r["netbox_cable_id"]:
+            cable_id = r["netbox_cable_id"]
+            await inventory_service.delete_netbox_cable(cable_id)
+
         await db.execute("DELETE FROM links WHERE id = ?", (link_id,))
         await db.commit()
-        return {"status": "success", "message": f"Enlace {link_id} eliminado"}
+        return {"status": "success", "message": f"Enlace {link_id} eliminado de NexusDude y NetBox"}
+
+@router.post("/{map_id}/sync-netbox-cables")
+async def sync_map_netbox_cables(map_id: str, user: Dict[str, Any] = Depends(get_current_user)):
+    """
+    Escanea todos los nodos de este mapa que tengan device_id de NetBox y sincroniza
+    automáticamente los cables físicos existentes en NetBox hacia enlaces de NexusDude.
+    """
+    async with get_db_connection() as db:
+        c_nodes = await db.execute("SELECT id, device_id, name FROM nodes WHERE map_id = ? AND device_id IS NOT NULL", (map_id,))
+        nodes = await c_nodes.fetchall()
+        if not nodes:
+            return {"status": "success", "synced_cables_count": 0, "message": "No hay dispositivos de NetBox en este mapa"}
+
+        dev_to_node = {n["device_id"]: n["id"] for n in nodes}
+        device_ids = list(dev_to_node.keys())
+
+        # Enlaces existentes en este mapa
+        c_links = await db.execute("SELECT netbox_cable_id, source_node_id, target_node_id, source_interface, target_interface FROM links WHERE map_id = ?", (map_id,))
+        existing_links = await c_links.fetchall()
+        existing_cable_ids = {l["netbox_cable_id"] for l in existing_links if "netbox_cable_id" in l.keys() and l["netbox_cable_id"]}
+
+        synced_count = 0
+        for dev_id in device_ids:
+            ifaces = await inventory_service.get_device_interfaces(dev_id)
+            for iface in ifaces:
+                cable_id = iface.get("cable_id")
+                if cable_id and cable_id not in existing_cable_ids:
+                    # Verificar si la otra punta está en este mismo mapa
+                    # Consultar el cable en NetBox para obtener endpoints
+                    headers = await inventory_service.get_headers()
+                    try:
+                        import httpx
+                        from app.config import settings
+                        async with httpx.AsyncClient(verify=False, timeout=10.0) as client:
+                            res_cable = await client.get(f"{settings.NETBOX_URL}/api/dcim/cables/{cable_id}/", headers=headers)
+                            if res_cable.status_code == 200:
+                                cdata = res_cable.json()
+                                a_terms = cdata.get("a_terminations", [])
+                                b_terms = cdata.get("b_terminations", [])
+                                if a_terms and b_terms:
+                                    dev_a_id = a_terms[0].get("object", {}).get("device", {}).get("id")
+                                    if_a_name = a_terms[0].get("object", {}).get("name")
+                                    if_a_id = a_terms[0].get("object_id")
+                                    dev_b_id = b_terms[0].get("object", {}).get("device", {}).get("id")
+                                    if_b_name = b_terms[0].get("object", {}).get("name")
+                                    if_b_id = b_terms[0].get("object_id")
+
+                                    if dev_a_id in dev_to_node and dev_b_id in dev_to_node:
+                                        node_a_id = dev_to_node[dev_a_id]
+                                        node_b_id = dev_to_node[dev_b_id]
+                                        new_link_id = f"link-{uuid.uuid4().hex[:8]}"
+                                        await db.execute("""
+                                            INSERT INTO links (
+                                                id, map_id, source_node_id, target_node_id,
+                                                source_interface, target_interface,
+                                                source_interface_id, target_interface_id,
+                                                netbox_cable_id, cable_type, cable_status, status
+                                            )
+                                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                        """, (
+                                            new_link_id, map_id, node_a_id, node_b_id,
+                                            if_a_name, if_b_name,
+                                            if_a_id, if_b_id,
+                                            cable_id, cdata.get("type", {}).get("value") if isinstance(cdata.get("type"), dict) else "cat6",
+                                            cdata.get("status", {}).get("value") if isinstance(cdata.get("status"), dict) else "connected",
+                                            "ok"
+                                        ))
+                                        existing_cable_ids.add(cable_id)
+                                        synced_count += 1
+                    except Exception as e:
+                        pass
+
+        await db.commit()
+        return {"status": "success", "synced_cables_count": synced_count, "message": f"Se sincronizaron {synced_count} cables desde NetBox"}
 
 
 # --- Sincronización Masiva de Nodos con NetBox ---

@@ -121,6 +121,7 @@ class InventoryService:
                             "role_color": role_color,
                             "manufacturer": mfr_obj.get("name", "Genérico"),
                             "model": type_obj.get("model", ""),
+                            "device_type_id": type_obj.get("id"),
                             "status": d.get("status", {}).get("value", "active") if isinstance(d.get("status"), dict) else str(d.get("status", "active")),
                             "serial": d.get("serial") or ""
                         })
@@ -237,11 +238,181 @@ class InventoryService:
 
         return sorted(summary, key=lambda x: (-x["device_count"], x["name"]))
 
-    async def get_devices_by_site(self, site_name: str) -> List[Dict[str, Any]]:
-        """Retorna todos los dispositivos asignados a un sitio."""
-        if not self._devices_cache:
-            await self.refresh_cache()
-        s_lower = site_name.strip().lower()
-        return [d for d in self._devices_cache if (d.get("site") or "").strip().lower() == s_lower]
+    async def get_device_interfaces(self, device_id: int) -> List[Dict[str, Any]]:
+        """
+        Obtiene la lista completa de interfaces físicas/lógicas de un dispositivo en NetBox.
+        Si el dispositivo no tiene creadas sus interfaces físicas aún (ej. solo mgmt0),
+        consulta las plantillas de interfaz de su tipo de dispositivo y las auto-crea o retorna.
+        """
+        headers = await self.get_headers()
+        interfaces_list = []
+
+        try:
+            async with httpx.AsyncClient(verify=False, timeout=15.0) as client:
+                # 1. Consultar interfaces existentes
+                res = await client.get(f"{settings.NETBOX_URL}/api/dcim/interfaces/?device_id={device_id}&limit=200", headers=headers)
+                existing_ifaces = res.json().get("results", []) if res.status_code == 200 else []
+
+                # Mapear interfaces existentes
+                existing_names = {i["name"]: i for i in existing_ifaces}
+
+                # Si solo tiene mgmt0 o no tiene puertos físicos, intentar consultar Interface Templates del Device Type
+                dev = await self.get_device_by_id(device_id)
+                dev_type_id = None
+                if dev and dev.get("device_type_id"):
+                    dev_type_id = dev.get("device_type_id")
+                elif dev and isinstance(dev.get("device_type"), dict):
+                    dev_type_id = dev["device_type"].get("id")
+
+                if not dev_type_id:
+                    res_dev = await client.get(f"{settings.NETBOX_URL}/api/dcim/devices/{device_id}/", headers=headers)
+                    if res_dev.status_code == 200:
+                        d_data = res_dev.json()
+                        if isinstance(d_data.get("device_type"), dict):
+                            dev_type_id = d_data["device_type"].get("id")
+                        elif d_data.get("device_type_id"):
+                            dev_type_id = d_data.get("device_type_id")
+
+                if dev_type_id:
+                    res_tmpl = await client.get(f"{settings.NETBOX_URL}/api/dcim/interface-templates/?device_type_id={dev_type_id}&limit=100", headers=headers)
+                    if res_tmpl.status_code == 200:
+                        templates = res_tmpl.json().get("results", [])
+                        if templates and len(existing_names) < len(templates):
+                            for tmpl in templates:
+                                t_name = tmpl["name"]
+                                if t_name not in existing_names:
+                                    try:
+                                        t_type = tmpl.get("type", {}).get("value") if isinstance(tmpl.get("type"), dict) else (tmpl.get("type") or "1000base-t")
+                                        # Normalizar tipo para NetBox 4.x
+                                        if "10gbase-x-sfp" in str(t_type):
+                                            t_type = "10gbase-x-sfpp"
+                                        res_new = await client.post(f"{settings.NETBOX_URL}/api/dcim/interfaces/", headers=headers, json={
+                                            "device": device_id,
+                                            "name": t_name,
+                                            "type": t_type,
+                                            "mgmt_only": bool(tmpl.get("mgmt_only", False))
+                                        })
+                                        if res_new.status_code == 201:
+                                            new_if = res_new.json()
+                                            existing_ifaces.append(new_if)
+                                            existing_names[t_name] = new_if
+                                    except Exception as e:
+                                        logger.warning(f"No se pudo auto-crear interfaz {t_name} en device {device_id}: {e}")
+
+                # 2. Formatear cada interfaz con su estado de conexión
+                for i in existing_ifaces:
+                    cable = i.get("cable")
+                    is_conn = bool(cable)
+                    conn_dev = None
+                    conn_if = None
+                    cable_id = cable.get("id") if isinstance(cable, dict) else (cable if isinstance(cable, int) else None)
+                    cable_status = cable.get("status", {}).get("value") if isinstance(cable, dict) and isinstance(cable.get("status"), dict) else "connected"
+                    cable_type = cable.get("type", {}).get("value") if isinstance(cable, dict) and isinstance(cable.get("type"), dict) else "cat6"
+
+                    # Si está conectada, obtener la otra punta (link_peers / connected_endpoints)
+                    link_peers = i.get("link_peers", []) or i.get("connected_endpoints", [])
+                    if link_peers and len(link_peers) > 0:
+                        peer = link_peers[0]
+                        if isinstance(peer, dict):
+                            conn_if = peer.get("name")
+                            if isinstance(peer.get("device"), dict):
+                                conn_dev = peer.get("device", {}).get("name")
+
+                    interfaces_list.append({
+                        "id": i.get("id"),
+                        "name": i.get("name"),
+                        "type": i.get("type", {}).get("value") if isinstance(i.get("type"), dict) else (i.get("type") or "1000base-t"),
+                        "enabled": i.get("enabled", True),
+                        "mgmt_only": i.get("mgmt_only", False),
+                        "is_connected": is_conn,
+                        "connected_device": conn_dev,
+                        "connected_interface": conn_if,
+                        "cable_id": cable_id,
+                        "cable_status": cable_status,
+                        "cable_type": cable_type
+                    })
+
+        except Exception as e:
+            logger.error(f"Error consultando interfaces para device {device_id}: {e}")
+
+        # Ordenar puertos de forma natural (GE1, GE2... SFP1...)
+        return sorted(interfaces_list, key=lambda x: (x.get("mgmt_only", False), x.get("name", "")))
+
+    async def get_or_create_interface(self, device_id: int, interface_name: str, if_type: str = "1000base-t") -> Dict[str, Any]:
+        """Obtiene o crea una interfaz específica en NetBox."""
+        headers = await self.get_headers()
+        clean_name = interface_name.strip()
+        # Normalizar tipo para NetBox 4.x
+        if "10gbase-x-sfp" in str(if_type) and not str(if_type).endswith("sfpp"):
+            if_type = "10gbase-x-sfpp"
+
+        async with httpx.AsyncClient(verify=False, timeout=15.0) as client:
+            res = await client.get(f"{settings.NETBOX_URL}/api/dcim/interfaces/", headers=headers, params={"device_id": device_id, "name": clean_name})
+            if res.status_code == 200:
+                results = res.json().get("results", [])
+                if results:
+                    return results[0]
+
+            # Crear interfaz si no existe
+            res_create = await client.post(f"{settings.NETBOX_URL}/api/dcim/interfaces/", headers=headers, json={
+                "device": device_id,
+                "name": clean_name,
+                "type": if_type
+            })
+            if res_create.status_code in (200, 201):
+                return res_create.json()
+            else:
+                logger.error(f"Error creando interfaz {clean_name} en NetBox: {res_create.text}")
+                raise Exception(f"No se pudo crear interfaz {clean_name} en NetBox: {res_create.text}")
+
+    async def create_netbox_cable(self, dev1_id: int, if1_name: str, dev2_id: int, if2_name: str, cable_type: str = "cat6", description: str = "") -> Dict[str, Any]:
+        """Crea un Cable físico en NetBox entre dos dispositivos e interfaces."""
+        headers = await self.get_headers()
+        if1 = await self.get_or_create_interface(dev1_id, if1_name)
+        if2 = await self.get_or_create_interface(dev2_id, if2_name)
+
+        cable_payload = {
+            "a_terminations": [{"object_type": "dcim.interface", "object_id": if1["id"]}],
+            "b_terminations": [{"object_type": "dcim.interface", "object_id": if2["id"]}],
+            "status": "connected",
+            "type": cable_type or "cat6",
+            "description": description or "Enlace creado desde NexusDude Topology"
+        }
+
+        async with httpx.AsyncClient(verify=False, timeout=15.0) as client:
+            res = await client.post(f"{settings.NETBOX_URL}/api/dcim/cables/", headers=headers, json=cable_payload)
+            if res.status_code in (200, 201):
+                cable_data = res.json()
+                logger.info(f"Cable creado exitosamente en NetBox: ID {cable_data.get('id')} ({if1_name} <-> {if2_name})")
+                return {
+                    "cable_id": cable_data.get("id"),
+                    "if1_id": if1["id"],
+                    "if2_id": if2["id"],
+                    "cable_status": cable_data.get("status", {}).get("value") if isinstance(cable_data.get("status"), dict) else "connected",
+                    "cable_type": cable_data.get("type", {}).get("value") if isinstance(cable_data.get("type"), dict) else cable_type
+                }
+            else:
+                logger.error(f"Error creando cable en NetBox: {res.status_code} - {res.text}")
+                raise Exception(f"NetBox no pudo crear el cable: {res.text}")
+
+    async def delete_netbox_cable(self, cable_id: int) -> bool:
+        """Elimina un Cable de NetBox al desconectar un enlace en NexusDude."""
+        headers = await self.get_headers()
+        try:
+            async with httpx.AsyncClient(verify=False, timeout=10.0) as client:
+                res = await client.delete(f"{settings.NETBOX_URL}/api/dcim/cables/{cable_id}/", headers=headers)
+                if res.status_code in (200, 204):
+                    logger.info(f"Cable ID {cable_id} eliminado exitosamente de NetBox.")
+                    return True
+                elif res.status_code == 404:
+                    logger.warning(f"Cable ID {cable_id} no existía en NetBox.")
+                    return True
+                else:
+                    logger.error(f"Error eliminando cable ID {cable_id} en NetBox: {res.status_code} - {res.text}")
+                    return False
+        except Exception as e:
+            logger.error(f"Excepción eliminando cable NetBox: {e}")
+            return False
 
 inventory_service = InventoryService()
+
