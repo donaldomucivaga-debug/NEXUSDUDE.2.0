@@ -3424,53 +3424,19 @@ let cachedSitesSummary = [];
 function setModalMode(mode) {
   currentModalMode = mode;
   const btnSite = document.getElementById('btn-mode-site');
-  const btnExisting = document.getElementById('btn-mode-existing');
   const btnManual = document.getElementById('btn-mode-manual');
   const rowSitePicker = document.getElementById('row-site-picker');
-  const rowExistingMapPicker = document.getElementById('row-existing-map-picker');
   const rowAutoPopulate = document.getElementById('row-auto-populate');
-  const rowMapName = document.getElementById('row-map-name');
-  const rowMapParent = document.getElementById('row-map-parent');
-  const rowMapDesc = document.getElementById('row-map-desc');
-  const rowMapGrid = document.getElementById('row-map-grid');
-  const rowInsert = document.getElementById('row-insert-submap-node');
-  const btnConfirm = document.getElementById('btn-confirm-save-map');
 
   if (btnSite) btnSite.classList.toggle('active', mode === 'site');
-  if (btnExisting) btnExisting.classList.toggle('active', mode === 'existing');
   if (btnManual) btnManual.classList.toggle('active', mode === 'manual');
 
   if (mode === 'site') {
     if (rowSitePicker) rowSitePicker.style.display = 'block';
-    if (rowExistingMapPicker) rowExistingMapPicker.style.display = 'none';
     if (rowAutoPopulate) rowAutoPopulate.style.display = 'block';
-    if (rowMapName) rowMapName.style.display = 'block';
-    if (rowMapParent) rowMapParent.style.display = 'block';
-    if (rowMapDesc) rowMapDesc.style.display = 'block';
-    if (rowMapGrid) rowMapGrid.style.display = 'block';
-    if (rowInsert) rowInsert.style.display = currentMap ? 'block' : 'none';
-    if (btnConfirm) btnConfirm.innerHTML = '<i class="fas fa-plus"></i> Crear Submapa';
-  } else if (mode === 'existing') {
-    if (rowSitePicker) rowSitePicker.style.display = 'none';
-    if (rowExistingMapPicker) rowExistingMapPicker.style.display = 'block';
-    if (rowAutoPopulate) rowAutoPopulate.style.display = 'none';
-    if (rowMapName) rowMapName.style.display = 'block';
-    if (rowMapParent) rowMapParent.style.display = 'none';
-    if (rowMapDesc) rowMapDesc.style.display = 'none';
-    if (rowMapGrid) rowMapGrid.style.display = 'none';
-    if (rowInsert) rowInsert.style.display = 'none';
-    if (btnConfirm) btnConfirm.innerHTML = '<i class="fas fa-link"></i> Enlazar Mapa';
   } else {
-    // Manual
     if (rowSitePicker) rowSitePicker.style.display = 'none';
-    if (rowExistingMapPicker) rowExistingMapPicker.style.display = 'none';
     if (rowAutoPopulate) rowAutoPopulate.style.display = 'none';
-    if (rowMapName) rowMapName.style.display = 'block';
-    if (rowMapParent) rowMapParent.style.display = 'block';
-    if (rowMapDesc) rowMapDesc.style.display = 'block';
-    if (rowMapGrid) rowMapGrid.style.display = 'block';
-    if (rowInsert) rowInsert.style.display = currentMap ? 'block' : 'none';
-    if (btnConfirm) btnConfirm.innerHTML = '<i class="fas fa-plus"></i> Crear Mapa';
   }
 }
 
@@ -3528,42 +3494,6 @@ function renderSiteOptionsForSubmap(filterText = '') {
   }
 }
 
-function renderExistingMapOptionsForSubmap(filterText = '') {
-  const selectExistingMap = document.getElementById('select-existing-map-for-submap');
-  const badge = document.getElementById('existing-map-count-badge');
-  if (!selectExistingMap) return;
-
-  const query = (filterText || '').trim().toLowerCase();
-  const currentMapId = currentMap ? currentMap.id : null;
-
-  // Filtrar mapas disponibles (excluyendo el mapa actual donde estamos parados para evitar recursión)
-  const availableMaps = (cachedMaps || []).filter(m => m.id !== currentMapId);
-  const filtered = availableMaps.filter(m => {
-    if (!query) return true;
-    const nameMatch = (m.name || '').toLowerCase().includes(query);
-    const descMatch = (m.description || '').toLowerCase().includes(query);
-    return nameMatch || descMatch;
-  });
-
-  selectExistingMap.innerHTML = '';
-  if (filtered.length === 0) {
-    selectExistingMap.innerHTML = '<option value="">No se encontraron mapas existentes</option>';
-  } else {
-    filtered.forEach(m => {
-      const opt = document.createElement('option');
-      opt.value = m.id;
-      opt.textContent = `${m.parent_map_id ? '  ↳ ' : '🗺️ '}${m.name} (${m.nodes_count || 0} nodos)`;
-      opt.dataset.name = m.name;
-      opt.dataset.count = m.nodes_count || 0;
-      selectExistingMap.appendChild(opt);
-    });
-  }
-
-  if (badge) {
-    badge.textContent = `${filtered.length} de ${availableMaps.length} mapas`;
-  }
-}
-
 async function openCreateMapModal(isSubmap = false, parentId = null, preferSiteMode = false) {
   updateParentMapSelectOptions();
   const modal = document.getElementById('modal-map');
@@ -3575,45 +3505,40 @@ async function openCreateMapModal(isSubmap = false, parentId = null, preferSiteM
   const selectParent = document.getElementById('select-map-parent');
   const rowInsert = document.getElementById('row-insert-submap-node');
   const rowModeTabs = document.getElementById('row-modal-mode-tabs');
+  const selectSiteSubmap = document.getElementById('select-site-for-submap');
+  const btnConfirm = document.getElementById('btn-confirm-save-map');
 
   inputId.value = '';
   inputName.value = '';
   inputDesc.value = '';
   selectGrid.value = '20';
 
-  // Cargar sitios NetBox y lista de mapas en caché
+  // Cargar sitios NetBox en caché
   if (cachedSitesSummary.length === 0) {
     cachedSitesSummary = await API.getSitesSummary();
-  }
-  if (!cachedMaps || cachedMaps.length === 0) {
-    cachedMaps = await API.getMaps();
   }
 
   const inputFilterSite = document.getElementById('input-filter-site-submap');
   if (inputFilterSite) inputFilterSite.value = '';
   renderSiteOptionsForSubmap('');
 
-  const inputFilterExisting = document.getElementById('input-filter-existing-map-modal');
-  if (inputFilterExisting) inputFilterExisting.value = '';
-  renderExistingMapOptionsForSubmap('');
-
   const parentTargetId = parentId || (isSubmap ? currentMap?.id : '') || '';
   selectParent.value = parentTargetId;
 
   if (isSubmap) {
-    title.textContent = 'Nuevo Submapa / Enlace de Navegación';
-    if (rowInsert) rowInsert.style.display = 'block';
-    const chkInsert = document.getElementById('check-insert-submap-node');
-    if (chkInsert) chkInsert.checked = true;
+    title.textContent = 'Nuevo Submapa';
+    rowInsert.style.display = 'block';
+    document.getElementById('check-insert-submap-node').checked = true;
     if (rowModeTabs) rowModeTabs.style.display = 'flex';
-    setModalMode(preferSiteMode ? 'site' : 'site');
+    setModalMode('site');
   } else {
     title.textContent = 'Nuevo Mapa Raíz';
-    if (rowInsert) rowInsert.style.display = 'none';
+    rowInsert.style.display = 'none';
     if (rowModeTabs) rowModeTabs.style.display = 'flex';
     setModalMode(preferSiteMode ? 'site' : 'manual');
   }
 
+  btnConfirm.innerHTML = '<i class="fas fa-plus"></i> Crear Mapa';
   modal.style.display = 'flex';
 }
 
@@ -3629,12 +3554,7 @@ function openEditMapModal(mapObj) {
   const rowInsert = document.getElementById('row-insert-submap-node');
   const rowModeTabs = document.getElementById('row-modal-mode-tabs');
   const rowSitePicker = document.getElementById('row-site-picker');
-  const rowExistingMapPicker = document.getElementById('row-existing-map-picker');
   const rowAutoPopulate = document.getElementById('row-auto-populate');
-  const rowMapName = document.getElementById('row-map-name');
-  const rowMapParent = document.getElementById('row-map-parent');
-  const rowMapDesc = document.getElementById('row-map-desc');
-  const rowMapGrid = document.getElementById('row-map-grid');
   const btnConfirm = document.getElementById('btn-confirm-save-map');
 
   inputId.value = mapObj.id;
@@ -3642,16 +3562,10 @@ function openEditMapModal(mapObj) {
   inputDesc.value = mapObj.description || '';
   selectGrid.value = String(mapObj.grid_size || 20);
   selectParent.value = mapObj.parent_map_id || '';
-
-  if (rowInsert) rowInsert.style.display = 'none';
+  rowInsert.style.display = 'none';
   if (rowModeTabs) rowModeTabs.style.display = 'none';
   if (rowSitePicker) rowSitePicker.style.display = 'none';
-  if (rowExistingMapPicker) rowExistingMapPicker.style.display = 'none';
   if (rowAutoPopulate) rowAutoPopulate.style.display = 'none';
-  if (rowMapName) rowMapName.style.display = 'block';
-  if (rowMapParent) rowMapParent.style.display = 'block';
-  if (rowMapDesc) rowMapDesc.style.display = 'block';
-  if (rowMapGrid) rowMapGrid.style.display = 'block';
 
   title.textContent = `Editar Mapa: ${mapObj.name}`;
   btnConfirm.innerHTML = '<i class="fas fa-save"></i> Guardar Cambios';
@@ -3670,16 +3584,10 @@ async function handleSaveMap() {
   const autoPopulate = checkAutoPopulate ? checkAutoPopulate.checked : true;
   const selectSiteSubmap = document.getElementById('select-site-for-submap');
   const selectedSite = selectSiteSubmap ? selectSiteSubmap.value : '';
-  const selectExistingMap = document.getElementById('select-existing-map-for-submap');
 
   if (currentModalMode === 'site' && !editId) {
     if (!selectedSite) {
       alert('Por favor selecciona un Sitio de NetBox de la lista.');
-      return;
-    }
-  } else if (currentModalMode === 'existing' && !editId) {
-    if (!selectExistingMap || !selectExistingMap.value) {
-      alert('Por favor selecciona un mapa existente de la lista para enlazar.');
       return;
     }
   } else {
@@ -3702,49 +3610,8 @@ async function handleSaveMap() {
       if (currentMap) {
         await loadMap(currentMap.id);
       }
-    } else if (currentModalMode === 'existing') {
-      // MODO ENLAZAR MAPA EXISTENTE
-      const chosenMapId = selectExistingMap.value;
-      const chosenMap = (cachedMaps || []).find(m => m.id === chosenMapId);
-      const nodeName = name || (chosenMap ? chosenMap.name : 'Submapa');
-
-      if (!currentMap) {
-        alert('Debes tener un mapa abierto para insertar el enlace de navegación.');
-        return;
-      }
-
-      const centerX = (-stage.x() + stage.width() / 2) / stage.scaleX();
-      const centerY = (-stage.y() + stage.height() / 2) / stage.scaleY();
-      const snapX = snapToGrid ? Math.round(centerX / GRID_SIZE) * GRID_SIZE : centerX;
-      const snapY = snapToGrid ? Math.round(centerY / GRID_SIZE) * GRID_SIZE : centerY;
-
-      const subExtra = {
-        target_map_id: chosenMapId,
-        site_name: chosenMap?.name || nodeName,
-        device_count: chosenMap?.nodes_count || 0
-      };
-
-      await API.createNode({
-        map_id: currentMap.id,
-        name: nodeName,
-        ip: '',
-        device_type: 'submap',
-        site_name: chosenMap?.name || nodeName,
-        x: snapX,
-        y: snapY,
-        status: 'ok',
-        extra_data: subExtra
-      });
-
-      await loadMap(currentMap.id);
-
-      const goNow = confirm(`Acceso directo al mapa "${nodeName}" insertado con éxito en el lienzo.\n\n¿Deseas abrir el mapa enlazado ahora?`);
-      if (goNow) {
-        await loadMap(chosenMapId);
-      }
-
     } else if (currentModalMode === 'site') {
-      // MODO CREACIÓN DESDE SITIO NETBOX (LIMPIO O CON EQUIPOS)
+      // MODO CREACIÓN DESDE SITIO NETBOX
       const centerX = (-stage.x() + stage.width() / 2) / stage.scaleX();
       const centerY = (-stage.y() + stage.height() / 2) / stage.scaleY();
       const snapX = snapToGrid ? Math.round(centerX / GRID_SIZE) * GRID_SIZE : centerX;
@@ -3759,7 +3626,7 @@ async function handleSaveMap() {
         auto_populate: autoPopulate
       });
 
-      // Si insertó un nodo en el mapa activo actual, recargar el mapa para renderizarlo
+      // Si insertó un nodo en el mapa activo actual, recargar el mapa para renderizarlo con toda la sincronización
       if (parentId && currentMap && currentMap.id === parentId) {
         await loadMap(currentMap.id);
       }
@@ -3767,10 +3634,7 @@ async function handleSaveMap() {
       if (!parentId) {
         await loadMap(res.map.id);
       } else {
-        const msg = autoPopulate
-          ? `Submapa "${selectedSite}" creado con éxito con ${res.devices_count} equipos.\n\n¿Deseas abrir el submapa ahora?`
-          : `Submapa limpio "${selectedSite}" creado con éxito (usando el sitio como referencia).\n\n¿Deseas abrir el submapa ahora?`;
-        const goNow = confirm(msg);
+        const goNow = confirm(`Submapa "${selectedSite}" creado con éxito con ${res.devices_count} equipos.\n\n¿Deseas abrir el submapa ahora?`);
         if (goNow) {
           await loadMap(res.map.id);
         }
@@ -3783,29 +3647,6 @@ async function handleSaveMap() {
         parent_map_id: parentId,
         grid_size: grid
       });
-
-      if (insertSubmapNode && parentId && currentMap && currentMap.id === parentId) {
-        const centerX = (-stage.x() + stage.width() / 2) / stage.scaleX();
-        const centerY = (-stage.y() + stage.height() / 2) / stage.scaleY();
-        const snapX = snapToGrid ? Math.round(centerX / GRID_SIZE) * GRID_SIZE : centerX;
-        const snapY = snapToGrid ? Math.round(centerY / GRID_SIZE) * GRID_SIZE : centerY;
-
-        await API.createNode({
-          map_id: currentMap.id,
-          name: name,
-          ip: '',
-          device_type: 'submap',
-          site_name: name,
-          x: snapX,
-          y: snapY,
-          status: 'ok',
-          extra_data: {
-            target_map_id: newMap.id,
-            site_name: name,
-            device_count: 0
-          }
-        });
-      }
 
       if (parentId && currentMap && currentMap.id === parentId) {
         await loadMap(currentMap.id);
@@ -5139,10 +4980,6 @@ window.addEventListener('DOMContentLoaded', async () => {
   if (btnModeSite) {
     btnModeSite.addEventListener('click', () => setModalMode('site'));
   }
-  const btnModeExisting = document.getElementById('btn-mode-existing');
-  if (btnModeExisting) {
-    btnModeExisting.addEventListener('click', () => setModalMode('existing'));
-  }
   const btnModeManual = document.getElementById('btn-mode-manual');
   if (btnModeManual) {
     btnModeManual.addEventListener('click', () => setModalMode('manual'));
@@ -5166,28 +5003,6 @@ window.addEventListener('DOMContentLoaded', async () => {
       const count = opt ? (opt.dataset.count || 0) : 0;
       document.getElementById('input-new-map-name').value = selectedSite;
       document.getElementById('input-new-map-desc').value = `Sitio NetBox: ${selectedSite} (${count} equipos)`;
-    });
-  }
-
-  // Buscador de mapas existentes en el modal de nuevo submapa
-  const inputFilterExistingMapModal = document.getElementById('input-filter-existing-map-modal');
-  if (inputFilterExistingMapModal) {
-    inputFilterExistingMapModal.addEventListener('input', (e) => {
-      renderExistingMapOptionsForSubmap(e.target.value);
-    });
-  }
-
-  // Cambio de selección de mapa existente en el modal
-  const selectExistingMapForSubmap = document.getElementById('select-existing-map-for-submap');
-  if (selectExistingMapForSubmap) {
-    selectExistingMapForSubmap.addEventListener('change', () => {
-      const chosenId = selectExistingMapForSubmap.value;
-      if (!chosenId) return;
-      const opt = selectExistingMapForSubmap.selectedOptions[0];
-      const mapName = opt ? (opt.dataset.name || opt.textContent) : '';
-      if (mapName) {
-        document.getElementById('input-new-map-name').value = mapName;
-      }
     });
   }
 

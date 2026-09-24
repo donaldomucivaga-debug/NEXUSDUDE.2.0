@@ -587,9 +587,6 @@
           <button type="button" class="mode-tab-btn active" id="btn-mode-site">
             <i class="fas fa-building"></i> Desde Sitio NetBox
           </button>
-          <button type="button" class="mode-tab-btn" id="btn-mode-existing">
-            <i class="fas fa-link"></i> Enlazar Mapa Existente
-          </button>
           <button type="button" class="mode-tab-btn" id="btn-mode-manual">
             <i class="fas fa-pencil-alt"></i> Manual (En blanco)
           </button>
@@ -610,55 +607,32 @@
           </select>
         </div>
 
-        <!-- Selector de Mapa Existente con Buscador en Tiempo Real -->
-        <div class="prop-row" id="row-existing-map-picker" style="display: none;">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-            <label class="prop-label" style="margin: 0;"><i class="fas fa-sitemap"></i> Seleccionar Mapa o Submapa Existente</label>
-            <span id="existing-map-count-badge" style="font-size: 0.7rem; color: #c084fc; font-weight: 600;">Cargando...</span>
-          </div>
-          <div style="position: relative; margin-bottom: 6px;">
-            <i class="fas fa-search" style="position: absolute; left: 10px; top: 50%; transform: translateY(-50%); font-size: 0.75rem; color: var(--text-muted);"></i>
-            <input type="text" class="input-text" id="input-filter-existing-map-modal" placeholder="🔍 Escribe para filtrar mapas existentes..." style="padding-left: 28px; font-size: 0.8rem; background: rgba(15,23,42,0.6);">
-          </div>
-          <select class="select-filter" id="select-existing-map-for-submap" size="5" style="height: auto; max-height: 140px; overflow-y: auto; font-family: inherit;">
-            <option value="">-- Elige un mapa de la lista --</option>
-          </select>
-          <div style="font-size: 0.73rem; color: #a855f7; margin-top: 5px; line-height: 1.3;">
-            <i class="fas fa-info-circle"></i> Creará un nodo de navegación en el lienzo actual que enlaza directamente a este mapa.
-          </div>
-        </div>
-
         <!-- Opción auto-poblar equipos del sitio -->
         <div class="prop-row" id="row-auto-populate" style="display: none;">
-          <label style="display: flex; flex-direction: column; gap: 4px; font-size: 0.8rem; color: #38bdf8; cursor: pointer; background: rgba(56, 189, 248, 0.08); padding: 8px 10px; border-radius: 6px; border: 1px solid rgba(56, 189, 248, 0.25);">
-            <div style="display: flex; align-items: center; gap: 8px;">
-              <input type="checkbox" id="check-auto-populate-devices" checked>
-              <span><strong>Poblar automáticamente</strong> los equipos del sitio con layout jerárquico</span>
-            </div>
-            <div style="font-size: 0.72rem; color: var(--text-muted); margin-left: 24px;">
-              (Si se desmarca, se crea un mapa limpio/en blanco usando el nombre del sitio como referencia)
-            </div>
+          <label style="display: flex; align-items: center; gap: 8px; font-size: 0.8rem; color: #38bdf8; cursor: pointer; background: rgba(56, 189, 248, 0.08); padding: 8px 10px; border-radius: 6px; border: 1px solid rgba(56, 189, 248, 0.25);">
+            <input type="checkbox" id="check-auto-populate-devices" checked>
+            <span><strong>Poblar automáticamente</strong> los equipos del sitio con layout jerárquico</span>
           </label>
         </div>
 
-        <div class="prop-row" id="row-map-name">
+        <div class="prop-row">
           <label class="prop-label">Nombre del Mapa</label>
           <input type="text" class="input-text" id="input-new-map-name" placeholder="Ej: ENTRONQUE HUIZACHE, POP Sur, Torre 1">
         </div>
 
-        <div class="prop-row" id="row-map-parent">
+        <div class="prop-row">
           <label class="prop-label">Mapa Padre (Jerarquía)</label>
           <select class="select-filter" id="select-map-parent">
             <option value="">🌐 Ninguno (Mapa Raíz Principal)</option>
           </select>
         </div>
 
-        <div class="prop-row" id="row-map-desc">
+        <div class="prop-row">
           <label class="prop-label">Descripción Opcional</label>
           <input type="text" class="input-text" id="input-new-map-desc" placeholder="Detalles o ubicación de la topología">
         </div>
 
-        <div class="prop-row" id="row-map-grid">
+        <div class="prop-row">
           <label class="prop-label">Tamaño de Cuadrícula (Grid)</label>
           <select class="select-filter" id="select-new-map-grid">
             <option value="20" selected>20 px (Estándar The Dude)</option>
@@ -1051,14 +1025,9 @@
             <input type="text" class="input-text" id="input-convert-new-map-name" placeholder="Nombre del submapa">
           </div>
           <div class="prop-row" style="margin-top: 8px;">
-            <label style="display: flex; flex-direction: column; gap: 4px; font-size: 0.8rem; color: #38bdf8; cursor: pointer; background: rgba(56, 189, 248, 0.08); padding: 8px 10px; border-radius: 6px; border: 1px solid rgba(56, 189, 248, 0.25);">
-              <div style="display: flex; align-items: center; gap: 8px;">
-                <input type="checkbox" id="check-convert-auto-populate" checked>
-                <span><strong>Poblar automáticamente</strong> los equipos del sitio desde NetBox</span>
-              </div>
-              <div style="font-size: 0.72rem; color: var(--text-muted); margin-left: 24px;">
-                (Si se desmarca, se crea un mapa limpio/en blanco usando el nombre del sitio como referencia)
-              </div>
+            <label style="display: flex; align-items: center; gap: 8px; font-size: 0.8rem; color: #38bdf8; cursor: pointer; background: rgba(56, 189, 248, 0.08); padding: 8px 10px; border-radius: 6px; border: 1px solid rgba(56, 189, 248, 0.25);">
+              <input type="checkbox" id="check-convert-auto-populate" checked>
+              <span><strong>Poblar automáticamente</strong> los equipos del sitio desde NetBox</span>
             </label>
           </div>
         </div>
