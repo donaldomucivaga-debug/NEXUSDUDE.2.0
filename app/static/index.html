@@ -62,11 +62,6 @@
         <span>Imantar (20px)</span>
       </button>
 
-      <button class="btn" id="btn-auto-layout-tree" title="Organizar automáticamente los nodos como terminales y los enlaces como buses de conexión (Diseño PCB)">
-        <i class="fas fa-microchip"></i>
-        <span>Diseño PCB</span>
-      </button>
-
       <button class="btn btn-purple" id="btn-open-zabbix-sync" title="Sincronizar topología jerárquica con Zabbix Services (BSM)">
         <i class="fas fa-satellite-dish"></i>
         <span>Sincronizar Zabbix</span>
@@ -912,6 +907,12 @@
           <!-- Selectores de Puertos de Origen y Destino -->
           <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
             <div>
+              <div id="link-src-submap-container" style="display: none; margin-bottom: 6px; background: rgba(56, 189, 248, 0.08); border: 1px dashed rgba(56, 189, 248, 0.4); border-radius: 6px; padding: 6px;">
+                <label style="font-size: 0.7rem; color: #38bdf8; font-weight: 700; display: block; margin-bottom: 3px;">🎯 Dispositivo en Submapa (Origen):</label>
+                <select class="input-text" id="select-link-src-submap-dev" style="width: 100%; font-size: 0.76rem; padding: 4px 6px; background: #0f172a; color: #f8fafc;">
+                  <option value="">-- Seleccionar Equipo del Submapa --</option>
+                </select>
+              </div>
               <label style="font-size: 0.72rem; color: var(--text-muted); font-weight: 600; display: block; margin-bottom: 4px;" id="link-lbl-src-iface">Puerto en Nodo A:</label>
               <div style="display: flex; gap: 4px;">
                 <select class="input-text" id="select-link-src-iface" style="width: 100%; font-size: 0.78rem; padding: 6px 8px; background: #0f172a; color: #f8fafc;">
@@ -922,6 +923,12 @@
             </div>
 
             <div>
+              <div id="link-tgt-submap-container" style="display: none; margin-bottom: 6px; background: rgba(168, 85, 247, 0.08); border: 1px dashed rgba(168, 85, 247, 0.4); border-radius: 6px; padding: 6px;">
+                <label style="font-size: 0.7rem; color: #c084fc; font-weight: 700; display: block; margin-bottom: 3px;">🎯 Dispositivo en Submapa (Destino):</label>
+                <select class="input-text" id="select-link-tgt-submap-dev" style="width: 100%; font-size: 0.76rem; padding: 4px 6px; background: #0f172a; color: #f8fafc;">
+                  <option value="">-- Seleccionar Equipo del Submapa --</option>
+                </select>
+              </div>
               <label style="font-size: 0.72rem; color: var(--text-muted); font-weight: 600; display: block; margin-bottom: 4px;" id="link-lbl-tgt-iface">Puerto en Nodo B:</label>
               <div style="display: flex; gap: 4px;">
                 <select class="input-text" id="select-link-tgt-iface" style="width: 100%; font-size: 0.78rem; padding: 6px 8px; background: #0f172a; color: #f8fafc;">
@@ -1044,6 +1051,12 @@
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
           <!-- Panel de Puertos Origen -->
           <div style="background: rgba(15, 23, 42, 0.6); border: 1px solid var(--border-color); border-radius: 8px; padding: 10px;">
+            <div id="port-connect-src-submap-container" style="display: none; margin-bottom: 8px; background: rgba(56, 189, 248, 0.08); border: 1px dashed rgba(56, 189, 248, 0.4); border-radius: 6px; padding: 6px;">
+              <label style="font-size: 0.7rem; color: #38bdf8; font-weight: 700; display: block; margin-bottom: 3px;">🎯 Dispositivo en Submapa:</label>
+              <select class="input-text" id="port-connect-src-submap-dev" style="width: 100%; font-size: 0.76rem; padding: 4px 6px; background: #0f172a; color: #f8fafc;">
+                <option value="">-- Seleccionar Equipo del Submapa --</option>
+              </select>
+            </div>
             <div style="font-size: 0.74rem; font-weight: 700; color: #38bdf8; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center;">
               <span>Puerto Origen:</span>
               <span id="port-connect-src-badge" style="font-size: 0.65rem; color: #94a3b8;">Selecciona...</span>
@@ -1059,6 +1072,12 @@
 
           <!-- Panel de Puertos Destino -->
           <div style="background: rgba(15, 23, 42, 0.6); border: 1px solid var(--border-color); border-radius: 8px; padding: 10px;">
+            <div id="port-connect-tgt-submap-container" style="display: none; margin-bottom: 8px; background: rgba(168, 85, 247, 0.08); border: 1px dashed rgba(168, 85, 247, 0.4); border-radius: 6px; padding: 6px;">
+              <label style="font-size: 0.7rem; color: #c084fc; font-weight: 700; display: block; margin-bottom: 3px;">🎯 Dispositivo en Submapa:</label>
+              <select class="input-text" id="port-connect-tgt-submap-dev" style="width: 100%; font-size: 0.76rem; padding: 4px 6px; background: #0f172a; color: #f8fafc;">
+                <option value="">-- Seleccionar Equipo del Submapa --</option>
+              </select>
+            </div>
             <div style="font-size: 0.74rem; font-weight: 700; color: #a855f7; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center;">
               <span>Puerto Destino:</span>
               <span id="port-connect-tgt-badge" style="font-size: 0.65rem; color: #94a3b8;">Selecciona...</span>

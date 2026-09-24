@@ -1894,11 +1894,98 @@ function openLinkPropertiesModal(link, sourceNode, targetNode) {
     }
   };
 
-  populateIfaceSelect(sourceNode, selectSrcIface, inputSrcIface, link.source_interface, link.source_interface_id);
-  populateIfaceSelect(targetNode, selectTgtIface, inputTgtIface, link.target_interface, link.target_interface_id);
+  let chosenSrcSubmapDev = null;
+  let chosenTgtSubmapDev = null;
+  let srcTargetMapId = null;
+  let tgtTargetMapId = null;
 
-  populateZabbixSelect(sourceNode, selectZbxSrc, link.zabbix_src_interface, link.source_interface);
-  populateZabbixSelect(targetNode, selectZbxTgt, link.zabbix_tgt_interface, link.target_interface);
+  const setupSideControls = async (node, isSource, subContainerId, subSelectId, ifaceSelectEl, ifaceInputEl, zbxSelectEl, currentIfaceName, currentIfaceId, currentZbxIface) => {
+    const isSubmap = node.device_type === 'submap' || node.device_type === 'parent_map' || !!node.extra_data?.is_parent_shortcut;
+    const subContainer = document.getElementById(subContainerId);
+    const subSelect = document.getElementById(subSelectId);
+
+    if (isSubmap) {
+      if (subContainer) subContainer.style.display = 'block';
+      let tMapId = node.extra_data?.target_map_id;
+      if (!tMapId) {
+        if (node.device_type === 'parent_map' || node.extra_data?.is_parent_shortcut) {
+          tMapId = currentMap.parent_map_id;
+        } else if (Array.isArray(allMaps)) {
+          const clean = (node.name || '').replace('📁', '').trim().toLowerCase();
+          const matched = allMaps.find(m => m.name.toLowerCase().trim() === clean || m.id === clean);
+          if (matched) tMapId = matched.id;
+        }
+      }
+
+      if (isSource) srcTargetMapId = tMapId; else tgtTargetMapId = tMapId;
+
+      let submapNodes = [];
+      if (tMapId) {
+        try {
+          const mDetail = await API.getMapDetail(tMapId);
+          if (mDetail && Array.isArray(mDetail.nodes)) {
+            submapNodes = mDetail.nodes.filter(n => n.device_type !== 'submap' && n.device_type !== 'parent_map' && !n.extra_data?.is_parent_shortcut);
+          }
+        } catch (e) {
+          console.warn('Error cargando equipos de submapa:', e);
+        }
+      }
+
+      if (subSelect) {
+        subSelect.innerHTML = '';
+        if (submapNodes.length === 0) {
+          subSelect.innerHTML = '<option value="">(Sin equipos en este submapa)</option>';
+        } else {
+          const defOpt = document.createElement('option');
+          defOpt.value = '';
+          defOpt.textContent = `-- Seleccionar Equipo (${submapNodes.length}) --`;
+          subSelect.appendChild(defOpt);
+
+          const linkExtra = link.extra_data || {};
+          const targetRemoteId = isSource ? (linkExtra.source_submap_node_id || linkExtra.remote_node_id) : (linkExtra.target_submap_node_id || linkExtra.remote_node_id);
+          const targetRemoteName = isSource ? (linkExtra.source_submap_device_name || linkExtra.remote_node_name) : (linkExtra.target_submap_device_name || linkExtra.remote_node_name);
+
+          let matchedDev = null;
+          submapNodes.forEach(sn => {
+            const opt = document.createElement('option');
+            opt.value = sn.id;
+            opt.dataset.deviceId = sn.device_id || '';
+            opt.textContent = `🖥️ ${sn.name} [${sn.ip || 'Sin IP'}] (${sn.extra_data?.model || sn.device_type || 'Dispositivo'})`;
+            if ((targetRemoteId && sn.id === targetRemoteId) || (targetRemoteName && sn.name === targetRemoteName)) {
+              opt.selected = true;
+              matchedDev = sn;
+            }
+            subSelect.appendChild(opt);
+          });
+
+          if (!matchedDev && submapNodes.length > 0) {
+            subSelect.selectedIndex = 1;
+            matchedDev = submapNodes[0];
+          }
+
+          const applySubmapDev = (dev) => {
+            if (isSource) chosenSrcSubmapDev = dev; else chosenTgtSubmapDev = dev;
+            populatePhysicalPorts(dev, ifaceSelectEl, ifaceInputEl, currentIfaceName, currentIfaceId);
+            populateZabbixSelect(dev, zbxSelectEl, currentZbxIface, currentIfaceName);
+          };
+
+          if (matchedDev) applySubmapDev(matchedDev);
+
+          subSelect.onchange = () => {
+            const sel = submapNodes.find(n => n.id === subSelect.value);
+            if (sel) applySubmapDev(sel);
+          };
+        }
+      }
+    } else {
+      if (subContainer) subContainer.style.display = 'none';
+      populatePhysicalPorts(node, ifaceSelectEl, ifaceInputEl, currentIfaceName, currentIfaceId);
+      populateZabbixSelect(node, zbxSelectEl, currentZbxIface, currentIfaceName);
+    }
+  };
+
+  setupSideControls(sourceNode, true, 'link-src-submap-container', 'select-link-src-submap-dev', selectSrcIface, inputSrcIface, selectZbxSrc, link.source_interface, link.source_interface_id, link.zabbix_src_interface);
+  setupSideControls(targetNode, false, 'link-tgt-submap-container', 'select-link-tgt-submap-dev', selectTgtIface, inputTgtIface, selectZbxTgt, link.target_interface, link.target_interface_id, link.zabbix_tgt_interface);
 
   // Consultar telemetría viva del enlace para el preview en modal
   API.getLinkTelemetry(link.id).then(telemetry => {
@@ -1987,6 +2074,26 @@ function openLinkPropertiesModal(link, sourceNode, targetNode) {
         is_simple_link: visualOnly
       });
 
+      if (chosenSrcSubmapDev) {
+        updatedExtra.is_intermap = true;
+        updatedExtra.source_submap_node_id = chosenSrcSubmapDev.id;
+        updatedExtra.source_submap_device_name = chosenSrcSubmapDev.name;
+        updatedExtra.source_submap_device_id = chosenSrcSubmapDev.device_id;
+        updatedExtra.remote_node_id = chosenSrcSubmapDev.id;
+        updatedExtra.remote_node_name = chosenSrcSubmapDev.name;
+        if (srcTargetMapId) updatedExtra.remote_map_id = srcTargetMapId;
+      }
+
+      if (chosenTgtSubmapDev) {
+        updatedExtra.is_intermap = true;
+        updatedExtra.target_submap_node_id = chosenTgtSubmapDev.id;
+        updatedExtra.target_submap_device_name = chosenTgtSubmapDev.name;
+        updatedExtra.target_submap_device_id = chosenTgtSubmapDev.device_id;
+        updatedExtra.remote_node_id = chosenTgtSubmapDev.id;
+        updatedExtra.remote_node_name = chosenTgtSubmapDev.name;
+        if (tgtTargetMapId) updatedExtra.remote_map_id = tgtTargetMapId;
+      }
+
       try {
         const updatePayload = {
           source_interface: srcIface,
@@ -2023,7 +2130,7 @@ function openLinkPropertiesModal(link, sourceNode, targetNode) {
         const dict = new Map();
         if (currentMap && currentMap.nodes) currentMap.nodes.forEach(n => dict.set(n.id, n));
         renderLink(link, dict);
-        linksLayer.batchDraw();
+        if (linksLayer) linksLayer.batchDraw();
 
         cleanUp();
       } catch (err) {
@@ -2443,84 +2550,160 @@ function promptPortConnectModal(sourceNode, targetNode) {
     if (selectCable) selectCable.value = 'cat6';
     if (selectDir) selectDir.value = 'source_to_target';
 
-    const setupNodePorts = async (node, selectEl, inputEl, chipsEl, badgeEl) => {
+    let chosenSrcSubmapDev = null;
+    let chosenTgtSubmapDev = null;
+    let srcTargetMapId = null;
+    let tgtTargetMapId = null;
+
+    const setupSidePortControls = async (node, isSource, subContainerId, subSelectId, selectEl, inputEl, chipsEl, badgeEl) => {
       if (!selectEl) return;
-      selectEl.innerHTML = '<option value="">⏳ Cargando puertos...</option>';
-      if (chipsEl) chipsEl.innerHTML = '';
-      if (badgeEl) badgeEl.textContent = 'Cargando...';
+      const isSubmap = node.device_type === 'submap' || node.device_type === 'parent_map' || !!node.extra_data?.is_parent_shortcut;
+      const subContainer = document.getElementById(subContainerId);
+      const subSelect = document.getElementById(subSelectId);
 
-      let ifaces = [];
-      if (node && node.device_id) {
-        try {
-          ifaces = await API.getDeviceInterfaces(node.device_id);
-        } catch (e) {
-          console.warn('Error fetching ifaces:', e);
-        }
-      }
+      const renderDevicePorts = async (devNode) => {
+        selectEl.innerHTML = '<option value="">⏳ Cargando puertos...</option>';
+        if (chipsEl) chipsEl.innerHTML = '';
+        if (badgeEl) badgeEl.textContent = 'Cargando...';
 
-      selectEl.innerHTML = '';
-      const defOpt = document.createElement('option');
-      defOpt.value = '';
-      defOpt.textContent = '-- Seleccionar Puerto --';
-      selectEl.appendChild(defOpt);
-
-      if (badgeEl) badgeEl.textContent = `${ifaces.length} puertos`;
-
-      if (Array.isArray(ifaces) && ifaces.length > 0) {
-        ifaces.forEach((iface, idx) => {
-          const opt = document.createElement('option');
-          opt.value = iface.name;
-          opt.dataset.ifaceId = iface.id;
-          const speedStr = iface.type ? ` (${iface.type})` : '';
-          const connStr = iface.is_connected ? ' [Ocupado]' : '';
-          opt.textContent = `${iface.name}${speedStr}${connStr}`;
-          if (idx === 0 && !iface.is_connected) {
-            opt.selected = true;
-          }
-          selectEl.appendChild(opt);
-
-          if (chipsEl) {
-            const chip = document.createElement('button');
-            chip.type = 'button';
-            chip.className = 'badge';
-            const isFiber = (iface.type || '').includes('sfp');
-            const isConn = iface.is_connected;
-            chip.style.cssText = `font-size: 0.68rem; padding: 3px 6px; cursor: pointer; border-radius: 4px; border: 1px solid ${isConn ? 'rgba(239,68,68,0.4)' : (isFiber ? 'rgba(168,85,247,0.4)' : 'rgba(56,189,248,0.4)')}; background: ${isConn ? 'rgba(239,68,68,0.1)' : (isFiber ? 'rgba(168,85,247,0.1)' : 'rgba(56,189,248,0.1)')}; color: ${isConn ? '#f87171' : (isFiber ? '#c084fc' : '#38bdf8')};`;
-            chip.textContent = `${isFiber ? '⚡ ' : '🔌 '}${iface.name}${isConn ? ' ●' : ''}`;
-            chip.title = `${iface.name} (${iface.type || 'Port'})${isConn ? ' - Conectado' : ' - Disponible'}`;
-            chip.onclick = () => {
-              selectEl.value = iface.name;
-              if (inputEl) inputEl.style.display = 'none';
-              Array.from(chipsEl.children).forEach(c => c.style.outline = 'none');
-              chip.style.outline = '2px solid #38bdf8';
-            };
-            chipsEl.appendChild(chip);
-          }
-        });
-      }
-
-      const manualOpt = document.createElement('option');
-      manualOpt.value = '__manual__';
-      manualOpt.textContent = '✏️ Puerto Personalizado...';
-      selectEl.appendChild(manualOpt);
-
-      selectEl.onchange = () => {
-        if (selectEl.value === '__manual__') {
-          if (inputEl) {
-            inputEl.style.display = 'block';
-            inputEl.focus();
-          }
-        } else {
-          if (inputEl) {
-            inputEl.style.display = 'none';
-            inputEl.value = selectEl.value;
+        let ifaces = [];
+        if (devNode && devNode.device_id) {
+          try {
+            ifaces = await API.getDeviceInterfaces(devNode.device_id);
+          } catch (e) {
+            console.warn('Error fetching ifaces:', e);
           }
         }
+
+        selectEl.innerHTML = '';
+        const defOpt = document.createElement('option');
+        defOpt.value = '';
+        defOpt.textContent = '-- Seleccionar Puerto --';
+        selectEl.appendChild(defOpt);
+
+        if (badgeEl) badgeEl.textContent = `${ifaces.length} puertos (${devNode.name})`;
+
+        if (Array.isArray(ifaces) && ifaces.length > 0) {
+          ifaces.forEach((iface, idx) => {
+            const opt = document.createElement('option');
+            opt.value = iface.name;
+            opt.dataset.ifaceId = iface.id;
+            const speedStr = iface.type ? ` (${iface.type})` : '';
+            const connStr = iface.is_connected ? ' [Ocupado]' : '';
+            opt.textContent = `${iface.name}${speedStr}${connStr}`;
+            if (idx === 0 && !iface.is_connected) {
+              opt.selected = true;
+            }
+            selectEl.appendChild(opt);
+
+            if (chipsEl) {
+              const chip = document.createElement('button');
+              chip.type = 'button';
+              chip.className = 'badge';
+              const isFiber = (iface.type || '').includes('sfp');
+              const isConn = iface.is_connected;
+              chip.style.cssText = `font-size: 0.68rem; padding: 3px 6px; cursor: pointer; border-radius: 4px; border: 1px solid ${isConn ? 'rgba(239,68,68,0.4)' : (isFiber ? 'rgba(168,85,247,0.4)' : 'rgba(56,189,248,0.4)')}; background: ${isConn ? 'rgba(239,68,68,0.1)' : (isFiber ? 'rgba(168,85,247,0.1)' : 'rgba(56,189,248,0.1)')}; color: ${isConn ? '#f87171' : (isFiber ? '#c084fc' : '#38bdf8')};`;
+              chip.textContent = `${isFiber ? '⚡ ' : '🔌 '}${iface.name}${isConn ? ' ●' : ''}`;
+              chip.title = `${iface.name} (${iface.type || 'Port'})${isConn ? ' - Conectado' : ' - Disponible'}`;
+              chip.onclick = () => {
+                selectEl.value = iface.name;
+                if (inputEl) inputEl.style.display = 'none';
+                Array.from(chipsEl.children).forEach(c => c.style.outline = 'none');
+                chip.style.outline = '2px solid #38bdf8';
+              };
+              chipsEl.appendChild(chip);
+            }
+          });
+        }
+
+        const manualOpt = document.createElement('option');
+        manualOpt.value = '__manual__';
+        manualOpt.textContent = '✏️ Puerto Personalizado...';
+        selectEl.appendChild(manualOpt);
+
+        selectEl.onchange = () => {
+          if (selectEl.value === '__manual__') {
+            if (inputEl) {
+              inputEl.style.display = 'block';
+              inputEl.focus();
+            }
+          } else {
+            if (inputEl) {
+              inputEl.style.display = 'none';
+              inputEl.value = selectEl.value;
+            }
+          }
+        };
       };
+
+      if (isSubmap) {
+        if (subContainer) subContainer.style.display = 'block';
+        let tMapId = node.extra_data?.target_map_id;
+        if (!tMapId) {
+          if (node.device_type === 'parent_map' || node.extra_data?.is_parent_shortcut) {
+            tMapId = currentMap.parent_map_id;
+          } else if (Array.isArray(allMaps)) {
+            const clean = (node.name || '').replace('📁', '').trim().toLowerCase();
+            const matched = allMaps.find(m => m.name.toLowerCase().trim() === clean || m.id === clean);
+            if (matched) tMapId = matched.id;
+          }
+        }
+
+        if (isSource) srcTargetMapId = tMapId; else tgtTargetMapId = tMapId;
+
+        let submapNodes = [];
+        if (tMapId) {
+          try {
+            const mDetail = await API.getMapDetail(tMapId);
+            if (mDetail && Array.isArray(mDetail.nodes)) {
+              submapNodes = mDetail.nodes.filter(n => n.device_type !== 'submap' && n.device_type !== 'parent_map' && !n.extra_data?.is_parent_shortcut);
+            }
+          } catch (e) {
+            console.warn('Error cargando equipos de submapa:', e);
+          }
+        }
+
+        if (subSelect) {
+          subSelect.innerHTML = '';
+          if (submapNodes.length === 0) {
+            subSelect.innerHTML = '<option value="">(Sin equipos en este submapa)</option>';
+            if (badgeEl) badgeEl.textContent = '0 puertos';
+          } else {
+            const defOpt = document.createElement('option');
+            defOpt.value = '';
+            defOpt.textContent = `-- Seleccionar Equipo (${submapNodes.length}) --`;
+            subSelect.appendChild(defOpt);
+
+            submapNodes.forEach((sn, idx) => {
+              const opt = document.createElement('option');
+              opt.value = sn.id;
+              opt.dataset.deviceId = sn.device_id || '';
+              opt.textContent = `🖥️ ${sn.name} [${sn.ip || 'Sin IP'}] (${sn.extra_data?.model || sn.device_type || 'Dispositivo'})`;
+              if (idx === 0) opt.selected = true;
+              subSelect.appendChild(opt);
+            });
+
+            const initialDev = submapNodes[0];
+            if (isSource) chosenSrcSubmapDev = initialDev; else chosenTgtSubmapDev = initialDev;
+            renderDevicePorts(initialDev);
+
+            subSelect.onchange = () => {
+              const selectedDev = submapNodes.find(n => n.id === subSelect.value);
+              if (selectedDev) {
+                if (isSource) chosenSrcSubmapDev = selectedDev; else chosenTgtSubmapDev = selectedDev;
+                renderDevicePorts(selectedDev);
+              }
+            };
+          }
+        }
+      } else {
+        if (subContainer) subContainer.style.display = 'none';
+        renderDevicePorts(node);
+      }
     };
 
-    setupNodePorts(sourceNode, selectSrc, inputSrc, chipsSrc, badgeSrc);
-    setupNodePorts(targetNode, selectTgt, inputTgt, chipsTgt, badgeTgt);
+    setupSidePortControls(sourceNode, true, 'port-connect-src-submap-container', 'port-connect-src-submap-dev', selectSrc, inputSrc, chipsSrc, badgeSrc);
+    setupSidePortControls(targetNode, false, 'port-connect-tgt-submap-container', 'port-connect-tgt-submap-dev', selectTgt, inputTgt, chipsTgt, badgeTgt);
 
     modal.style.display = 'flex';
 
@@ -2538,7 +2721,17 @@ function promptPortConnectModal(sourceNode, targetNode) {
       const cableType = selectCable ? selectCable.value : 'cat6';
       const direction = selectDir ? selectDir.value : 'source_to_target';
       cleanUp();
-      resolve({ confirmed: true, source_interface: srcIface, target_interface: tgtIface, cable_type: cableType, direction });
+      resolve({
+        confirmed: true,
+        source_interface: srcIface,
+        target_interface: tgtIface,
+        cable_type: cableType,
+        direction,
+        src_submap_dev: chosenSrcSubmapDev,
+        tgt_submap_dev: chosenTgtSubmapDev,
+        src_target_map_id: srcTargetMapId,
+        tgt_target_map_id: tgtTargetMapId
+      });
     };
 
     btnQuick.onclick = () => {
@@ -2567,120 +2760,100 @@ async function connectSingleTargetNode(sourceNode, node) {
   let tgtIface = '';
   let cableType = 'cat6';
 
-  // ── Interconexión Inter-Mapa a través de Portal de Navegación ──
+  // Solicitar selección interactiva de puertos físicos y resolución de submapas
+  const portRes = await promptPortConnectModal(sourceNode, node);
+  if (!portRes || !portRes.confirmed) {
+    cancelLinkMode();
+    return;
+  }
+
+  srcIface = portRes.source_interface || '';
+  tgtIface = portRes.target_interface || '';
+  cableType = portRes.cable_type || 'cat6';
+  linkExtra.direction = portRes.direction || 'source_to_target';
+
+  // Si es un enlace inter-mapa (hacia o desde un submapa / mapa padre)
   if (isSourceNav || isTargetNav) {
     const navNode = isTargetNav ? node : sourceNode;
     const deviceNode = isTargetNav ? sourceNode : node;
-    
-    let targetMapId = navNode.extra_data?.target_map_id;
-    if (!targetMapId) {
-      if (navNode.device_type === 'parent_map' || navNode.extra_data?.is_parent_shortcut) {
-        targetMapId = currentMap.parent_map_id;
-      } else if (navNode.device_type === 'submap' && Array.isArray(allMaps)) {
-        const matchedMap = allMaps.find(m => m.name.toLowerCase().trim() === navNode.name.toLowerCase().trim());
-        if (matchedMap) targetMapId = matchedMap.id;
-      }
-    }
+    const chosenRemoteDev = isTargetNav ? portRes.tgt_submap_dev : portRes.src_submap_dev;
+    const targetMapId = isTargetNav ? portRes.tgt_target_map_id : portRes.src_target_map_id;
 
-    if (targetMapId) {
+    if (targetMapId && chosenRemoteDev) {
+      const pinId = 'pin-' + Date.now().toString(36);
+      const isParentNav = navNode.device_type === 'parent_map' || !!navNode.extra_data?.is_parent_shortcut;
+
+      if (!navNode.extra_data) navNode.extra_data = {};
+      if (!navNode.extra_data.pins) navNode.extra_data.pins = [];
+      navNode.extra_data.pins.push({
+        pin_id: pinId,
+        remote_node_id: chosenRemoteDev.id,
+        remote_node_name: chosenRemoteDev.name,
+        remote_map_id: targetMapId,
+        label: isParentNav ? `⬅ ${chosenRemoteDev.name}` : `➔ ${chosenRemoteDev.name}`
+      });
+      await API.updateNode(navNode.id, { extra_data: navNode.extra_data });
+
       try {
         const targetMapDetail = await API.getMapDetail(targetMapId);
-        if (targetMapDetail && targetMapDetail.nodes && targetMapDetail.nodes.length > 0) {
-          const remoteCandidates = targetMapDetail.nodes.filter(n => n.device_type !== 'parent_map' && !n.extra_data?.is_parent_shortcut && n.device_type !== 'submap');
-          
-          const remoteNode = await promptIntermapLink(sourceNode, node, targetMapId, remoteCandidates, isSourceNav);
-          if (!remoteNode) {
-            cancelLinkMode();
-            return;
-          }
-
-          if (remoteNode.is_simple) {
-            linkExtra = {
-              is_visual_only: true,
-              is_simple_link: true,
-              sync_zabbix: false,
-              direction: 'source_to_target'
-            };
-          } else {
-            const pinId = 'pin-' + Date.now().toString(36);
-            const isParentNav = navNode.device_type === 'parent_map' || !!navNode.extra_data?.is_parent_shortcut;
-
-            if (!navNode.extra_data) navNode.extra_data = {};
-            if (!navNode.extra_data.pins) navNode.extra_data.pins = [];
-            navNode.extra_data.pins.push({
+        if (targetMapDetail && targetMapDetail.nodes) {
+          const complementaryNav = targetMapDetail.nodes.find(n => (isParentNav ? n.device_type === 'submap' : (n.device_type === 'parent_map' || n.extra_data?.is_parent_shortcut)));
+          if (complementaryNav) {
+            if (!complementaryNav.extra_data) complementaryNav.extra_data = {};
+            if (!complementaryNav.extra_data.pins) complementaryNav.extra_data.pins = [];
+            complementaryNav.extra_data.pins.push({
               pin_id: pinId,
-              remote_node_id: remoteNode.id,
-              remote_node_name: remoteNode.name,
-              remote_map_id: targetMapId,
-              label: isParentNav ? `⬅ ${remoteNode.name}` : `➔ ${remoteNode.name}`
+              remote_node_id: deviceNode.id,
+              remote_node_name: deviceNode.name,
+              remote_map_id: currentMap.id,
+              label: isParentNav ? `➔ ${deviceNode.name}` : `⬅ ${deviceNode.name}`
             });
-            await API.updateNode(navNode.id, { extra_data: navNode.extra_data });
+            await API.updateNode(complementaryNav.id, { extra_data: complementaryNav.extra_data });
 
-            const complementaryNav = targetMapDetail.nodes.find(n => (isParentNav ? n.device_type === 'submap' : (n.device_type === 'parent_map' || n.extra_data?.is_parent_shortcut)));
-            if (complementaryNav) {
-              if (!complementaryNav.extra_data) complementaryNav.extra_data = {};
-              if (!complementaryNav.extra_data.pins) complementaryNav.extra_data.pins = [];
-              complementaryNav.extra_data.pins.push({
+            await API.createLink({
+              map_id: targetMapId,
+              source_node_id: isParentNav ? chosenRemoteDev.id : complementaryNav.id,
+              target_node_id: isParentNav ? complementaryNav.id : chosenRemoteDev.id,
+              source_interface: isParentNav ? tgtIface : srcIface,
+              target_interface: isParentNav ? srcIface : tgtIface,
+              cable_type: cableType,
+              status: 'ok',
+              extra_data: {
+                is_intermap: true,
                 pin_id: pinId,
+                local_node_id: chosenRemoteDev.id,
+                local_node_name: chosenRemoteDev.name,
                 remote_node_id: deviceNode.id,
                 remote_node_name: deviceNode.name,
                 remote_map_id: currentMap.id,
-                label: isParentNav ? `➔ ${deviceNode.name}` : `⬅ ${deviceNode.name}`
-              });
-              await API.updateNode(complementaryNav.id, { extra_data: complementaryNav.extra_data });
-
-              try {
-                await API.createLink({
-                  map_id: targetMapId,
-                  source_node_id: isParentNav ? remoteNode.id : complementaryNav.id,
-                  target_node_id: isParentNav ? complementaryNav.id : remoteNode.id,
-                  status: 'ok',
-                  extra_data: {
-                    is_intermap: true,
-                    pin_id: pinId,
-                    local_node_id: remoteNode.id,
-                    local_node_name: remoteNode.name,
-                    remote_node_id: deviceNode.id,
-                    remote_node_name: deviceNode.name,
-                    remote_map_id: currentMap.id
-                  }
-                });
-              } catch (cErr) {
-                console.warn('Enlace complementario ya existía o error:', cErr);
+                target_submap_device_id: deviceNode.device_id,
+                target_submap_device_name: deviceNode.name
               }
-            }
-
-            linkExtra = {
-              is_intermap: true,
-              pin_id: pinId,
-              local_node_id: deviceNode.id,
-              local_node_name: deviceNode.name,
-              remote_node_id: remoteNode.id,
-              remote_node_name: remoteNode.name,
-              remote_map_id: targetMapId
-            };
-
-            const grpNav = nodeGroups.get(navNode.id);
-            if (grpNav) grpNav.destroy();
-            renderNode(navNode);
-            nodesLayer.batchDraw();
+            });
           }
         }
-      } catch (mErr) {
-        console.error('Error procesando enlace inter-mapa:', mErr);
+      } catch (cErr) {
+        console.warn('Error sincronizando nodo complementario en submapa:', cErr);
       }
+
+      linkExtra = {
+        is_intermap: true,
+        pin_id: pinId,
+        local_node_id: deviceNode.id,
+        local_node_name: deviceNode.name,
+        remote_node_id: chosenRemoteDev.id,
+        remote_node_name: chosenRemoteDev.name,
+        remote_map_id: targetMapId,
+        target_submap_device_id: chosenRemoteDev.device_id,
+        target_submap_device_name: chosenRemoteDev.name,
+        direction: portRes.direction || 'source_to_target'
+      };
+
+      const grpNav = nodeGroups.get(navNode.id);
+      if (grpNav) grpNav.destroy();
+      renderNode(navNode);
+      nodesLayer.batchDraw();
     }
-  } else if (sourceNode.device_id || node.device_id) {
-    // Si al menos uno de los nodos es un equipo gestionado en NetBox, solicitar selección visual de puertos
-    const portRes = await promptPortConnectModal(sourceNode, node);
-    if (!portRes || !portRes.confirmed) {
-      cancelLinkMode();
-      return;
-    }
-    srcIface = portRes.source_interface || '';
-    tgtIface = portRes.target_interface || '';
-    cableType = portRes.cable_type || 'cat6';
-    linkExtra.direction = portRes.direction || 'source_to_target';
   }
 
   try {
@@ -5808,27 +5981,6 @@ window.addEventListener('DOMContentLoaded', async () => {
     btnGrid.classList.toggle('btn-active', snapToGrid);
     btnGrid.querySelector('span').textContent = snapToGrid ? 'Imantar (20px)' : 'Libre';
   });
-
-  // Botón Auto-Diseño PCB (Terminales y Buses)
-  const btnTreeLayout = document.getElementById('btn-auto-layout-tree');
-  if (btnTreeLayout) {
-    btnTreeLayout.addEventListener('click', async () => {
-      if (!currentMap || !currentMap.nodes || currentMap.nodes.length === 0) {
-        alert('No hay terminales en el mapa actual para ordenar.');
-        return;
-      }
-      btnTreeLayout.disabled = true;
-      btnTreeLayout.innerHTML = '<i class="fas fa-spinner fa-spin"></i> <span>Diseñando PCB...</span>';
-      try {
-        await autoLayoutMapAsPCB();
-      } catch (err) {
-        console.error('Error organizando diseño PCB:', err);
-      } finally {
-        btnTreeLayout.disabled = false;
-        btnTreeLayout.innerHTML = '<i class="fas fa-microchip"></i> <span>Diseño PCB</span>';
-      }
-    });
-  }
 
   // Botón Subir Nivel (Level Up)
   document.getElementById('btn-level-up').addEventListener('click', () => {

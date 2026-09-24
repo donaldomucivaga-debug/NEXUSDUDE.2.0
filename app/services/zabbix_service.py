@@ -1814,9 +1814,25 @@ class ZabbixService:
         src_node_id = link["source_node_id"]
         tgt_node_id = link["target_node_id"]
 
+        extra = json.loads(link.get("extra_data") or "{}") if isinstance(link.get("extra_data"), str) else (link.get("extra_data") or {})
+
+        # Si el origen es un submapa o portal, resolver el nodo interno vinculado
+        actual_src_id = src_node_id
+        if link.get("src_type") in ("submap", "parent_map") or not link.get("src_dev_id"):
+            remote_src = extra.get("source_submap_node_id") or (extra.get("remote_node_id") if link.get("src_type") == "submap" else None)
+            if remote_src:
+                actual_src_id = remote_src
+
+        # Si el destino es un submapa o portal, resolver el nodo interno vinculado (ej. CPE en Rucio)
+        actual_tgt_id = tgt_node_id
+        if link.get("tgt_type") in ("submap", "parent_map") or not link.get("tgt_dev_id"):
+            remote_tgt = extra.get("target_submap_node_id") or extra.get("remote_node_id")
+            if remote_tgt:
+                actual_tgt_id = remote_tgt
+
         # Obtener interfaces de Zabbix para origen y destino
-        src_ifaces = await self.get_node_zabbix_interfaces(src_node_id)
-        tgt_ifaces = await self.get_node_zabbix_interfaces(tgt_node_id)
+        src_ifaces = await self.get_node_zabbix_interfaces(actual_src_id)
+        tgt_ifaces = await self.get_node_zabbix_interfaces(actual_tgt_id)
 
         # Encontrar telemetría coincidente para el puerto asignado
         src_match = None
