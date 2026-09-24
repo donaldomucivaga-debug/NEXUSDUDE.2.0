@@ -500,183 +500,221 @@ body.sidebar-resizing-active * {
   gap: 6px;
 }
 
-/* --- File Manager Tree View for Maps (Explorador de Archivos) --- */
+/* --- Maps Tree & Hierarchical Cards (Gestor de Archivos Desplegable) --- */
+.maps-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.maps-actions-row {
+  display: flex;
+  gap: 6px;
+}
+
 .maps-tree-container {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 8px;
   overflow-y: auto;
-  overflow-x: hidden;
-  max-height: calc(100vh - 235px);
-  padding-right: 4px;
+  max-height: calc(100vh - 240px);
+  padding-right: 2px;
 }
 
-.tree-node-wrapper {
+.map-node-wrapper {
   display: flex;
   flex-direction: column;
   position: relative;
 }
 
-.tree-row {
+.map-item-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 10px 12px;
   display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: all 0.2s ease;
+  position: relative;
+}
+
+.map-item-card:hover {
+  border-color: var(--accent);
+  background-color: rgba(14, 165, 233, 0.04);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+}
+
+.map-item-card.is-submap {
+  border-left: 3px solid var(--accent-purple);
+  background: rgba(168, 85, 247, 0.03);
+}
+
+.map-item-card.active {
+  border-color: var(--accent) !important;
+  background-color: rgba(14, 165, 233, 0.12) !important;
+  box-shadow: 0 0 14px rgba(14, 165, 233, 0.25);
+}
+
+.map-card-head {
+  display: flex;
+  justify-content: space-between;
   align-items: center;
   gap: 6px;
-  padding: 5px 8px;
-  border-radius: 6px;
+}
+
+.map-card-title-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  overflow: hidden;
   cursor: pointer;
-  user-select: none;
-  font-size: 0.8rem;
-  color: #cbd5e1;
-  background: transparent;
-  border: 1px solid transparent;
-  transition: all 0.15s ease;
-  min-height: 30px;
 }
 
-.tree-row:hover {
+.map-toggle-caret {
   background: rgba(255, 255, 255, 0.06);
-  color: #ffffff;
-  border-color: rgba(255, 255, 255, 0.08);
-}
-
-.tree-row.active {
-  background: rgba(14, 165, 233, 0.18) !important;
-  color: #ffffff !important;
-  border-color: rgba(14, 165, 233, 0.45) !important;
-  font-weight: 700;
-  box-shadow: 0 0 10px rgba(14, 165, 233, 0.18);
-}
-
-.tree-row.active .tree-icon {
-  color: #38bdf8 !important;
-}
-
-.tree-caret {
-  width: 18px;
-  height: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: #38bdf8;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
   display: flex;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
-  color: var(--text-muted);
   font-size: 0.72rem;
-  border-radius: 4px;
-  transition: transform 0.15s ease, color 0.15s ease;
   cursor: pointer;
-}
-
-.tree-caret:hover {
-  color: #ffffff;
-  background: rgba(255, 255, 255, 0.12);
-}
-
-.tree-caret.empty {
-  visibility: hidden;
-  pointer-events: none;
-}
-
-.tree-icon {
-  font-size: 0.92rem;
   flex-shrink: 0;
-  color: #fbbf24; /* Folder amber color */
-  transition: color 0.15s ease;
+  transition: all 0.15s ease;
 }
 
-.tree-icon.root {
-  color: #38bdf8;
+.map-toggle-caret:hover {
+  background: #0ea5e9;
+  color: #ffffff;
+  border-color: #0ea5e9;
+  transform: scale(1.08);
 }
 
-.tree-icon.submap {
-  color: #c084fc;
+.map-card-icon {
+  font-size: 1rem;
+  color: var(--accent);
+  flex-shrink: 0;
 }
 
-.tree-icon.open {
-  color: #f59e0b;
+.map-card-icon.submap {
+  color: var(--accent-purple);
 }
 
-.tree-label {
-  flex: 1;
+.map-card-icon.open {
+  color: #fbbf24;
+}
+
+.map-card-name {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: #ffffff;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  letter-spacing: 0.2px;
 }
 
-.tree-badge {
-  font-size: 0.68rem;
+.map-child-count-pill {
+  font-size: 0.65rem;
+  background: rgba(168, 85, 247, 0.18);
+  color: #c084fc;
+  border: 1px solid rgba(168, 85, 247, 0.35);
   padding: 1px 6px;
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--text-muted);
-  flex-shrink: 0;
-  font-family: monospace;
   font-weight: 600;
-}
-
-.tree-row.active .tree-badge {
-  background: rgba(14, 165, 233, 0.25);
-  color: #7dd3fc;
-}
-
-.tree-actions {
-  display: none;
-  align-items: center;
-  gap: 3px;
-  margin-left: auto;
+  margin-left: 4px;
   flex-shrink: 0;
 }
 
-.tree-row:hover .tree-actions {
-  display: flex;
+.map-active-badge {
+  font-size: 0.65rem;
+  font-weight: 800;
+  background: rgba(16, 185, 129, 0.2);
+  color: var(--success);
+  border: 1px solid rgba(16, 185, 129, 0.4);
+  padding: 2px 6px;
+  border-radius: 10px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  flex-shrink: 0;
 }
 
-.tree-action-btn {
-  background: rgba(15, 23, 42, 0.85);
-  border: 1px solid rgba(255, 255, 255, 0.14);
+.map-card-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.map-card-stats {
+  display: flex;
+  gap: 8px;
+}
+
+.map-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.map-action-btn {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
   color: var(--text-secondary);
   border-radius: 4px;
-  width: 22px;
-  height: 22px;
+  width: 26px;
+  height: 26px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 0.68rem;
+  font-size: 0.75rem;
   cursor: pointer;
-  transition: all 0.12s ease;
+  transition: all 0.15s ease;
 }
 
-.tree-action-btn:hover {
-  background: #38bdf8;
-  color: #0f172a;
-  border-color: #38bdf8;
-}
-
-.tree-action-btn.btn-tree-delete:hover {
-  background: #ef4444;
+.map-action-btn:hover {
   color: #ffffff;
-  border-color: #ef4444;
+  background: #334155;
+  border-color: #475569;
 }
 
-.tree-action-btn.btn-tree-submap:hover {
-  background: #a855f7;
+.map-action-btn.open-btn:hover {
+  background: var(--accent);
+  border-color: var(--accent);
   color: #ffffff;
-  border-color: #a855f7;
 }
 
-.tree-action-btn.btn-tree-populate:hover {
+.map-action-btn.add-sub-btn:hover {
+  background: var(--accent-purple);
+  border-color: var(--accent-purple);
+  color: #ffffff;
+}
+
+.map-action-btn.populate-btn:hover {
   background: #10b981;
-  color: #ffffff;
   border-color: #10b981;
+  color: #ffffff;
 }
 
-.tree-children {
-  margin-left: 18px;
-  padding-left: 6px;
-  border-left: 1px solid rgba(255, 255, 255, 0.1);
+.map-action-btn.delete-btn:hover {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #ffffff;
+}
+
+.map-children-container {
+  margin-left: 14px;
+  padding-left: 8px;
+  border-left: 2px solid rgba(168, 85, 247, 0.3);
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  margin-top: 2px;
+  gap: 6px;
+  margin-top: 6px;
 }
 
 /* Property Inspector / Device Info Viewer */
