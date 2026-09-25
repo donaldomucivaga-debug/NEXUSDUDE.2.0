@@ -182,3 +182,73 @@ async def get_olt_gpon_ports(olt_ip_or_name: str, user: Dict[str, Any] = Depends
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error listando puertos GPON de la OLT: {str(e)}")
 
+@router.get("/olt/diagnostic-summary")
+async def get_olt_diagnostic_summary(user: Dict[str, Any] = Depends(get_current_user)):
+    """
+    Obtiene el resumen consolidado de todas las OLTs registradas para el Centro de Diagnóstico OLT.
+    """
+    try:
+        summary = await zabbix_service.get_olt_diagnostic_summary()
+        return summary
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error obteniendo resumen de OLTs: {str(e)}")
+
+@router.get("/olt/{olt_ip_or_name}/port/{port_index}/onts-detailed")
+async def get_olt_port_onts_detailed(
+    olt_ip_or_name: str,
+    port_index: str,
+    typical_threshold: float = -27.0,
+    community: Optional[str] = Query(None),
+    user: Dict[str, Any] = Depends(get_current_user)
+):
+    """
+    Diagnóstico profundo de ONTs por puerto GPON:
+    Ejecuta snmpbulkwalk y cruza en tiempo real con i-WISP por serial para inyectar N° Cliente y Plan.
+    Soporta especificar una comunidad SNMP personalizada para OLTs con credenciales específicas.
+    """
+    try:
+        data = await zabbix_service.get_olt_port_onts_detailed(
+            olt_ip_or_name=olt_ip_or_name,
+            port_index=port_index,
+            typical_threshold=typical_threshold,
+            community=community
+        )
+        return data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error en diagnóstico detallado de ONTs: {str(e)}")
+
+@router.post("/olt/{olt_ip}/community")
+async def update_olt_community(
+    olt_ip: str,
+    payload: Dict[str, Any] = Body(...),
+    user: Dict[str, Any] = Depends(get_current_user)
+):
+    """
+    Guarda y/o prueba la comunidad SNMP para una OLT específica.
+    """
+    community = payload.get("community", "").strip()
+    if not community:
+        raise HTTPException(status_code=400, detail="Debe proporcionar una comunidad SNMP válida")
+
+    vendor = payload.get("vendor", "Huawei")
+    notes = payload.get("notes", "Configurado manualmente")
+    force = bool(payload.get("force", False))
+
+    ok, sysname = await zabbix_service.test_olt_community(olt_ip, community)
+    if ok or force:
+        await zabbix_service.save_olt_community(olt_ip, community, vendor, notes)
+        return {
+            "success": True,
+            "message": f"Conexión exitosa a {sysname}. Credencial guardada correctamente.",
+            "sysname": sysname,
+            "community": community
+        }
+    else:
+        return {
+            "success": False,
+            "message": f"Fallo al conectar con la comunidad '{community}': {sysname}",
+            "error": sysname,
+            "community": community
+        }
+
+

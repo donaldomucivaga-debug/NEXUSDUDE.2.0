@@ -6,6 +6,7 @@ from app.api.inventory_routes import router as inventory_router
 from app.api.zabbix_routes import router as zabbix_router
 from app.api.webhook_routes import router as webhook_router
 from app.api.rbac_routes import router as rbac_router
+from app.api.config_routes import router as config_router
 
 api_router = APIRouter(prefix="/api")
 api_router.include_router(health_router)
@@ -15,3 +16,4 @@ api_router.include_router(inventory_router)
 api_router.include_router(zabbix_router)
 api_router.include_router(webhook_router)
 api_router.include_router(rbac_router)
+api_router.include_router(config_router)

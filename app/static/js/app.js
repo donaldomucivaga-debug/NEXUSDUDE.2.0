@@ -3849,6 +3849,9 @@ function _selectFtthBranchNode(node) {
         <button id="btn-edit-gpon-branch" class="btn btn-primary" style="width:100%;justify-content:center;font-size:0.76rem;padding:7px;">
           <i class="fas fa-edit"></i> Configurar Brazo FTTH
         </button>
+        <button id="btn-open-diag-from-branch" class="btn" style="width:100%;justify-content:center;font-size:0.76rem;padding:7px;margin-top:6px;background:rgba(14,165,233,0.15);border-color:#0284c7;color:#38bdf8;">
+          <i class="fas fa-network-wired"></i> Abrir Diagnóstico OLT
+        </button>
       </div>`;
     const propertiesPanel = document.getElementById('node-properties-panel');
     if (propertiesPanel) propertiesPanel.appendChild(gponPanel);
@@ -3942,6 +3945,15 @@ function _selectFtthBranchNode(node) {
   const btnEdit = document.getElementById('btn-edit-gpon-branch');
   if (btnEdit) {
     btnEdit.onclick = () => openFtthBranchEditorModal(node);
+  }
+
+  const btnOpenDiag = document.getElementById('btn-open-diag-from-branch');
+  if (btnOpenDiag) {
+    btnOpenDiag.onclick = () => {
+      if (typeof window.openOltDiagnosticsModal === 'function') {
+        window.openOltDiagnosticsModal(extra.olt_ip, extra.gpon_index);
+      }
+    };
   }
 
   document.getElementById('prop-node-coords').textContent = `X: ${Math.round(node.x)}, Y: ${Math.round(node.y)}`;
@@ -7945,6 +7957,711 @@ window.addEventListener('DOMContentLoaded', async () => {
       }
     }
   });
+
+  // ─── 22. Menú Desplegable de Sincronización en Toolbar ─────────────────────
+  const btnToggleSyncMenu = document.getElementById('btn-toggle-sync-menu');
+  const dropdownSyncContainer = document.getElementById('dropdown-sync-container');
+
+  if (btnToggleSyncMenu && dropdownSyncContainer) {
+    btnToggleSyncMenu.addEventListener('click', (e) => {
+      e.stopPropagation();
+      dropdownSyncContainer.classList.toggle('open');
+    });
+
+    // Cerrar el menú desplegable al hacer clic en cualquier opción interna
+    const dropdownItems = dropdownSyncContainer.querySelectorAll('.dropdown-item');
+    dropdownItems.forEach(item => {
+      item.addEventListener('click', () => {
+        dropdownSyncContainer.classList.remove('open');
+      });
+    });
+
+    // Cerrar si se hace clic fuera del menú
+    document.addEventListener('click', (e) => {
+      if (!dropdownSyncContainer.contains(e.target)) {
+        dropdownSyncContainer.classList.remove('open');
+      }
+    });
+  }
+
+  // ─── 23. Modal de Configuración e Integración i-WISP ───────────────────────
+  const modalSettings = document.getElementById('modal-settings');
+  const btnOpenSettings = document.getElementById('btn-open-settings');
+  const btnCloseSettingsModal = document.getElementById('btn-close-settings-modal');
+  const btnCancelSettings = document.getElementById('btn-cancel-settings');
+  const btnSaveSettings = document.getElementById('btn-save-settings');
+  const btnTestIwispConn = document.getElementById('btn-test-iwisp-conn');
+  const btnSyncIwispNow = document.getElementById('btn-sync-iwisp-now');
+  const btnSyncIwispMenu = document.getElementById('btn-sync-iwisp-menu');
+  const btnToggleKeyVis = document.getElementById('btn-toggle-key-visibility');
+  const inputIwispKey = document.getElementById('input-iwisp-api-key');
+  const inputIwispUrl = document.getElementById('input-iwisp-api-url');
+  const badgeIwispStatus = document.getElementById('badge-iwisp-sync-status');
+  const labelIwispClients = document.getElementById('label-iwisp-cached-clients');
+  const labelIwispOnus = document.getElementById('label-iwisp-cached-onus');
+  const labelIwispLastSync = document.getElementById('label-iwisp-last-sync');
+  const alertIwispMsg = document.getElementById('iwisp-msg-alert');
+
+  function showSettingsAlert(msg, type = 'info') {
+    if (!alertIwispMsg) return;
+    alertIwispMsg.style.display = 'block';
+    alertIwispMsg.textContent = msg;
+    if (type === 'success') {
+      alertIwispMsg.style.background = 'rgba(16, 185, 129, 0.15)';
+      alertIwispMsg.style.color = '#10b981';
+      alertIwispMsg.style.border = '1px solid rgba(16, 185, 129, 0.3)';
+    } else if (type === 'error') {
+      alertIwispMsg.style.background = 'rgba(239, 68, 68, 0.15)';
+      alertIwispMsg.style.color = '#ef4444';
+      alertIwispMsg.style.border = '1px solid rgba(239, 68, 68, 0.3)';
+    } else {
+      alertIwispMsg.style.background = 'rgba(14, 165, 233, 0.15)';
+      alertIwispMsg.style.color = '#38bdf8';
+      alertIwispMsg.style.border = '1px solid rgba(14, 165, 233, 0.3)';
+    }
+  }
+
+  async function loadSettingsData() {
+    if (alertIwispMsg) alertIwispMsg.style.display = 'none';
+    try {
+      const [cfg, cache] = await Promise.all([
+        API.getIWispConfig().catch(e => { console.warn('Error getIWispConfig:', e); return null; }),
+        API.getIWispCacheStatus().catch(e => { console.warn('Error getIWispCacheStatus:', e); return null; })
+      ]);
+
+      if (cfg) {
+        if (inputIwispKey) {
+          inputIwispKey.value = cfg.api_key || '';
+          if (cfg.is_configured && !cfg.api_key) {
+            inputIwispKey.placeholder = `Configurada (${cfg.api_key_masked || 'activa'})`;
+          }
+        }
+        if (inputIwispUrl && cfg.api_url) {
+          inputIwispUrl.value = cfg.api_url;
+        }
+        if (badgeIwispStatus) {
+          if (cfg.is_configured) {
+            badgeIwispStatus.textContent = 'API Key Configurada';
+            badgeIwispStatus.style.color = '#10b981';
+            badgeIwispStatus.style.background = 'rgba(16, 185, 129, 0.15)';
+            badgeIwispStatus.style.borderColor = 'rgba(16, 185, 129, 0.3)';
+          } else {
+            badgeIwispStatus.textContent = 'Sin Configurar';
+            badgeIwispStatus.style.color = '#f59e0b';
+            badgeIwispStatus.style.background = 'rgba(245, 158, 11, 0.15)';
+            badgeIwispStatus.style.borderColor = 'rgba(245, 158, 11, 0.3)';
+          }
+        }
+      }
+
+      if (cache) {
+        if (labelIwispClients) labelIwispClients.textContent = (cache.total_clients || 0).toLocaleString();
+        if (labelIwispOnus) labelIwispOnus.textContent = (cache.total_onus || 0).toLocaleString();
+        if (labelIwispLastSync) {
+          if (cache.last_update) {
+            const d = new Date(cache.last_update);
+            labelIwispLastSync.textContent = d.toLocaleString();
+          } else {
+            labelIwispLastSync.textContent = 'Nunca sincronizado';
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Error cargando configuración:', err);
+    }
+  }
+
+  if (btnToggleKeyVis && inputIwispKey) {
+    btnToggleKeyVis.addEventListener('click', () => {
+      const isPass = inputIwispKey.type === 'password';
+      inputIwispKey.type = isPass ? 'text' : 'password';
+      const icon = btnToggleKeyVis.querySelector('i');
+      if (icon) {
+        icon.className = isPass ? 'fas fa-eye-slash' : 'fas fa-eye';
+      }
+    });
+  }
+
+  if (btnOpenSettings && modalSettings) {
+    btnOpenSettings.addEventListener('click', () => {
+      modalSettings.style.display = 'flex';
+      loadSettingsData();
+    });
+  }
+
+  if (btnCloseSettingsModal && modalSettings) {
+    btnCloseSettingsModal.addEventListener('click', () => {
+      modalSettings.style.display = 'none';
+    });
+  }
+
+  if (btnCancelSettings && modalSettings) {
+    btnCancelSettings.addEventListener('click', () => {
+      modalSettings.style.display = 'none';
+    });
+  }
+
+  if (btnTestIwispConn) {
+    btnTestIwispConn.addEventListener('click', async () => {
+      const key = inputIwispKey ? inputIwispKey.value.trim() : '';
+      const url = inputIwispUrl ? inputIwispUrl.value.trim() : '';
+      btnTestIwispConn.disabled = true;
+      btnTestIwispConn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Probando...';
+      try {
+        const res = await API.testIWispConnection({ api_key: key, api_url: url });
+        showSettingsAlert('✅ ' + (res.message || 'Conexión exitosa a i-WISP Manager.'), 'success');
+      } catch (err) {
+        showSettingsAlert('❌ Falló la prueba: ' + (err.message || 'Error de conexión'), 'error');
+      } finally {
+        btnTestIwispConn.disabled = false;
+        btnTestIwispConn.innerHTML = '<i class="fas fa-vial"></i> Probar Conexión';
+      }
+    });
+  }
+
+  if (btnSaveSettings) {
+    btnSaveSettings.addEventListener('click', async () => {
+      const key = inputIwispKey ? inputIwispKey.value.trim() : '';
+      const url = inputIwispUrl ? inputIwispUrl.value.trim() : '';
+      btnSaveSettings.disabled = true;
+      btnSaveSettings.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Guardando...';
+      try {
+        await API.saveIWispConfig({ api_key: key, api_url: url });
+        showSettingsAlert('✅ Configuración guardada correctamente.', 'success');
+        loadSettingsData();
+      } catch (err) {
+        showSettingsAlert('❌ Error al guardar configuración: ' + err.message, 'error');
+      } finally {
+        btnSaveSettings.disabled = false;
+        btnSaveSettings.innerHTML = '<i class="fas fa-save"></i> Guardar';
+      }
+    });
+  }
+
+  const triggerIwispSync = async (btn) => {
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Sincronizando...';
+    }
+    try {
+      const res = await API.syncIWispClients();
+      if (btn) {
+        showSettingsAlert(`✅ Sincronización finalizada: ${res.total_clients || 0} clientes y ${res.total_onus || 0} ONTs guardadas en caché local.`, 'success');
+      } else {
+        alert(`Sincronización i-WISP finalizada: ${res.total_clients || 0} clientes y ${res.total_onus || 0} ONTs.`);
+      }
+      loadSettingsData();
+    } catch (err) {
+      const msg = 'Error en sincronización i-WISP: ' + err.message;
+      if (btn) showSettingsAlert('❌ ' + msg, 'error');
+      else alert(msg);
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-sync-alt"></i> Sincronizar Clientes';
+      }
+    }
+  };
+
+  if (btnSyncIwispNow) {
+    btnSyncIwispNow.addEventListener('click', () => triggerIwispSync(btnSyncIwispNow));
+  }
+
+  if (btnSyncIwispMenu) {
+    btnSyncIwispMenu.addEventListener('click', () => {
+      if (modalSettings) modalSettings.style.display = 'flex';
+      loadSettingsData();
+      triggerIwispSync(btnSyncIwispNow);
+    });
+  }
+
+  // ─── 24. Centro de Diagnóstico Profundo OLT & Clientes FTTH ────────────────
+  const modalOltDiag = document.getElementById('modal-olt-diagnostics');
+  const btnOpenOltDiag = document.getElementById('btn-open-olt-diagnostics');
+  const btnCloseOltDiag = document.getElementById('btn-close-olt-diagnostics');
+  const btnRefreshDiagPort = document.getElementById('btn-refresh-diagnostic-port');
+  const selectDiagOlt = document.getElementById('select-diagnostic-olt');
+  const diagPortsScroll = document.getElementById('diag-ports-scroll-container');
+  const inputSearchOnts = document.getElementById('input-search-onts');
+  const diagOntsTbody = document.getElementById('diag-onts-tbody');
+
+  let oltDiagSummaryList = [];
+  let currentDiagOlt = null;
+  let currentDiagPorts = [];
+  let currentDiagPort = null;
+  let currentDiagOnts = [];
+  let currentDiagFilter = 'all';
+  let currentDiagSearch = '';
+
+  function renderDiagKpis(data) {
+    const kpiTotal = document.getElementById('diag-kpi-total');
+    const kpiOnline = document.getElementById('diag-kpi-online');
+    const kpiOptimal = document.getElementById('diag-kpi-optimal');
+    const kpiAtypical = document.getElementById('diag-kpi-atypical');
+    const kpiDyingGasp = document.getElementById('diag-kpi-dying-gasp');
+    const kpiLosi = document.getElementById('diag-kpi-losi');
+    const kpiIwisp = document.getElementById('diag-kpi-iwisp');
+
+    const countAll = document.getElementById('count-all');
+    const countAtypical = document.getElementById('count-atypical');
+    const countDyingGasp = document.getElementById('count-dying-gasp');
+    const countLosi = document.getElementById('count-losi');
+
+    if (!data) {
+      if (kpiTotal) kpiTotal.textContent = '0';
+      if (kpiOnline) kpiOnline.textContent = '0';
+      if (kpiOptimal) kpiOptimal.textContent = '0';
+      if (kpiAtypical) kpiAtypical.textContent = '0';
+      if (kpiDyingGasp) kpiDyingGasp.textContent = '0';
+      if (kpiLosi) kpiLosi.textContent = '0';
+      if (kpiIwisp) kpiIwisp.textContent = '0';
+
+      if (countAll) countAll.textContent = '0';
+      if (countAtypical) countAtypical.textContent = '0';
+      if (countDyingGasp) countDyingGasp.textContent = '0';
+      if (countLosi) countLosi.textContent = '0';
+      return;
+    }
+
+    if (kpiTotal) kpiTotal.textContent = data.total_onts || 0;
+    if (kpiOnline) kpiOnline.textContent = data.online_count || 0;
+    if (kpiOptimal) kpiOptimal.textContent = data.optimal_count || 0;
+    if (kpiAtypical) kpiAtypical.textContent = data.atypical_count || 0;
+    if (kpiDyingGasp) kpiDyingGasp.textContent = data.dying_gasp_count || 0;
+    if (kpiLosi) kpiLosi.textContent = data.losi_count || 0;
+    if (kpiIwisp) kpiIwisp.textContent = data.iwisp_matched_count || 0;
+
+    if (countAll) countAll.textContent = data.total_onts || 0;
+    if (countAtypical) countAtypical.textContent = data.atypical_count || 0;
+    if (countDyingGasp) countDyingGasp.textContent = data.dying_gasp_count || 0;
+    if (countLosi) countLosi.textContent = data.losi_count || 0;
+  }
+
+  function renderDiagOntsTable() {
+    if (!diagOntsTbody) return;
+
+    if (!currentDiagOnts || currentDiagOnts.length === 0) {
+      diagOntsTbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 30px;">
+        No hay ONTs registradas en este puerto GPON.
+      </td></tr>`;
+      return;
+    }
+
+    const search = (currentDiagSearch || '').trim().toLowerCase();
+
+    const filtered = currentDiagOnts.filter(ont => {
+      // 1. Filtro rápido por estado / causa
+      if (currentDiagFilter === 'atypical' && !ont.is_atypical) return false;
+      if (currentDiagFilter === 'dying-gasp') {
+        const isDg = ont.down_cause_code === 1 || (ont.down_cause || '').toLowerCase().includes('dying');
+        if (!isDg) return false;
+      }
+      if (currentDiagFilter === 'losi') {
+        const isLosi = ont.down_cause_code === 2 || (ont.down_cause || '').toLowerCase().includes('losi');
+        if (!isLosi) return false;
+      }
+      if (currentDiagFilter === 'offline' && ont.status !== 'down' && !ont.is_offline) return false;
+
+      // 2. Filtro por búsqueda de texto
+      if (search) {
+        const textTarget = [
+          ont.client_name || '',
+          ont.client_id || '',
+          ont.serial || '',
+          ont.package_name || '',
+          ont.down_cause || '',
+          String(ont.ont_id || '')
+        ].join(' ').toLowerCase();
+
+        if (!textTarget.includes(search)) return false;
+      }
+
+      return true;
+    });
+
+    if (filtered.length === 0) {
+      diagOntsTbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 30px;">
+        No se encontraron ONTs que coincidan con los filtros aplicados.
+      </td></tr>`;
+      return;
+    }
+
+    diagOntsTbody.innerHTML = filtered.map(ont => {
+      // Potencia óptica Rx
+      let rxPowerHtml = '<span style="color: var(--text-muted); font-size: 0.78rem;">--</span>';
+      if (ont.rx_power_dbm !== null && ont.rx_power_dbm !== undefined) {
+        const p = ont.rx_power_dbm;
+        let badgeClass = 'badge-quality-optimal';
+        if (p <= -27.0) {
+          badgeClass = 'badge-quality-critical';
+        } else if (p <= -24.0) {
+          badgeClass = 'badge-quality-acceptable';
+        }
+        rxPowerHtml = `<span class="${badgeClass}">${p.toFixed(2)} dBm</span>`;
+      }
+
+      // Estado / Causa Raíz
+      let statusHtml = '';
+      if (ont.status === 'online') {
+        if (ont.is_atypical) {
+          statusHtml = '<span class="band-tag" style="background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3);">🟢 Online Atenuado</span>';
+        } else {
+          statusHtml = '<span class="band-tag" style="background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3);">🟢 Online Óptimo</span>';
+        }
+      } else {
+        const isDg = ont.down_cause_code === 1 || (ont.down_cause || '').toLowerCase().includes('dying');
+        const isLosi = ont.down_cause_code === 2 || (ont.down_cause || '').toLowerCase().includes('losi');
+        if (isDg) {
+          statusHtml = `<span class="badge-dying-gasp" title="${ont.down_cause || ''}"><i class="fas fa-bolt"></i> Sin Luz (Dying-Gasp)</span>`;
+        } else if (isLosi) {
+          statusHtml = `<span class="badge-losi" title="${ont.down_cause || ''}"><i class="fas fa-cut"></i> Corte Fibra (LOSi)</span>`;
+        } else {
+          statusHtml = `<span class="band-tag" style="background: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.3);" title="${ont.down_cause || ''}">🔴 Caída (${ont.down_cause || 'Offline'})</span>`;
+        }
+      }
+
+      // ID de Cliente
+      const clientIdHtml = ont.client_id
+        ? `<strong style="color: #38bdf8; font-family: monospace;">#${ont.client_id}</strong>`
+        : '<span style="color: var(--text-muted); font-size: 0.72rem;">Sin ID</span>';
+
+      // Nombre del Cliente
+      const clientName = ont.client_name || 'Sin identificar';
+      const iwispBadge = ont.is_from_iwisp
+        ? '<span title="Enlazado con base de datos i-WISP" style="margin-left: 6px; font-size: 0.65rem; background: rgba(168, 85, 247, 0.2); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.4); padding: 1px 4px; border-radius: 3px;">i-WISP</span>'
+        : '<span title="Leído de descripción SNMP OLT" style="margin-left: 6px; font-size: 0.65rem; background: rgba(100, 116, 139, 0.2); color: #94a3b8; border: 1px solid rgba(100, 116, 139, 0.4); padding: 1px 4px; border-radius: 3px;">OLT</span>';
+
+      // Paquete Contratado
+      let packageHtml = '<span style="color: var(--text-muted); font-size: 0.74rem;">--</span>';
+      if (ont.package_name) {
+        const costStr = (ont.package_cost !== null && ont.package_cost !== undefined) ? ` <span style="color: #34d399; font-weight: 600;">($${ont.package_cost})</span>` : '';
+        packageHtml = `<span style="font-size: 0.76rem; color: #f1f5f9;">${ont.package_name}${costStr}</span>`;
+      }
+
+      return `
+        <tr>
+          <td style="font-weight: 700; color: #94a3b8; font-family: monospace;">ONT ${ont.ont_id}</td>
+          <td>${clientIdHtml}</td>
+          <td>
+            <div style="display: flex; align-items: center;">
+              <span style="font-weight: 600; color: #f8fafc;">${clientName}</span>
+              ${iwispBadge}
+            </div>
+          </td>
+          <td>${packageHtml}</td>
+          <td>
+            <span style="font-family: monospace; font-size: 0.75rem; background: rgba(15, 23, 42, 0.5); padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border-color); color: #38bdf8;">
+              ${ont.serial || '--'}
+            </span>
+          </td>
+          <td>${rxPowerHtml}</td>
+          <td>${statusHtml}</td>
+        </tr>
+      `;
+    }).join('');
+  }
+
+  const alertSnmpEl = document.getElementById('diag-snmp-alert');
+  const inputDiagOltComm = document.getElementById('input-diagnostic-olt-community');
+  const btnSaveOltComm = document.getElementById('btn-save-olt-community');
+
+  function showSnmpAlert(msg, type = 'info') {
+    if (!alertSnmpEl) return;
+    if (!msg) {
+      alertSnmpEl.style.display = 'none';
+      return;
+    }
+    alertSnmpEl.style.display = 'block';
+    alertSnmpEl.innerHTML = msg;
+    if (type === 'success') {
+      alertSnmpEl.style.background = 'rgba(16, 185, 129, 0.15)';
+      alertSnmpEl.style.color = '#10b981';
+      alertSnmpEl.style.border = '1px solid rgba(16, 185, 129, 0.3)';
+    } else if (type === 'error') {
+      alertSnmpEl.style.background = 'rgba(239, 68, 68, 0.15)';
+      alertSnmpEl.style.color = '#ef4444';
+      alertSnmpEl.style.border = '1px solid rgba(239, 68, 68, 0.3)';
+    } else if (type === 'warning') {
+      alertSnmpEl.style.background = 'rgba(245, 158, 11, 0.15)';
+      alertSnmpEl.style.color = '#fbbf24';
+      alertSnmpEl.style.border = '1px solid rgba(245, 158, 11, 0.3)';
+    } else {
+      alertSnmpEl.style.background = 'rgba(14, 165, 233, 0.15)';
+      alertSnmpEl.style.color = '#38bdf8';
+      alertSnmpEl.style.border = '1px solid rgba(14, 165, 233, 0.3)';
+    }
+  }
+
+  async function selectPortForDiagnostics(port) {
+    if (!port || !currentDiagOlt) return;
+    currentDiagPort = port;
+    showSnmpAlert(null);
+
+    // Actualizar clase activa en cards de puertos
+    if (diagPortsScroll) {
+      const cards = diagPortsScroll.querySelectorAll('.olt-port-card');
+      cards.forEach(c => {
+        if (String(c.dataset.portIndex) === String(port.port_index)) {
+          c.classList.add('active');
+          c.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' });
+        } else {
+          c.classList.remove('active');
+        }
+      });
+    }
+
+    if (diagOntsTbody) {
+      diagOntsTbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 30px;">
+        <i class="fas fa-spinner fa-spin" style="font-size: 1.5rem; color: #38bdf8; margin-bottom: 8px; display: block;"></i>
+        Consultando telemetría SNMP en vivo de <strong>${port.if_descr || port.name}</strong>...
+      </td></tr>`;
+    }
+
+    try {
+      const activeComm = inputDiagOltComm ? inputDiagOltComm.value.trim() : null;
+      const data = await API.getOltPortOntsDetailed(currentDiagOlt.ip, port.port_index, -27.0, activeComm);
+      currentDiagOnts = (data && data.onts) ? data.onts : [];
+
+      if (data && data.community_used && inputDiagOltComm) {
+        inputDiagOltComm.value = data.community_used;
+        currentDiagOlt.community = data.community_used;
+      }
+
+      renderDiagKpis(data);
+      renderDiagOntsTable();
+
+      if (currentDiagOnts.length === 0) {
+        showSnmpAlert(`ℹ️ No se detectaron ONTs por SNMP en <strong>${port.if_descr || port.name}</strong>. Si esta OLT tiene una comunidad diferente por seguridad, modifícala arriba y presiona "Aplicar".`, 'warning');
+      }
+    } catch (err) {
+      console.error('Error cargando ONTs detalladas:', err);
+      if (diagOntsTbody) {
+        diagOntsTbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: #ef4444; padding: 30px;">
+          <i class="fas fa-exclamation-triangle" style="font-size: 1.5rem; margin-bottom: 8px; display: block;"></i>
+          Error consultando SNMP de la OLT: ${err.message}
+        </td></tr>`;
+      }
+      renderDiagKpis(null);
+      showSnmpAlert(`⚠️ Error de lectura SNMP (${err.message}). Si la OLT usa una comunidad SNMP distinta por seguridad, cámbiala arriba y pulsa "Aplicar".`, 'error');
+    }
+  }
+
+  function renderDiagPortCards(preselectPortIndex = null) {
+    if (!diagPortsScroll) return;
+    diagPortsScroll.innerHTML = '';
+
+    currentDiagPorts.forEach(port => {
+      const card = document.createElement('div');
+      const isSelected = preselectPortIndex 
+        ? String(port.port_index) === String(preselectPortIndex)
+        : (currentDiagPort && currentDiagPort.port_index === port.port_index);
+
+      card.className = `olt-port-card ${isSelected ? 'active' : ''}`;
+      card.dataset.portIndex = port.port_index;
+
+      const ontBadge = (port.active_onts !== undefined && port.active_onts !== null)
+        ? `<span style="font-size: 0.68rem; background: rgba(56, 189, 248, 0.15); color: #38bdf8; padding: 1px 6px; border-radius: 4px; font-weight: 600;">${port.active_onts} ONTs</span>`
+        : '';
+
+      card.innerHTML = `
+        <div class="port-name">
+          <span><i class="fas fa-plug" style="color: #38bdf8; font-size: 0.75rem; margin-right: 4px;"></i>${port.if_descr || port.name}</span>
+          ${ontBadge}
+        </div>
+        <div class="port-meta">
+          <span>Index: ${port.port_index}</span>
+        </div>
+      `;
+
+      card.addEventListener('click', () => {
+        selectPortForDiagnostics(port);
+      });
+
+      diagPortsScroll.appendChild(card);
+    });
+  }
+
+  async function selectOltForDiagnostics(olt, preselectPortIndex = null) {
+    currentDiagOlt = olt;
+    currentDiagPort = null;
+    currentDiagOnts = [];
+    renderDiagKpis(null);
+    showSnmpAlert(null);
+
+    if (inputDiagOltComm) {
+      inputDiagOltComm.value = olt.community || 'Muci!6508_rd';
+    }
+
+    if (diagOntsTbody) {
+      diagOntsTbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 30px;">Cargando puertos GPON de la OLT...</td></tr>';
+    }
+    if (diagPortsScroll) {
+      diagPortsScroll.innerHTML = '<div style="color: var(--text-muted); font-size: 0.78rem; padding: 10px;"><i class="fas fa-spinner fa-spin"></i> Obteniendo puertos GPON...</div>';
+    }
+
+    try {
+      const ports = await API.getOltGponPorts(olt.ip);
+      currentDiagPorts = ports || [];
+      if (currentDiagPorts.length === 0) {
+        if (diagPortsScroll) diagPortsScroll.innerHTML = '<div style="color: var(--text-muted); font-size: 0.78rem; padding: 10px;">No se encontraron puertos GPON para esta OLT.</div>';
+        if (diagOntsTbody) diagOntsTbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 30px;">Esta OLT no tiene puertos GPON descubiertos en Zabbix.</td></tr>';
+        return;
+      }
+
+      renderDiagPortCards(preselectPortIndex);
+
+      // Si se especificó un puerto objetivo, seleccionarlo; de lo contrario el primero
+      let targetPort = null;
+      if (preselectPortIndex) {
+        targetPort = currentDiagPorts.find(p => String(p.port_index) === String(preselectPortIndex));
+      }
+      if (!targetPort && currentDiagPorts.length > 0) {
+        targetPort = currentDiagPorts[0];
+      }
+
+      if (targetPort) {
+        selectPortForDiagnostics(targetPort);
+      }
+    } catch (err) {
+      console.error('Error cargando puertos GPON:', err);
+      if (diagPortsScroll) diagPortsScroll.innerHTML = `<div style="color: #ef4444; font-size: 0.78rem; padding: 10px;">Error: ${err.message}</div>`;
+    }
+  }
+
+  async function loadOltDiagnosticsSuite(preselectOltIp = null, preselectPortIndex = null) {
+    if (selectDiagOlt) {
+      selectDiagOlt.innerHTML = '<option value="">Cargando OLTs disponibles...</option>';
+    }
+    if (diagPortsScroll) {
+      diagPortsScroll.innerHTML = '<div style="color: var(--text-muted); font-size: 0.78rem; padding: 10px;"><i class="fas fa-spinner fa-spin"></i> Cargando OLTs desde Zabbix...</div>';
+    }
+    if (diagOntsTbody) {
+      diagOntsTbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 30px;">Selecciona una OLT y un puerto GPON para ver la telemetría en tiempo real.</td></tr>';
+    }
+
+    try {
+      const data = await API.getOltDiagnosticSummary();
+      oltDiagSummaryList = (data && data.olts) ? data.olts : [];
+      if (oltDiagSummaryList.length === 0) {
+        if (selectDiagOlt) selectDiagOlt.innerHTML = '<option value="">No se encontraron OLTs en Zabbix</option>';
+        if (diagPortsScroll) diagPortsScroll.innerHTML = '<div style="color: var(--text-muted); font-size: 0.78rem; padding: 10px;">No se encontraron OLTs configuradas en Zabbix.</div>';
+        return;
+      }
+
+      const activeIp = preselectOltIp || (currentDiagOlt ? currentDiagOlt.ip : oltDiagSummaryList[0].ip);
+
+      if (selectDiagOlt) {
+        selectDiagOlt.innerHTML = oltDiagSummaryList.map(olt =>
+          `<option value="${olt.ip}" ${olt.ip === activeIp ? 'selected' : ''}>${olt.name} (${olt.ip})${olt.site ? ' - ' + olt.site : ''}</option>`
+        ).join('');
+      }
+
+      const foundOlt = oltDiagSummaryList.find(o => o.ip === activeIp) || oltDiagSummaryList[0];
+      if (foundOlt) {
+        selectOltForDiagnostics(foundOlt, preselectPortIndex);
+      }
+    } catch (err) {
+      console.error('Error cargando suite de diagnóstico OLT:', err);
+      if (selectDiagOlt) selectDiagOlt.innerHTML = '<option value="">Error cargando OLTs</option>';
+      if (diagPortsScroll) diagPortsScroll.innerHTML = `<div style="color: #ef4444; font-size: 0.78rem; padding: 10px;">Error: ${err.message}</div>`;
+    }
+  }
+
+  // Exponer globalmente para abrir el modal desde cualquier lugar (ej. panel de propiedades de Brazo FTTH)
+  window.openOltDiagnosticsModal = function(preselectOltIp = null, preselectPortIndex = null) {
+    if (modalOltDiag) {
+      modalOltDiag.style.display = 'flex';
+      loadOltDiagnosticsSuite(preselectOltIp, preselectPortIndex);
+    }
+  };
+
+  if (btnOpenOltDiag) {
+    btnOpenOltDiag.addEventListener('click', () => {
+      window.openOltDiagnosticsModal();
+    });
+  }
+
+  if (btnCloseOltDiag && modalOltDiag) {
+    btnCloseOltDiag.addEventListener('click', () => {
+      modalOltDiag.style.display = 'none';
+    });
+  }
+
+  if (btnRefreshDiagPort) {
+    btnRefreshDiagPort.addEventListener('click', () => {
+      if (currentDiagOlt && currentDiagPort) {
+        selectPortForDiagnostics(currentDiagPort);
+      } else if (currentDiagOlt) {
+        selectOltForDiagnostics(currentDiagOlt);
+      }
+    });
+  }
+
+  if (selectDiagOlt) {
+    selectDiagOlt.addEventListener('change', (e) => {
+      const selectedIp = e.target.value;
+      const foundOlt = oltDiagSummaryList.find(o => o.ip === selectedIp);
+      if (foundOlt) {
+        selectOltForDiagnostics(foundOlt);
+      }
+    });
+  }
+
+  if (inputSearchOnts) {
+    inputSearchOnts.addEventListener('input', (e) => {
+      currentDiagSearch = e.target.value;
+      renderDiagOntsTable();
+    });
+  }
+
+  const diagFilterButtons = document.querySelectorAll('#diag-filter-buttons-group button');
+  diagFilterButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      diagFilterButtons.forEach(b => b.classList.remove('btn-primary'));
+      btn.classList.add('btn-primary');
+      currentDiagFilter = btn.dataset.filter || 'all';
+      renderDiagOntsTable();
+    });
+  });
+
+  if (btnSaveOltComm && inputDiagOltComm) {
+    const handleSaveCommunity = async () => {
+      if (!currentDiagOlt) return;
+      const comm = inputDiagOltComm.value.trim();
+      if (!comm) {
+        showSnmpAlert('Por favor introduce una comunidad SNMP no vacía.', 'error');
+        return;
+      }
+      btnSaveOltComm.disabled = true;
+      btnSaveOltComm.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+      showSnmpAlert(`Probando conectividad SNMP contra ${currentDiagOlt.name} (${currentDiagOlt.ip}) con comunidad "${comm}"...`, 'info');
+      try {
+        const res = await API.saveOltCommunity(currentDiagOlt.ip, comm);
+        if (res.success) {
+          showSnmpAlert(`✅ ${res.message}`, 'success');
+          currentDiagOlt.community = comm;
+          if (currentDiagPort) {
+            selectPortForDiagnostics(currentDiagPort);
+          }
+        } else {
+          showSnmpAlert(`⚠️ ${res.message}. Pulsa 'Refrescar Puerto' si deseas forzar la lectura.`, 'warning');
+        }
+      } catch (err) {
+        showSnmpAlert(`❌ Error probando comunidad: ${err.message}`, 'error');
+      } finally {
+        btnSaveOltComm.disabled = false;
+        btnSaveOltComm.innerHTML = '<i class="fas fa-check"></i> <span>Aplicar</span>';
+      }
+    };
+
+    btnSaveOltComm.addEventListener('click', handleSaveCommunity);
+    inputDiagOltComm.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        handleSaveCommunity();
+      }
+    });
+  }
 
   // Navegación con historial del navegador (Atrás / Adelante)
   window.addEventListener('hashchange', async () => {

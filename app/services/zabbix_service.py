@@ -1978,6 +1978,7 @@ class ZabbixService:
         Obtiene la lista de puertos GPON monitoreados para una OLT (ej. GPON 0/1/0 a GPON 0/1/15)
         con su ifIndex, estado operativo (Up/Down), tráfico y cantidad de ONUs.
         """
+        await self.refresh_zabbix_hosts_cache()
         h = self.find_zabbix_host(olt_ip_or_name, olt_ip_or_name)
         if not h:
             return []
@@ -2054,8 +2055,11 @@ class ZabbixService:
                             pass
 
         result = list(ports_map.values())
-        result.sort(key=lambda x: x["name"])
+        def natural_sort_key(s):
+            return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', s["name"])]
+        result.sort(key=natural_sort_key)
         return result
+
 
     async def get_gpon_branch_telemetry(self, node_id: str) -> Dict[str, Any]:
         """
@@ -2193,24 +2197,18 @@ class ZabbixService:
                 import re
 
                 # Obtener la comunidad SNMP del host en Zabbix si existe, o usar comunidades conocidas
-                community = "Muci!6508_rd"
-                if h and h.get("interfaces"):
-                    for iface in h["interfaces"]:
-                        c_str = iface.get("details", {}).get("community")
-                        if c_str:
-                            community = c_str
-                            break
+                community = await self.get_olt_community(olt_ip)
 
                 # 1. Consultar descripciones / nombres de las ONUs
                 descs: Dict[str, str] = {}
                 try:
                     proc_desc = await asyncio.create_subprocess_exec(
-                        "snmpbulkwalk", "-v2c", "-c", community, "-Cr32", "-t", "2", "-r", "1",
+                        "snmpbulkwalk", "-v2c", "-c", community, "-Cr10", "-t", "3", "-r", "2",
                         olt_ip, f"1.3.6.1.4.1.2011.6.128.1.1.2.43.1.9.{gpon_index}",
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.PIPE
                     )
-                    stdout_d, _ = await asyncio.wait_for(proc_desc.communicate(), timeout=3.0)
+                    stdout_d, _ = await asyncio.wait_for(proc_desc.communicate(), timeout=6.0)
                     for line in stdout_d.decode("latin-1", errors="ignore").splitlines():
                         m = re.search(r'\.' + str(gpon_index) + r'\.(\d+)\s+=\s+(?:STRING|Hex-STRING):\s+\"?([^\"]*)\"?', line)
                         if m:
@@ -2229,12 +2227,12 @@ class ZabbixService:
                 causes: Dict[str, int] = {}
                 try:
                     proc_cause = await asyncio.create_subprocess_exec(
-                        "snmpbulkwalk", "-v2c", "-c", community, "-Cr32", "-t", "2", "-r", "1",
+                        "snmpbulkwalk", "-v2c", "-c", community, "-Cr10", "-t", "3", "-r", "2",
                         olt_ip, f"1.3.6.1.4.1.2011.6.128.1.1.2.46.1.15.{gpon_index}",
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.PIPE
                     )
-                    stdout_c, _ = await asyncio.wait_for(proc_cause.communicate(), timeout=3.0)
+                    stdout_c, _ = await asyncio.wait_for(proc_cause.communicate(), timeout=6.0)
                     for line in stdout_c.decode("utf-8", errors="ignore").splitlines():
                         m = re.search(r'\.' + str(gpon_index) + r'\.(\d+)\s+=\s+INTEGER:\s+(\d+)', line)
                         if m:
@@ -2244,12 +2242,12 @@ class ZabbixService:
 
                 # 3. Consultar potencias ópticas Rx de las ONUs
                 proc_opt = await asyncio.create_subprocess_exec(
-                    "snmpbulkwalk", "-v2c", "-c", community, "-Cr32", "-t", "2", "-r", "1",
+                    "snmpbulkwalk", "-v2c", "-c", community, "-Cr10", "-t", "3", "-r", "2",
                     olt_ip, f"1.3.6.1.4.1.2011.6.128.1.1.2.51.1.4.{gpon_index}",
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE
                 )
-                stdout_o, _ = await asyncio.wait_for(proc_opt.communicate(), timeout=3.0)
+                stdout_o, _ = await asyncio.wait_for(proc_opt.communicate(), timeout=6.0)
                 out_lines = stdout_o.decode("utf-8", errors="ignore").strip().splitlines()
 
                 for line in out_lines:
@@ -2351,7 +2349,367 @@ class ZabbixService:
             "timestamp": time.time()
         }
 
+    async def _snmp_walk(self, ip: str, community: str, oid: str) -> str:
+        """Ejecuta snmpbulkwalk asíncrono con timeout y parámetros optimizados para OLT."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "snmpbulkwalk", "-v2c", "-c", community, "-Cr10", "-t", "3", "-r", "2",
+                ip, oid,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=8.0)
+            return stdout.decode("latin-1", errors="ignore")
+        except Exception as e:
+            logger.debug(f"SNMP walk error en {ip}:{oid} -> {e}")
+            return ""
+
+    async def get_olt_community(self, olt_ip: str, explicit_comm: Optional[str] = None) -> str:
+        """
+        Resuelve la comunidad SNMP para una OLT según el orden de prioridad:
+        1. Comunidad explícita enviada desde la UI / API
+        2. Credencial guardada en la base de datos local (olt_snmp_credentials)
+        3. Comunidad registrada en la interfaz de Zabbix para ese host
+        4. Fallback por defecto ('Muci!6508_rd')
+        """
+        if explicit_comm and explicit_comm.strip():
+            return explicit_comm.strip()
+
+        # 1. Buscar en BD local de credenciales verificadas
+        try:
+            from app.database import get_db_connection
+            async with get_db_connection() as db:
+                c = await db.execute("SELECT community FROM olt_snmp_credentials WHERE olt_ip = ?", (olt_ip,))
+                row = await c.fetchone()
+                if row and row["community"]:
+                    return row["community"].strip()
+        except Exception as e:
+            logger.debug(f"Error consultando olt_snmp_credentials para {olt_ip}: {e}")
+
+        # 2. Buscar en caché de Zabbix
+        h = self.find_zabbix_host(olt_ip, olt_ip)
+        if h and h.get("interfaces"):
+            for iface in h["interfaces"]:
+                c_str = iface.get("details", {}).get("community")
+                if c_str and c_str.strip() and not c_str.startswith("{$"):
+                    return c_str.strip()
+
+        return "Muci!6508_rd"
+
+    async def save_olt_community(self, olt_ip: str, community: str, vendor: str = "Huawei", notes: str = "") -> None:
+        """Guarda o actualiza la comunidad SNMP para una OLT en la BD local."""
+        try:
+            from app.database import get_db_connection
+            async with get_db_connection() as db:
+                await db.execute("""
+                    INSERT INTO olt_snmp_credentials (olt_ip, community, vendor, notes, updated_at)
+                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(olt_ip) DO UPDATE SET
+                        community = excluded.community,
+                        vendor = excluded.vendor,
+                        notes = excluded.notes,
+                        updated_at = CURRENT_TIMESTAMP
+                """, (olt_ip, community.strip(), vendor, notes))
+                await db.commit()
+            logger.info(f"Comunidad SNMP para OLT {olt_ip} guardada exitosamente: '{community}'")
+        except Exception as e:
+            logger.error(f"Error guardando comunidad SNMP para {olt_ip}: {e}")
+            raise
+
+    async def test_olt_community(self, olt_ip: str, community: str) -> Tuple[bool, str]:
+        """Prueba una comunidad SNMP contra una OLT consultando sysName/sysDescr."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "snmpget", "-v2c", "-c", community.strip(), "-t", "2", "-r", "2",
+                olt_ip, "1.3.6.1.2.1.1.5.0",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=6.0)
+            if proc.returncode == 0:
+                out = stdout.decode("latin-1", errors="ignore").strip()
+                if "=" in out:
+                    out = out.split("=", 1)[1].strip().strip('"')
+                return True, out or "OK"
+            else:
+                err = stderr.decode("latin-1", errors="ignore").strip()
+                return False, err or "Timeout o comunidad incorrecta"
+        except asyncio.TimeoutError:
+            return False, "Timeout: El equipo no respondió en 3.5 segundos"
+        except Exception as e:
+            return False, str(e)
+
+
+    async def get_olt_diagnostic_summary(self) -> Dict[str, Any]:
+        """
+        Descubre y consolida el estado de todas las OLTs registradas en Zabbix.
+        Retorna la lista de OLTs con su IP, fabricante, estado y total de puertos GPON.
+        """
+        await self.refresh_zabbix_hosts_cache()
+        olts: List[Dict[str, Any]] = []
+        seen_hosts = set()
+
+        for ip, h in self._host_cache_by_ip.items():
+            hid = h.get("hostid")
+            if not hid or hid in seen_hosts:
+                continue
+
+            h_name = h.get("name", "")
+            h_host = h.get("host", "")
+            name_lower = f"{h_name} {h_host}".lower()
+
+            is_olt = any(w in name_lower for w in ["olt", "ea58", "ma58", "vsol", "v-sol", "v1600"])
+            if not is_olt:
+                for t in h.get("tags", []):
+                    if "olt" in t.get("tag", "").lower() or "olt" in t.get("value", "").lower():
+                        is_olt = True
+                        break
+
+            if is_olt:
+                seen_hosts.add(hid)
+                comm = await self.get_olt_community(ip)
+
+                vendor = "Huawei" if any(x in name_lower for x in ["huawei", "ea58", "ma58"]) else ("V-SOL" if any(x in name_lower for x in ["vsol", "v-sol", "v1600"]) else "Generic OLT")
+
+                olts.append({
+                    "id": hid,
+                    "name": h_name,
+                    "host": h_host,
+                    "ip": ip,
+                    "status": "online" if h.get("status") == "0" else "offline",
+                    "vendor": vendor,
+                    "community": comm
+                })
+
+        olts.sort(key=lambda x: x["name"])
+
+        from app.services.iwisp_service import iwisp_service
+        cache_status = await iwisp_service.get_cache_status()
+
+        return {
+            "total_olts": len(olts),
+            "olts": olts,
+            "iwisp_cache": cache_status,
+            "timestamp": time.time()
+        }
+
+    async def get_olt_port_onts_detailed(
+        self,
+        olt_ip_or_name: str,
+        port_index: str,
+        typical_threshold: float = -27.0,
+        community: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Obtiene el diagnóstico detallado de las ONTs de un puerto GPON específico,
+        cruzando en tiempo real con la base de datos de i-WISP por Serial Number de ONT.
+        Permite comunidad SNMP explícita o resolución inteligente por base de datos / fallback.
+        """
+        await self.refresh_zabbix_hosts_cache()
+        h = self.find_zabbix_host(olt_ip_or_name, olt_ip_or_name)
+        olt_ip = olt_ip_or_name
+        olt_name = olt_ip_or_name
+
+        if h:
+            olt_name = h.get("name", olt_ip_or_name)
+            if h.get("interfaces"):
+                for iface in h["interfaces"]:
+                    if iface.get("ip"):
+                        olt_ip = iface["ip"]
+                        break
+
+        resolved_comm = await self.get_olt_community(olt_ip, community)
+
+        from app.services.iwisp_service import iwisp_service, normalize_onu_serial
+
+        # Ejecutar snmpbulkwalk de forma secuencial para evitar descarte de paquetes UDP en la OLT
+        desc_raw = await self._snmp_walk(olt_ip, resolved_comm, f"1.3.6.1.4.1.2011.6.128.1.1.2.43.1.9.{port_index}")
+        serial_raw = await self._snmp_walk(olt_ip, resolved_comm, f"1.3.6.1.4.1.2011.6.128.1.1.2.43.1.3.{port_index}")
+        rx_raw = await self._snmp_walk(olt_ip, resolved_comm, f"1.3.6.1.4.1.2011.6.128.1.1.2.51.1.4.{port_index}")
+        cause_raw = await self._snmp_walk(olt_ip, resolved_comm, f"1.3.6.1.4.1.2011.6.128.1.1.2.46.1.15.{port_index}")
+
+        # Si todo vino vacío y el usuario NO forzó una comunidad explícita, probar lista de candidatos
+        if not desc_raw and not serial_raw and not rx_raw and not cause_raw and not community:
+            candidates = ["Muci!6508_rd", "Mucivaga6508_rd", "admin6508", "public"]
+            for cand in candidates:
+                if cand == resolved_comm:
+                    continue
+                ok, sysname = await self.test_olt_community(olt_ip, cand)
+                if ok:
+                    logger.info(f"Fallback exitoso para OLT {olt_ip} con comunidad '{cand}' ({sysname}). Guardando en BD...")
+                    resolved_comm = cand
+                    await self.save_olt_community(olt_ip, cand, notes=f"Detectado automáticamente ({sysname})")
+                    desc_raw = await self._snmp_walk(olt_ip, resolved_comm, f"1.3.6.1.4.1.2011.6.128.1.1.2.43.1.9.{port_index}")
+                    serial_raw = await self._snmp_walk(olt_ip, resolved_comm, f"1.3.6.1.4.1.2011.6.128.1.1.2.43.1.3.{port_index}")
+                    rx_raw = await self._snmp_walk(olt_ip, resolved_comm, f"1.3.6.1.4.1.2011.6.128.1.1.2.51.1.4.{port_index}")
+                    cause_raw = await self._snmp_walk(olt_ip, resolved_comm, f"1.3.6.1.4.1.2011.6.128.1.1.2.46.1.15.{port_index}")
+                    break
+
+
+        def parse_snmp_output(text: str) -> Dict[str, Tuple[str, str]]:
+            items: Dict[str, Tuple[str, str]] = {}
+            cur_id = None
+            cur_type = ''
+            cur_lines = []
+            if not isinstance(text, str):
+                return items
+            for line in text.splitlines():
+                if " = " in line:
+                    if cur_id:
+                        items[cur_id] = (cur_type, " ".join(cur_lines).strip())
+                    left, right = line.split(" = ", 1)
+                    m = re.search(r'\.' + str(port_index) + r'\.(\d+)', left)
+                    if m:
+                        cur_id = m.group(1)
+                        if ":" in right:
+                            cur_type, val = right.split(":", 1)
+                            cur_lines = [val.strip()]
+                        else:
+                            cur_type = ""
+                            cur_lines = [right.strip()]
+                    else:
+                        cur_id = None
+                elif cur_id:
+                    cur_lines.append(line.strip())
+            if cur_id:
+                items[cur_id] = (cur_type, " ".join(cur_lines).strip())
+            return items
+
+        descs_raw_map = parse_snmp_output(desc_raw)
+        descs: Dict[str, str] = {}
+        for ont_id, (val_type, val_str) in descs_raw_map.items():
+            if val_type.strip() == "Hex-STRING":
+                hex_clean = re.sub(r'[^0-9a-fA-F]', '', val_str)
+                try:
+                    descs[ont_id] = bytes.fromhex(hex_clean).decode("latin-1", errors="ignore").strip()
+                except Exception:
+                    descs[ont_id] = val_str
+            else:
+                descs[ont_id] = val_str.strip('"').strip("'").strip()
+
+        serials_raw_map = parse_snmp_output(serial_raw)
+        serials: Dict[str, str] = {}
+        for ont_id, (_, val_str) in serials_raw_map.items():
+            serials[ont_id] = normalize_onu_serial(val_str)
+
+        causes_raw_map = parse_snmp_output(cause_raw)
+        causes: Dict[str, int] = {}
+        for ont_id, (_, val_str) in causes_raw_map.items():
+            if val_str.isdigit():
+                causes[ont_id] = int(val_str)
+
+        rx_raw_map = parse_snmp_output(rx_raw)
+        rx_powers: Dict[str, float] = {}
+        for ont_id, (_, val_str) in rx_raw_map.items():
+            try:
+                raw_p = int(val_str)
+                if raw_p not in (2147483647, 0, -2147483648):
+                    p_val = round(raw_p * 0.01, 2)
+                    if -50.0 <= p_val <= 0.0:
+                        rx_powers[ont_id] = p_val
+            except Exception:
+                pass
+
+
+
+        all_ont_ids = sorted(list(set(list(descs.keys()) + list(serials.keys()) + list(rx_powers.keys()) + list(causes.keys()))), key=lambda x: int(x) if x.isdigit() else 9999)
+
+        onts_list = []
+        typical_count = 0
+        atypical_count = 0
+        dying_gasp_count = 0
+        losi_count = 0
+        offline_count = 0
+
+        for ont_id in all_ont_ids:
+            serial = serials.get(ont_id, "")
+            raw_desc = descs.get(ont_id, f"ONT {ont_id}")
+            cause_code = causes.get(ont_id, 0)
+            rx_dbm = rx_powers.get(ont_id)
+
+            iwisp_info = await iwisp_service.get_client_by_serial(serial) if serial else None
+
+            client_id = ""
+            client_name = ""
+            package_name = ""
+            package_cost = ""
+            is_iwisp_matched = False
+
+            if iwisp_info:
+                client_id = iwisp_info.get("client_id", "")
+                client_name = iwisp_info.get("client_name", "")
+                package_name = iwisp_info.get("plan_name", "")
+                package_cost = iwisp_info.get("plan_cost", "")
+                is_iwisp_matched = True
+            else:
+                m_desc = re.match(r'^\s*(\d+)\s*[-_:]\s*(.+)$', raw_desc)
+                if m_desc:
+                    client_id = m_desc.group(1)
+                    client_name = m_desc.group(2).strip()
+                else:
+                    client_name = raw_desc
+
+            is_online = rx_dbm is not None
+            if is_online:
+                if rx_dbm > typical_threshold:
+                    typical_count += 1
+                    quality = "optimal" if rx_dbm > -24.0 else "acceptable"
+                else:
+                    atypical_count += 1
+                    quality = "critical"
+                status_label = "Online"
+                status_color = "#10b981"
+            else:
+                offline_count += 1
+                quality = "offline"
+                if cause_code == 1:
+                    dying_gasp_count += 1
+                    status_label = "⚡ Sin Luz (Dying-Gasp)"
+                    status_color = "#f59e0b"
+                elif cause_code == 2:
+                    losi_count += 1
+                    status_label = "✂️ Corte Fibra (LOSi)"
+                    status_color = "#ef4444"
+                else:
+                    status_label = "Offline / Inactivo"
+                    status_color = "#94a3b8"
+
+            onts_list.append({
+                "ont_id": ont_id,
+                "serial": serial,
+                "client_id": client_id,
+                "client_name": client_name,
+                "package_name": package_name,
+                "package_cost": package_cost,
+                "is_iwisp_matched": is_iwisp_matched,
+                "raw_description": raw_desc,
+                "rx_power_dbm": rx_dbm,
+                "rx_power_fmt": f"{rx_dbm} dBm" if rx_dbm is not None else "—",
+                "is_online": is_online,
+                "quality": quality,
+                "down_cause_code": cause_code,
+                "status_label": status_label,
+                "status_color": status_color
+            })
+
+        return {
+            "olt_name": olt_name,
+            "olt_ip": olt_ip,
+            "port_index": port_index,
+            "community_used": resolved_comm,
+            "total_onts": len(onts_list),
+            "online_count": typical_count + atypical_count,
+            "typical_count": typical_count,
+            "atypical_count": atypical_count,
+            "dying_gasp_count": dying_gasp_count,
+            "losi_count": losi_count,
+            "offline_count": offline_count,
+            "onts": onts_list,
+            "timestamp": time.time()
+        }
+
 def fmt_bps(bps_val: Any) -> str:
+
     """Formatea bits por segundo (bps) a Kbps, Mbps, Gbps legibles."""
     if not bps_val:
         return "—"

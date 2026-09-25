@@ -214,5 +214,59 @@ async def init_db():
             """)
             logger.info("Mapa por defecto 'default-map' inicializado.")
 
+        # Tabla de Configuración General del Sistema (i-WISP API Key, OLTs, etc.)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS system_config (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                description TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+
+        # Tabla de Caché de Clientes y ONUs de i-WISP
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS iwisp_clients_cache (
+                id TEXT PRIMARY KEY,
+                client_id TEXT NOT NULL,
+                client_name TEXT NOT NULL,
+                onu_serial TEXT NOT NULL,
+                onu_mac TEXT,
+                onu_model TEXT,
+                onu_brand TEXT,
+                service_id TEXT,
+                service_type TEXT,
+                plan_id TEXT,
+                plan_name TEXT,
+                plan_cost TEXT,
+                client_status TEXT,
+                address TEXT,
+                locality TEXT,
+                zone TEXT,
+                latitude REAL,
+                longitude REAL,
+                raw_data TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_iwisp_onu_serial ON iwisp_clients_cache(onu_serial);")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_iwisp_client_id ON iwisp_clients_cache(client_id);")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_iwisp_client_name ON iwisp_clients_cache(client_name);")
+
+        # Tabla de Credenciales y Comunidades SNMP personalizadas por OLT
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS olt_snmp_credentials (
+                olt_ip TEXT PRIMARY KEY,
+                community TEXT NOT NULL,
+                vendor TEXT DEFAULT 'Huawei',
+                notes TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        # Precargar credenciales verificadas en producción
+        await db.execute("INSERT OR IGNORE INTO olt_snmp_credentials (olt_ip, community, vendor, notes) VALUES ('10.20.0.2', 'Muci!6508_rd', 'Huawei', 'EA5800-X2 Producción');")
+        await db.execute("INSERT OR IGNORE INTO olt_snmp_credentials (olt_ip, community, vendor, notes) VALUES ('10.19.0.14', 'Mucivaga6508_rd', 'Huawei', 'EA5800-X15 Producción');")
+        await db.execute("INSERT OR IGNORE INTO olt_snmp_credentials (olt_ip, community, vendor, notes) VALUES ('10.14.31.27', 'admin6508', 'Huawei', 'gpon-olt Producción');")
+
         await db.commit()
     logger.info("Base de datos SQLite de NexusDude inicializada exitosamente.")

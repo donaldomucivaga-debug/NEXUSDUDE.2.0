@@ -428,6 +428,72 @@ const API = {
     const res = await this.fetch(`/api/zabbix/olt/${encodeURIComponent(oltIpOrName)}/gpon-ports`);
     if (res.ok) return await res.json();
     return [];
+  },
+
+  // --- Configuración e Integración i-WISP ---
+  async getIWispConfig() {
+    const res = await this.fetch('/api/config/iwisp');
+    if (res.ok) return await res.json();
+    throw new Error(await res.text());
+  },
+
+  async saveIWispConfig(payload) {
+    const res = await this.fetch('/api/config/iwisp', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+    if (res.ok) return await res.json();
+    throw new Error(await res.text());
+  },
+
+  async testIWispConnection(payload = {}) {
+    const res = await this.fetch('/api/config/iwisp/test', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+    if (res.ok) return await res.json();
+    throw new Error(await res.text());
+  },
+
+  async syncIWispClients() {
+    const res = await this.fetch('/api/config/iwisp/sync', {
+      method: 'POST'
+    });
+    if (res.ok) return await res.json();
+    throw new Error(await res.text());
+  },
+
+  async getIWispCacheStatus() {
+    const res = await this.fetch('/api/config/iwisp/cache-status');
+    if (res.ok) return await res.json();
+    return { total_clients: 0, total_onus: 0, last_update: null };
+  },
+
+  // --- Diagnóstico Profundo OLT & Clientes FTTH ---
+  async getOltDiagnosticSummary() {
+    const res = await this.fetch('/api/zabbix/olt/diagnostic-summary');
+    if (res.ok) return await res.json();
+    throw new Error(await res.text());
+  },
+
+  async getOltPortOntsDetailed(oltIpOrName, portIndex, threshold = -27.0, community = null) {
+    let url = `/api/zabbix/olt/${encodeURIComponent(oltIpOrName)}/port/${encodeURIComponent(portIndex)}/onts-detailed?typical_threshold=${threshold}`;
+    if (community) {
+      url += `&community=${encodeURIComponent(community)}`;
+    }
+    const res = await this.fetch(url);
+    if (res.ok) return await res.json();
+    throw new Error(await res.text());
+  },
+
+  async saveOltCommunity(oltIp, community, force = false) {
+    const res = await this.fetch(`/api/zabbix/olt/${encodeURIComponent(oltIp)}/community`, {
+      method: 'POST',
+      body: JSON.stringify({ community, force })
+    });
+    if (res.ok) return await res.json();
+    throw new Error(await res.text());
   }
 };
+
 
