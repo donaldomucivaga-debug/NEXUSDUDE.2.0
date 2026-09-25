@@ -1,5 +1,5 @@
 from typing import Dict, Any, Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
 from app.auth import get_current_user
 from app.models import ZabbixSyncRequest
 from app.services.zabbix_service import zabbix_service

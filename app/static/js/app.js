@@ -8395,13 +8395,15 @@ window.addEventListener('DOMContentLoaded', async () => {
   async function selectPortForDiagnostics(port) {
     if (!port || !currentDiagOlt) return;
     currentDiagPort = port;
+    const portIndex = port.port_index || port.index;
+    const portName = port.if_descr || port.name || port.display_name || `GPON [${portIndex}]`;
     showSnmpAlert(null);
 
     // Actualizar clase activa en cards de puertos
     if (diagPortsScroll) {
       const cards = diagPortsScroll.querySelectorAll('.olt-port-card');
       cards.forEach(c => {
-        if (String(c.dataset.portIndex) === String(port.port_index)) {
+        if (String(c.dataset.portIndex) === String(portIndex)) {
           c.classList.add('active');
           c.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' });
         } else {
@@ -8413,13 +8415,13 @@ window.addEventListener('DOMContentLoaded', async () => {
     if (diagOntsTbody) {
       diagOntsTbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 30px;">
         <i class="fas fa-spinner fa-spin" style="font-size: 1.5rem; color: #38bdf8; margin-bottom: 8px; display: block;"></i>
-        Consultando telemetría SNMP en vivo de <strong>${port.if_descr || port.name}</strong>...
+        Consultando telemetría SNMP en vivo de <strong>${portName}</strong>...
       </td></tr>`;
     }
 
     try {
       const activeComm = inputDiagOltComm ? inputDiagOltComm.value.trim() : null;
-      const data = await API.getOltPortOntsDetailed(currentDiagOlt.ip, port.port_index, -27.0, activeComm);
+      const data = await API.getOltPortOntsDetailed(currentDiagOlt.ip, portIndex, -27.0, activeComm);
       currentDiagOnts = (data && data.onts) ? data.onts : [];
 
       if (data && data.community_used && inputDiagOltComm) {
@@ -8431,7 +8433,7 @@ window.addEventListener('DOMContentLoaded', async () => {
       renderDiagOntsTable();
 
       if (currentDiagOnts.length === 0) {
-        showSnmpAlert(`ℹ️ No se detectaron ONTs por SNMP en <strong>${port.if_descr || port.name}</strong>. Si esta OLT tiene una comunidad diferente por seguridad, modifícala arriba y presiona "Aplicar".`, 'warning');
+        showSnmpAlert(`ℹ️ No se detectaron ONTs por SNMP en <strong>${portName}</strong>. Si esta OLT tiene una comunidad diferente por seguridad, modifícala arriba y presiona "Aplicar".`, 'warning');
       }
     } catch (err) {
       console.error('Error cargando ONTs detalladas:', err);
@@ -8451,25 +8453,29 @@ window.addEventListener('DOMContentLoaded', async () => {
     diagPortsScroll.innerHTML = '';
 
     currentDiagPorts.forEach(port => {
-      const card = document.createElement('div');
+      const portIndex = port.port_index || port.index;
+      const portName = port.if_descr || port.name || port.display_name || `GPON [${portIndex}]`;
+      const curPortIndex = currentDiagPort ? (currentDiagPort.port_index || currentDiagPort.index) : null;
       const isSelected = preselectPortIndex 
-        ? String(port.port_index) === String(preselectPortIndex)
-        : (currentDiagPort && currentDiagPort.port_index === port.port_index);
+        ? String(portIndex) === String(preselectPortIndex)
+        : (curPortIndex && String(curPortIndex) === String(portIndex));
 
+      const card = document.createElement('div');
       card.className = `olt-port-card ${isSelected ? 'active' : ''}`;
-      card.dataset.portIndex = port.port_index;
+      card.dataset.portIndex = portIndex;
 
-      const ontBadge = (port.active_onts !== undefined && port.active_onts !== null)
-        ? `<span style="font-size: 0.68rem; background: rgba(56, 189, 248, 0.15); color: #38bdf8; padding: 1px 6px; border-radius: 4px; font-weight: 600;">${port.active_onts} ONTs</span>`
+      const activeOnts = (port.active_onts !== undefined && port.active_onts !== null) ? port.active_onts : port.onus_online;
+      const ontBadge = (activeOnts !== undefined && activeOnts !== null)
+        ? `<span style="font-size: 0.68rem; background: rgba(56, 189, 248, 0.15); color: #38bdf8; padding: 1px 6px; border-radius: 4px; font-weight: 600;">${activeOnts} ONTs</span>`
         : '';
 
       card.innerHTML = `
         <div class="port-name">
-          <span><i class="fas fa-plug" style="color: #38bdf8; font-size: 0.75rem; margin-right: 4px;"></i>${port.if_descr || port.name}</span>
+          <span><i class="fas fa-plug" style="color: #38bdf8; font-size: 0.75rem; margin-right: 4px;"></i>${portName}</span>
           ${ontBadge}
         </div>
         <div class="port-meta">
-          <span>Index: ${port.port_index}</span>
+          <span>Index: ${portIndex}</span>
         </div>
       `;
 
@@ -8513,7 +8519,7 @@ window.addEventListener('DOMContentLoaded', async () => {
       // Si se especificó un puerto objetivo, seleccionarlo; de lo contrario el primero
       let targetPort = null;
       if (preselectPortIndex) {
-        targetPort = currentDiagPorts.find(p => String(p.port_index) === String(preselectPortIndex));
+        targetPort = currentDiagPorts.find(p => String(p.port_index || p.index) === String(preselectPortIndex));
       }
       if (!targetPort && currentDiagPorts.length > 0) {
         targetPort = currentDiagPorts[0];

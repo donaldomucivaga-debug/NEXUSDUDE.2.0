@@ -2011,8 +2011,10 @@ class ZabbixService:
                     if snmp_idx not in ports_map:
                         ports_map[snmp_idx] = {
                             "index": snmp_idx,
+                            "port_index": snmp_idx,
                             "name": port_label,
                             "display_name": port_label,
+                            "if_descr": port_label,
                             "status": "up",
                             "status_code": 1,
                             "traffic_in_bps": 0,
@@ -2020,6 +2022,7 @@ class ZabbixService:
                             "traffic_in_fmt": "—",
                             "traffic_out_fmt": "—",
                             "onus_online": 0,
+                            "active_onts": 0,
                             "tx_power_dbm": None
                         }
                     
@@ -2027,6 +2030,7 @@ class ZabbixService:
                     if name_match:
                         p["name"] = f"GPON {name_match.group(1)}"
                         p["display_name"] = f"GPON {name_match.group(1)}"
+                        p["if_descr"] = f"GPON {name_match.group(1)}"
 
                     if "net.if.status" in key:
                         p["status_code"] = int(val) if str(val).isdigit() else 1
@@ -2046,6 +2050,7 @@ class ZabbixService:
                     elif "gpon.ont.online" in key:
                         try:
                             p["onus_online"] = int(float(val))
+                            p["active_onts"] = p["onus_online"]
                         except Exception:
                             pass
                     elif "gpon.optical.txpower" in key:
@@ -2509,6 +2514,9 @@ class ZabbixService:
         h = self.find_zabbix_host(olt_ip_or_name, olt_ip_or_name)
         olt_ip = olt_ip_or_name
         olt_name = olt_ip_or_name
+
+        if not port_index or str(port_index).strip().lower() in ("undefined", "null", "none"):
+            raise ValueError(f"Índice de puerto GPON inválido o no especificado: '{port_index}'")
 
         if h:
             olt_name = h.get("name", olt_ip_or_name)
