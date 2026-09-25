@@ -1671,6 +1671,42 @@ body.sidebar-resizing-active * {
   z-index: 10;
 }
 
+.diag-table th.sortable {
+  cursor: pointer;
+  user-select: none;
+  transition: color 0.15s ease, background 0.15s ease;
+  white-space: nowrap;
+}
+
+.diag-table th.sortable:hover {
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.08);
+}
+
+.diag-table th.sortable .sort-icon {
+  margin-left: 5px;
+  font-size: 0.68rem;
+  opacity: 0.35;
+  transition: opacity 0.15s ease, color 0.15s ease;
+}
+
+.diag-table th.sortable:hover .sort-icon {
+  opacity: 0.8;
+  color: #38bdf8;
+}
+
+.diag-table th.sorted-asc,
+.diag-table th.sorted-desc {
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.12);
+}
+
+.diag-table th.sorted-asc .sort-icon,
+.diag-table th.sorted-desc .sort-icon {
+  opacity: 1;
+  color: #38bdf8;
+}
+
 .diag-table td {
   padding: 8px 12px;
   border-bottom: 1px solid var(--border-color);

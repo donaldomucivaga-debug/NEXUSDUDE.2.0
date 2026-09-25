@@ -1938,14 +1938,14 @@
           <table class="diag-table">
             <thead>
               <tr>
-                <th style="width: 70px;">ONT ID</th>
-                <th style="width: 95px;">N° Cliente</th>
-                <th>Cliente (i-WISP / OLT)</th>
-                <th>Paquete Contratado</th>
-                <th style="width: 110px;">Consumo (TB)</th>
-                <th style="width: 165px;">Serial ONT</th>
-                <th style="width: 120px;">Nivel Óptico (Rx)</th>
-                <th style="width: 180px;">Estado / Diagnóstico</th>
+                <th style="width: 80px;" class="sortable" data-sort="ont_id" title="Clic para ordenar por ONT ID">ONT ID <i class="fas fa-sort sort-icon"></i></th>
+                <th style="width: 100px;" class="sortable" data-sort="client_id" title="Clic para ordenar por N° Cliente">N° Cliente <i class="fas fa-sort sort-icon"></i></th>
+                <th class="sortable" data-sort="client_name" title="Clic para ordenar por Nombre del Cliente">Cliente (i-WISP / OLT) <i class="fas fa-sort sort-icon"></i></th>
+                <th class="sortable" data-sort="package" title="Clic para ordenar por Paquete Contratado">Paquete Contratado <i class="fas fa-sort sort-icon"></i></th>
+                <th style="width: 120px;" class="sortable" data-sort="consumed" title="Clic para ordenar por Consumo de TB">Consumo (TB) <i class="fas fa-sort sort-icon"></i></th>
+                <th style="width: 165px;" class="sortable" data-sort="serial" title="Clic para ordenar por Serial ONT">Serial ONT <i class="fas fa-sort sort-icon"></i></th>
+                <th style="width: 125px;" class="sortable" data-sort="rx" title="Clic para ordenar por Nivel Óptico">Nivel Óptico (Rx) <i class="fas fa-sort sort-icon"></i></th>
+                <th style="width: 180px;" class="sortable" data-sort="status" title="Clic para ordenar por Estado">Estado / Diagnóstico <i class="fas fa-sort sort-icon"></i></th>
               </tr>
             </thead>
             <tbody id="diag-onts-tbody">
@@ -1962,8 +1962,8 @@
   </div>
 
   <!-- Scripts -->
-  <script src="/static/js/api.js?v=3.11"></script>
-  <script src="/static/js/app.js?v=3.11"></script>
+  <script src="/static/js/api.js?v=3.12"></script>
+  <script src="/static/js/app.js?v=3.12"></script>
 </body>
 </html>
 

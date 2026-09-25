@@ -259,6 +259,19 @@ async def init_db():
         await db.execute("CREATE INDEX IF NOT EXISTS idx_iwisp_service_id ON iwisp_clients_cache(service_id);")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_iwisp_client_name ON iwisp_clients_cache(client_name);")
 
+        # Tabla de Directorio Global de Clientes i-WISP (para resolución ultra rápida y sin truncación)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS iwisp_directory (
+                client_id TEXT PRIMARY KEY,
+                client_name TEXT NOT NULL,
+                normalized_name TEXT NOT NULL,
+                rfc TEXT DEFAULT '',
+                ine TEXT DEFAULT '',
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_iwisp_dir_norm ON iwisp_directory(normalized_name);")
+
         # Tabla de Credenciales y Comunidades SNMP personalizadas por OLT
         await db.execute("""
             CREATE TABLE IF NOT EXISTS olt_snmp_credentials (

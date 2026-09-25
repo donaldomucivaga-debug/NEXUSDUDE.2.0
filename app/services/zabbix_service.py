@@ -2657,22 +2657,35 @@ class ZabbixService:
         offline_count = 0
         import hashlib
 
+        # Resolución concurrente de información i-WISP para todas las ONTs del puerto
+        ont_meta = {}
+        lookup_tasks = []
         for ont_id in all_ont_ids:
             serial = serials.get(ont_id, "")
             raw_desc = descs.get(ont_id, f"ONT {ont_id}")
-            cause_code = causes.get(ont_id, 0)
-            rx_dbm = rx_powers.get(ont_id)
-
-            m_desc = re.match(r'^\s*(\d+)\s*[-_:]\s*(.+)$', raw_desc)
+            m_desc = re.match(r'^\s*[\(\[]?\s*(\d+)\s*[\)\]]?\s*[-_:]?\s*(.+)$', raw_desc)
             desc_srv_id = m_desc.group(1) if m_desc else None
             desc_name = m_desc.group(2).strip() if m_desc else raw_desc
-
-            iwisp_info = await iwisp_service.get_client_info(
-                onu_serial=serial,
-                service_id=desc_srv_id,
-                client_id=desc_srv_id,
-                client_name=desc_name
+            ont_meta[ont_id] = (serial, raw_desc, desc_srv_id, desc_name, m_desc)
+            lookup_tasks.append(
+                iwisp_service.get_client_info(
+                    onu_serial=serial,
+                    service_id=desc_srv_id,
+                    client_id=desc_srv_id,
+                    client_name=desc_name
+                )
             )
+
+        iwisp_results = await asyncio.gather(*lookup_tasks, return_exceptions=True)
+        iwisp_info_map = {}
+        for ont_id, r_info in zip(all_ont_ids, iwisp_results):
+            iwisp_info_map[ont_id] = r_info if isinstance(r_info, dict) else None
+
+        for ont_id in all_ont_ids:
+            serial, raw_desc, desc_srv_id, desc_name, m_desc = ont_meta[ont_id]
+            cause_code = causes.get(ont_id, 0)
+            rx_dbm = rx_powers.get(ont_id)
+            iwisp_info = iwisp_info_map.get(ont_id)
 
             client_id = ""
             client_name = ""

@@ -61,6 +61,20 @@ def normalize_onu_serial(serial_val: Any) -> str:
     return s_compact.upper()
 
 
+def normalize_name_tokens(text: str) -> List[str]:
+    """Extrae palabras clave normalizadas (sin acentos, longitud >= 3) para búsqueda flexible."""
+    if not text:
+        return []
+    import unicodedata
+    n = unicodedata.normalize('NFKD', str(text)).encode('ASCII', 'ignore').decode('utf-8').lower()
+    clean = re.sub(r'[^a-z0-9\s]', ' ', n)
+    stopwords = {"casa", "comunidad", "colonia", "calle", "rancho", "local", "ciber", "fibra", "intermedia"}
+    tokens = [w for w in clean.split() if len(w) >= 3 and w not in stopwords]
+    if not tokens:
+        tokens = [w for w in clean.split() if len(w) >= 3]
+    return tokens
+
+
 class IWispService:
     def __init__(self):
         self._cached_api_key: Optional[str] = None
@@ -289,41 +303,82 @@ class IWispService:
                         c = await db.execute(query, tuple(params))
                         row = await c.fetchone()
 
-        # 5. Consulta en caliente a la API de i-WISP si no hubo coincidencia en caché local
-        if not row and (clean_srv_id.isdigit() or clean_cli_id.isdigit()):
+        # 5. Resolución inteligente mediante el Directorio Global i-WISP (iwisp_directory)
+        if not row:
             candidate_ids = []
-            if clean_cli_id.isdigit():
-                candidate_ids.append(int(clean_cli_id))
-            if clean_srv_id.isdigit() and int(clean_srv_id) not in candidate_ids:
-                candidate_ids.append(int(clean_srv_id))
 
-            for cid in candidate_ids:
+            # 5a. Búsqueda por tokens de nombre en el directorio global (ej. "Romo Tello Rigoberto", "Castillo Campos Carmen")
+            tokens = normalize_name_tokens(clean_name)
+            if tokens:
                 try:
-                    api_key = await self.get_raw_api_key()
-                    api_url = await self.get_raw_api_url()
-                    if api_key and api_url:
-                        async with httpx.AsyncClient(timeout=4.0, verify=False) as http_c:
-                            res = await http_c.request(
-                                "GET",
-                                f"{api_url}/getClient",
-                                json={"api_key": api_key, "idcliente": cid}
-                            )
-                            if res.status_code == 200:
-                                c_detail = res.json()
-                                if isinstance(c_detail, dict) and "servicios" in c_detail:
-                                    for srv in c_detail.get("servicios", []):
-                                        await self.upsert_client_service(c_detail, srv)
+                    async with get_db_connection() as db:
+                        # Pase 1: Todos los tokens del nombre
+                        clauses = " AND ".join(["normalized_name LIKE ?"] * len(tokens))
+                        params = [f"%{t}%" for t in tokens]
+                        c = await db.execute(f"SELECT client_id FROM iwisp_directory WHERE {clauses} LIMIT 5", tuple(params))
+                        rows_dir = await c.fetchall()
 
-                                    async with get_db_connection() as db:
-                                        c = await db.execute(
-                                            "SELECT * FROM iwisp_clients_cache WHERE client_id = ? OR service_id = ? OR onu_serial = ?",
-                                            (str(c_detail.get("id")), clean_srv_id, clean_serial)
-                                        )
-                                        row = await c.fetchone()
-                                        if row:
-                                            break
+                        # Pase 2: Si no hubo coincidencia y hay >= 2 tokens, probar con los dos primeros (apellidos principales)
+                        if not rows_dir and len(tokens) >= 2:
+                            clauses2 = "normalized_name LIKE ? AND normalized_name LIKE ?"
+                            params2 = (f"%{tokens[0]}%", f"%{tokens[1]}%")
+                            c = await db.execute(f"SELECT client_id FROM iwisp_directory WHERE {clauses2} LIMIT 5", params2)
+                            rows_dir = await c.fetchall()
+
+                        for r_dir in rows_dir:
+                            try:
+                                cid_val = int(r_dir["client_id"])
+                                if cid_val not in candidate_ids:
+                                    candidate_ids.append(cid_val)
+                            except ValueError:
+                                pass
                 except Exception as ex:
-                    logger.debug(f"Fallo en consulta en caliente a i-WISP para ID {cid}: {ex}")
+                    logger.debug(f"Error consultando iwisp_directory por tokens {tokens}: {ex}")
+
+            # 5b. Si tenemos ID de cliente numérico explícito
+            if clean_cli_id.isdigit():
+                cid_num = int(clean_cli_id)
+                if cid_num not in candidate_ids:
+                    candidate_ids.append(cid_num)
+
+            # 5c. Consultar en caliente a i-WISP para los candidatos identificados
+            if candidate_ids:
+                api_key = await self.get_raw_api_key()
+                api_url = await self.get_raw_api_url()
+                if api_key and api_url:
+                    for cid in candidate_ids[:4]:
+                        try:
+                            async with httpx.AsyncClient(timeout=4.0, verify=False) as http_c:
+                                res = await http_c.request(
+                                    "GET",
+                                    f"{api_url}/getClient",
+                                    json={"api_key": api_key, "idcliente": cid}
+                                )
+                                if res.status_code == 200:
+                                    c_detail = res.json()
+                                    if isinstance(c_detail, dict) and "servicios" in c_detail:
+                                        for srv in c_detail.get("servicios", []):
+                                            await self.upsert_client_service(c_detail, srv)
+
+                                        # Re-verificar en caché local
+                                        async with get_db_connection() as db:
+                                            # Prioridad 1: Serial ONT
+                                            if clean_serial:
+                                                c = await db.execute("SELECT * FROM iwisp_clients_cache WHERE onu_serial = ? OR onu_serial LIKE ?", (clean_serial, f"%{clean_serial[-8:]}%"))
+                                                row = await c.fetchone()
+                                            # Prioridad 2: Service ID
+                                            if not row and clean_srv_id:
+                                                c = await db.execute("SELECT * FROM iwisp_clients_cache WHERE service_id = ?", (clean_srv_id,))
+                                                row = await c.fetchone()
+                                            # Prioridad 3: Client ID
+                                            if not row:
+                                                c = await db.execute("SELECT * FROM iwisp_clients_cache WHERE client_id = ?", (str(cid),))
+                                                row = await c.fetchone()
+
+                                            if row:
+                                                break
+                        except Exception as ex:
+                            logger.debug(f"Fallo en consulta en caliente a i-WISP para ID {cid}: {ex}")
 
         if row:
             d = dict(row)
@@ -354,16 +409,16 @@ class IWispService:
 
     async def upsert_client_service(self, client_data: Dict[str, Any], service: Dict[str, Any]):
         """Inserta o actualiza un registro de servicio/ONT en la caché local."""
-        onu_serial = normalize_onu_serial(service.get("onu_numero_serie") or service.get("cpe_numero_serie"))
-        if not onu_serial:
-            return
+        raw_serial = service.get("onu_numero_serie") or service.get("cpe_numero_serie") or ""
+        onu_serial = normalize_onu_serial(raw_serial) if raw_serial else ""
 
         client_id = str(client_data.get("id", "")).strip()
         client_name = str(client_data.get("nombre", "")).strip()
         if not client_id or not client_name:
             return
 
-        cache_id = f"{client_id}_{onu_serial}"
+        service_id = str(service.get("id") or "")
+        cache_id = f"{client_id}_{service_id or onu_serial or 'srv'}"
         plan_id = str(service.get("plan") or "")
         plan_name = str(service.get("nombre") or "").strip()
         plan_cost = str(service.get("costo") or "").strip()
@@ -477,7 +532,33 @@ class IWispService:
 
         total_registered = len(clients_dict)
         clients_list = list(clients_dict.values())
-        logger.info(f"i-WISP reportó {total_registered} clientes únicos totales. Sincronizando detalles y servicios...")
+        logger.info(f"i-WISP reportó {total_registered} clientes únicos totales. Actualizando iwisp_directory...")
+
+        # Guardar inmediatamente todos los clientes en iwisp_directory para resolución ultrarrápida
+        dir_rows = []
+        for c in clients_list:
+            cid = str(c.get("id", "")).strip()
+            cname = str(c.get("nombre", "")).strip()
+            if cid and cname:
+                import unicodedata
+                norm_n = unicodedata.normalize('NFKD', cname).encode('ASCII', 'ignore').decode('utf-8').lower()
+                norm_n = re.sub(r'[^a-z0-9\s]', '', norm_n).strip()
+                dir_rows.append((cid, cname, norm_n, c.get("rfc", ""), c.get("ine", "")))
+
+        async with get_db_connection() as db:
+            await db.executemany("""
+                INSERT INTO iwisp_directory (client_id, client_name, normalized_name, rfc, ine, updated_at)
+                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(client_id) DO UPDATE SET
+                    client_name = excluded.client_name,
+                    normalized_name = excluded.normalized_name,
+                    rfc = excluded.rfc,
+                    ine = excluded.ine,
+                    updated_at = CURRENT_TIMESTAMP
+            """, dir_rows)
+            await db.commit()
+
+        logger.info(f"Directorio i-WISP actualizado con {len(dir_rows)} clientes. Sincronizando detalles y servicios...")
 
         synced_count = 0
         onus_count = 0
@@ -503,10 +584,8 @@ class IWispService:
                             c_detail = res.json()
                             if isinstance(c_detail, dict) and "servicios" in c_detail:
                                 for srv in c_detail.get("servicios", []):
-                                    serial = srv.get("onu_numero_serie") or srv.get("cpe_numero_serie")
-                                    if serial:
-                                        await self.upsert_client_service(c_detail, srv)
-                                        onus_count += 1
+                                    await self.upsert_client_service(c_detail, srv)
+                                    onus_count += 1
                                 synced_count += 1
                 except Exception as ex:
                     errors_count += 1

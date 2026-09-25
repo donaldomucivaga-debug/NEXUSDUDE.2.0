@@ -8192,6 +8192,22 @@ window.addEventListener('DOMContentLoaded', async () => {
   let currentDiagOnts = [];
   let currentDiagFilter = 'all';
   let currentDiagSearch = '';
+  let currentDiagSortCol = null;
+  let currentDiagSortDir = 'desc';
+
+  function handleDiagTableSort(col) {
+    if (currentDiagSortCol === col) {
+      currentDiagSortDir = currentDiagSortDir === 'asc' ? 'desc' : 'asc';
+    } else {
+      currentDiagSortCol = col;
+      if (col === 'consumed' || col === 'rx') {
+        currentDiagSortDir = 'desc';
+      } else {
+        currentDiagSortDir = 'asc';
+      }
+    }
+    renderDiagOntsTable();
+  }
 
   function renderDiagKpis(data) {
     const kpiTotal = document.getElementById('diag-kpi-total');
@@ -8239,6 +8255,22 @@ window.addEventListener('DOMContentLoaded', async () => {
 
   function renderDiagOntsTable() {
     if (!diagOntsTbody) return;
+
+    // Actualizar iconos e indicadores de ordenamiento en cabeceras
+    const sortHeaders = document.querySelectorAll('.diag-table th.sortable');
+    sortHeaders.forEach(th => {
+      const col = th.dataset.sort;
+      const icon = th.querySelector('.sort-icon');
+      th.classList.remove('sorted-asc', 'sorted-desc');
+      if (icon) icon.className = 'fas fa-sort sort-icon';
+
+      if (col === currentDiagSortCol) {
+        th.classList.add(currentDiagSortDir === 'asc' ? 'sorted-asc' : 'sorted-desc');
+        if (icon) {
+          icon.className = `fas fa-sort-${currentDiagSortDir === 'asc' ? 'up' : 'down'} sort-icon`;
+        }
+      }
+    });
 
     if (!currentDiagOnts || currentDiagOnts.length === 0) {
       diagOntsTbody.innerHTML = `<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 30px;">
@@ -8288,7 +8320,44 @@ window.addEventListener('DOMContentLoaded', async () => {
       return;
     }
 
-    diagOntsTbody.innerHTML = filtered.map(ont => {
+    // Ordenamiento dinámico según columna y dirección activa
+    let sorted = [...filtered];
+    if (currentDiagSortCol) {
+      sorted.sort((a, b) => {
+        let valA, valB;
+        if (currentDiagSortCol === 'ont_id') {
+          valA = Number(a.ont_id ?? 0);
+          valB = Number(b.ont_id ?? 0);
+        } else if (currentDiagSortCol === 'client_id') {
+          valA = Number(a.client_id) || 0;
+          valB = Number(b.client_id) || 0;
+        } else if (currentDiagSortCol === 'client_name') {
+          valA = (a.client_name || '').toLowerCase();
+          valB = (b.client_name || '').toLowerCase();
+        } else if (currentDiagSortCol === 'package') {
+          valA = (a.package_name || '').toLowerCase();
+          valB = (b.package_name || '').toLowerCase();
+        } else if (currentDiagSortCol === 'consumed') {
+          valA = Number(a.consumed_tb !== null && a.consumed_tb !== undefined ? a.consumed_tb : -1);
+          valB = Number(b.consumed_tb !== null && b.consumed_tb !== undefined ? b.consumed_tb : -1);
+        } else if (currentDiagSortCol === 'serial') {
+          valA = (a.serial || '').toLowerCase();
+          valB = (b.serial || '').toLowerCase();
+        } else if (currentDiagSortCol === 'rx') {
+          valA = (a.rx_power_dbm !== null && a.rx_power_dbm !== undefined) ? Number(a.rx_power_dbm) : -999;
+          valB = (b.rx_power_dbm !== null && b.rx_power_dbm !== undefined) ? Number(b.rx_power_dbm) : -999;
+        } else if (currentDiagSortCol === 'status') {
+          valA = (a.status || '') + (a.down_cause || '');
+          valB = (b.status || '') + (b.down_cause || '');
+        }
+
+        if (valA < valB) return currentDiagSortDir === 'asc' ? -1 : 1;
+        if (valA > valB) return currentDiagSortDir === 'asc' ? 1 : -1;
+        return 0;
+      });
+    }
+
+    diagOntsTbody.innerHTML = sorted.map(ont => {
       // Potencia óptica Rx
       let rxPowerHtml = '<span style="color: var(--text-muted); font-size: 0.78rem;">--</span>';
       if (ont.rx_power_dbm !== null && ont.rx_power_dbm !== undefined) {
@@ -8648,6 +8717,14 @@ window.addEventListener('DOMContentLoaded', async () => {
       btn.classList.add('btn-primary');
       currentDiagFilter = btn.dataset.filter || 'all';
       renderDiagOntsTable();
+    });
+  });
+
+  const diagSortHeaders = document.querySelectorAll('.diag-table th.sortable');
+  diagSortHeaders.forEach(th => {
+    th.addEventListener('click', () => {
+      const col = th.dataset.sort;
+      if (col) handleDiagTableSort(col);
     });
   });
 
