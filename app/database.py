@@ -245,12 +245,18 @@ async def init_db():
                 zone TEXT,
                 latitude REAL,
                 longitude REAL,
+                consumed_tb REAL DEFAULT 0.0,
                 raw_data TEXT,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         """)
+        try:
+            await db.execute("ALTER TABLE iwisp_clients_cache ADD COLUMN consumed_tb REAL DEFAULT 0.0;")
+        except Exception:
+            pass
         await db.execute("CREATE INDEX IF NOT EXISTS idx_iwisp_onu_serial ON iwisp_clients_cache(onu_serial);")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_iwisp_client_id ON iwisp_clients_cache(client_id);")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_iwisp_service_id ON iwisp_clients_cache(service_id);")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_iwisp_client_name ON iwisp_clients_cache(client_name);")
 
         # Tabla de Credenciales y Comunidades SNMP personalizadas por OLT

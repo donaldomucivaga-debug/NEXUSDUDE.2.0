@@ -8241,7 +8241,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     if (!diagOntsTbody) return;
 
     if (!currentDiagOnts || currentDiagOnts.length === 0) {
-      diagOntsTbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 30px;">
+      diagOntsTbody.innerHTML = `<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 30px;">
         No hay ONTs registradas en este puerto GPON.
       </td></tr>`;
       return;
@@ -8269,6 +8269,8 @@ window.addEventListener('DOMContentLoaded', async () => {
           ont.client_id || '',
           ont.serial || '',
           ont.package_name || '',
+          ont.consumed_fmt || '',
+          String(ont.consumed_tb || ''),
           ont.down_cause || '',
           String(ont.ont_id || '')
         ].join(' ').toLowerCase();
@@ -8280,7 +8282,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     });
 
     if (filtered.length === 0) {
-      diagOntsTbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 30px;">
+      diagOntsTbody.innerHTML = `<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 30px;">
         No se encontraron ONTs que coincidan con los filtros aplicados.
       </td></tr>`;
       return;
@@ -8306,7 +8308,7 @@ window.addEventListener('DOMContentLoaded', async () => {
         if (ont.is_atypical) {
           statusHtml = '<span class="band-tag" style="background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3);">🟢 Online Atenuado</span>';
         } else {
-          statusHtml = '<span class="band-tag" style="background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3);">🟢 Online Óptimo</span>';
+          statusHtml = '<span class="band-tag" style="background: rgba(160, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3);">🟢 Online Óptimo</span>';
         }
       } else {
         const isDg = ont.down_cause_code === 1 || (ont.down_cause || '').toLowerCase().includes('dying');
@@ -8327,15 +8329,33 @@ window.addEventListener('DOMContentLoaded', async () => {
 
       // Nombre del Cliente
       const clientName = ont.client_name || 'Sin identificar';
-      const iwispBadge = ont.is_from_iwisp
+      const iwispBadge = (ont.is_from_iwisp || ont.is_iwisp_matched)
         ? '<span title="Enlazado con base de datos i-WISP" style="margin-left: 6px; font-size: 0.65rem; background: rgba(168, 85, 247, 0.2); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.4); padding: 1px 4px; border-radius: 3px;">i-WISP</span>'
         : '<span title="Leído de descripción SNMP OLT" style="margin-left: 6px; font-size: 0.65rem; background: rgba(100, 116, 139, 0.2); color: #94a3b8; border: 1px solid rgba(100, 116, 139, 0.4); padding: 1px 4px; border-radius: 3px;">OLT</span>';
 
       // Paquete Contratado
       let packageHtml = '<span style="color: var(--text-muted); font-size: 0.74rem;">--</span>';
       if (ont.package_name) {
-        const costStr = (ont.package_cost !== null && ont.package_cost !== undefined) ? ` <span style="color: #34d399; font-weight: 600;">($${ont.package_cost})</span>` : '';
-        packageHtml = `<span style="font-size: 0.76rem; color: #f1f5f9;">${ont.package_name}${costStr}</span>`;
+        const costStr = (ont.package_cost !== null && ont.package_cost !== undefined && ont.package_cost !== '') ? ` <span style="color: #34d399; font-weight: 600;">($${ont.package_cost})</span>` : '';
+        packageHtml = `<span style="font-size: 0.76rem; color: #f1f5f9; display: inline-flex; align-items: center; gap: 4px;"><i class="fas fa-box" style="font-size: 0.68rem; color: #a855f7;"></i>${ont.package_name}${costStr}</span>`;
+      }
+
+      // Consumo (TB)
+      let consumedHtml = '<span style="color: var(--text-muted); font-size: 0.76rem;">--</span>';
+      if (ont.is_online && ont.consumed_tb !== null && ont.consumed_tb !== undefined && Number(ont.consumed_tb) > 0) {
+        const tb = Number(ont.consumed_tb);
+        let badgeStyle = 'background: rgba(56, 189, 248, 0.12); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3);';
+        let iconColor = '#38bdf8';
+        if (tb >= 2.0) {
+          badgeStyle = 'background: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.35); font-weight: 700;';
+          iconColor = '#ef4444';
+        } else if (tb >= 1.0) {
+          badgeStyle = 'background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); font-weight: 600;';
+          iconColor = '#fbbf24';
+        }
+        consumedHtml = `<span style="font-family: monospace; font-size: 0.76rem; padding: 2px 7px; border-radius: 4px; display: inline-flex; align-items: center; gap: 4px; ${badgeStyle}" title="Tráfico acumulado: ${tb.toFixed(2)} TB"><i class="fas fa-chart-line" style="font-size: 0.68rem; color: ${iconColor};"></i>${tb.toFixed(2)} TB</span>`;
+      } else if (ont.consumed_fmt && ont.consumed_fmt !== '--') {
+        consumedHtml = `<span style="font-family: monospace; font-size: 0.76rem; color: #94a3b8;">${ont.consumed_fmt}</span>`;
       }
 
       return `
@@ -8349,6 +8369,7 @@ window.addEventListener('DOMContentLoaded', async () => {
             </div>
           </td>
           <td>${packageHtml}</td>
+          <td>${consumedHtml}</td>
           <td>
             <span style="font-family: monospace; font-size: 0.75rem; background: rgba(15, 23, 42, 0.5); padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border-color); color: #38bdf8;">
               ${ont.serial || '--'}
@@ -8413,7 +8434,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     }
 
     if (diagOntsTbody) {
-      diagOntsTbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 30px;">
+      diagOntsTbody.innerHTML = `<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 30px;">
         <i class="fas fa-spinner fa-spin" style="font-size: 1.5rem; color: #38bdf8; margin-bottom: 8px; display: block;"></i>
         Consultando telemetría SNMP en vivo de <strong>${portName}</strong>...
       </td></tr>`;
@@ -8438,7 +8459,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     } catch (err) {
       console.error('Error cargando ONTs detalladas:', err);
       if (diagOntsTbody) {
-        diagOntsTbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: #ef4444; padding: 30px;">
+        diagOntsTbody.innerHTML = `<tr><td colspan="8" style="text-align: center; color: #ef4444; padding: 30px;">
           <i class="fas fa-exclamation-triangle" style="font-size: 1.5rem; margin-bottom: 8px; display: block;"></i>
           Error consultando SNMP de la OLT: ${err.message}
         </td></tr>`;
@@ -8499,7 +8520,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     }
 
     if (diagOntsTbody) {
-      diagOntsTbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 30px;">Cargando puertos GPON de la OLT...</td></tr>';
+      diagOntsTbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 30px;">Cargando puertos GPON de la OLT...</td></tr>';
     }
     if (diagPortsScroll) {
       diagPortsScroll.innerHTML = '<div style="color: var(--text-muted); font-size: 0.78rem; padding: 10px;"><i class="fas fa-spinner fa-spin"></i> Obteniendo puertos GPON...</div>';
@@ -8510,7 +8531,7 @@ window.addEventListener('DOMContentLoaded', async () => {
       currentDiagPorts = ports || [];
       if (currentDiagPorts.length === 0) {
         if (diagPortsScroll) diagPortsScroll.innerHTML = '<div style="color: var(--text-muted); font-size: 0.78rem; padding: 10px;">No se encontraron puertos GPON para esta OLT.</div>';
-        if (diagOntsTbody) diagOntsTbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 30px;">Esta OLT no tiene puertos GPON descubiertos en Zabbix.</td></tr>';
+        if (diagOntsTbody) diagOntsTbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 30px;">Esta OLT no tiene puertos GPON descubiertos en Zabbix.</td></tr>';
         return;
       }
 
@@ -8542,7 +8563,7 @@ window.addEventListener('DOMContentLoaded', async () => {
       diagPortsScroll.innerHTML = '<div style="color: var(--text-muted); font-size: 0.78rem; padding: 10px;"><i class="fas fa-spinner fa-spin"></i> Cargando OLTs desde Zabbix...</div>';
     }
     if (diagOntsTbody) {
-      diagOntsTbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 30px;">Selecciona una OLT y un puerto GPON para ver la telemetría en tiempo real.</td></tr>';
+      diagOntsTbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 30px;">Selecciona una OLT y un puerto GPON para ver la telemetría en tiempo real.</td></tr>';
     }
 
     try {

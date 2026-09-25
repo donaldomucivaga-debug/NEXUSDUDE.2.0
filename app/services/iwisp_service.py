@@ -234,27 +234,96 @@ class IWispService:
             "last_update": last_update
         }
 
-    async def get_client_by_serial(self, onu_serial: str) -> Optional[Dict[str, Any]]:
+    async def get_client_info(
+        self,
+        onu_serial: Optional[str] = None,
+        service_id: Optional[str] = None,
+        client_id: Optional[str] = None,
+        client_name: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
         """
-        Busca un cliente en la caché local por número de serie de ONT (normalizado).
-        Retorna la ficha del cliente y su paquete contratado en <0.5ms.
+        Busca un cliente en la caché local por múltiples criterios complementarios:
+        1. Serial ONT normalizado (exacto o sufijo de 8 caracteres).
+        2. ID de servicio de i-WISP (service_id).
+        3. ID de cliente de i-WISP (client_id).
+        4. Nombre del cliente (client_name exacto o parcial).
+        Si no se encuentra y se dispone de un ID numérico, intenta consulta en caliente contra i-WISP.
         """
-        if not onu_serial:
-            return None
+        clean_serial = normalize_onu_serial(onu_serial) if onu_serial else ""
+        clean_srv_id = str(service_id).strip() if service_id else ""
+        clean_cli_id = str(client_id).strip() if client_id else ""
+        clean_name = str(client_name).strip() if client_name else ""
 
-        clean_serial = normalize_onu_serial(onu_serial)
-        if not clean_serial:
-            return None
-
+        row = None
         async with get_db_connection() as db:
-            # Búsqueda exacta
-            c = await db.execute("SELECT * FROM iwisp_clients_cache WHERE onu_serial = ?", (clean_serial,))
-            row = await c.fetchone()
-            
-            # Si no hay match exacto, probar con LIKE para variantes con o sin prefijo
-            if not row and len(clean_serial) >= 8:
-                c = await db.execute("SELECT * FROM iwisp_clients_cache WHERE onu_serial LIKE ?", (f"%{clean_serial[-8:]}%",))
+            # 1. Búsqueda por número de serie
+            if clean_serial:
+                c = await db.execute("SELECT * FROM iwisp_clients_cache WHERE onu_serial = ?", (clean_serial,))
                 row = await c.fetchone()
+                if not row and len(clean_serial) >= 8:
+                    c = await db.execute("SELECT * FROM iwisp_clients_cache WHERE onu_serial LIKE ?", (f"%{clean_serial[-8:]}%",))
+                    row = await c.fetchone()
+
+            # 2. Búsqueda por service_id
+            if not row and clean_srv_id:
+                c = await db.execute("SELECT * FROM iwisp_clients_cache WHERE service_id = ?", (clean_srv_id,))
+                row = await c.fetchone()
+
+            # 3. Búsqueda por client_id
+            if not row and clean_cli_id:
+                c = await db.execute("SELECT * FROM iwisp_clients_cache WHERE client_id = ?", (clean_cli_id,))
+                row = await c.fetchone()
+
+            # 4. Búsqueda por nombre de cliente
+            if not row and clean_name and len(clean_name) >= 4:
+                # Intento 1: LIKE con el nombre completo
+                c = await db.execute("SELECT * FROM iwisp_clients_cache WHERE client_name LIKE ?", (f"%{clean_name}%",))
+                row = await c.fetchone()
+
+                # Intento 2: Palabras clave si el orden apellidos/nombres difiere
+                if not row:
+                    words = [w for w in re.split(r'\s+', clean_name) if len(w) >= 4]
+                    if len(words) >= 2:
+                        query = "SELECT * FROM iwisp_clients_cache WHERE " + " AND ".join(["client_name LIKE ?"] * len(words))
+                        params = [f"%{w}%" for w in words]
+                        c = await db.execute(query, tuple(params))
+                        row = await c.fetchone()
+
+        # 5. Consulta en caliente a la API de i-WISP si no hubo coincidencia en caché local
+        if not row and (clean_srv_id.isdigit() or clean_cli_id.isdigit()):
+            candidate_ids = []
+            if clean_cli_id.isdigit():
+                candidate_ids.append(int(clean_cli_id))
+            if clean_srv_id.isdigit() and int(clean_srv_id) not in candidate_ids:
+                candidate_ids.append(int(clean_srv_id))
+
+            for cid in candidate_ids:
+                try:
+                    api_key = await self.get_raw_api_key()
+                    api_url = await self.get_raw_api_url()
+                    if api_key and api_url:
+                        async with httpx.AsyncClient(timeout=4.0, verify=False) as http_c:
+                            res = await http_c.request(
+                                "GET",
+                                f"{api_url}/getClient",
+                                json={"api_key": api_key, "idcliente": cid}
+                            )
+                            if res.status_code == 200:
+                                c_detail = res.json()
+                                if isinstance(c_detail, dict) and "servicios" in c_detail:
+                                    for srv in c_detail.get("servicios", []):
+                                        await self.upsert_client_service(c_detail, srv)
+
+                                    async with get_db_connection() as db:
+                                        c = await db.execute(
+                                            "SELECT * FROM iwisp_clients_cache WHERE client_id = ? OR service_id = ? OR onu_serial = ?",
+                                            (str(c_detail.get("id")), clean_srv_id, clean_serial)
+                                        )
+                                        row = await c.fetchone()
+                                        if row:
+                                            break
+                except Exception as ex:
+                    logger.debug(f"Fallo en consulta en caliente a i-WISP para ID {cid}: {ex}")
 
         if row:
             d = dict(row)
@@ -265,17 +334,23 @@ class IWispService:
                 "onu_mac": d.get("onu_mac"),
                 "onu_model": d.get("onu_model"),
                 "onu_brand": d.get("onu_brand"),
+                "service_id": d.get("service_id"),
                 "plan_id": d.get("plan_id"),
                 "plan_name": d.get("plan_name") or "Plan Estándar",
                 "plan_cost": d.get("plan_cost") or "",
-                "status": d.get("client_status") or "activo",
+                "status": d.get("client_status") or "Activo",
                 "locality": d.get("locality"),
                 "zone": d.get("zone"),
                 "address": d.get("address"),
                 "latitude": d.get("latitude"),
-                "longitude": d.get("longitude")
+                "longitude": d.get("longitude"),
+                "consumed_tb": d.get("consumed_tb")
             }
         return None
+
+    async def get_client_by_serial(self, onu_serial: str) -> Optional[Dict[str, Any]]:
+        """Busca un cliente en la caché local por número de serie de ONT."""
+        return await self.get_client_info(onu_serial=onu_serial)
 
     async def upsert_client_service(self, client_data: Dict[str, Any], service: Dict[str, Any]):
         """Inserta o actualiza un registro de servicio/ONT en la caché local."""
@@ -295,6 +370,14 @@ class IWispService:
         service_id = str(service.get("id") or "")
         service_type = str(service.get("tipo") or "F")
 
+        consumed_tb = 0.0
+        try:
+            raw_c = service.get("consumo_tb") or service.get("consumed_tb")
+            if raw_c:
+                consumed_tb = float(raw_c)
+        except Exception:
+            pass
+
         lat = None
         lon = None
         try:
@@ -310,8 +393,8 @@ class IWispService:
                 INSERT INTO iwisp_clients_cache (
                     id, client_id, client_name, onu_serial, onu_mac, onu_model, onu_brand,
                     service_id, service_type, plan_id, plan_name, plan_cost, client_status,
-                    address, locality, zone, latitude, longitude, raw_data, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    address, locality, zone, latitude, longitude, consumed_tb, raw_data, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 ON CONFLICT(id) DO UPDATE SET
                     client_name = excluded.client_name,
                     onu_mac = excluded.onu_mac,
@@ -325,6 +408,7 @@ class IWispService:
                     zone = excluded.zone,
                     latitude = excluded.latitude,
                     longitude = excluded.longitude,
+                    consumed_tb = CASE WHEN excluded.consumed_tb > 0 THEN excluded.consumed_tb ELSE iwisp_clients_cache.consumed_tb END,
                     raw_data = excluded.raw_data,
                     updated_at = CURRENT_TIMESTAMP
             """, (
@@ -337,16 +421,14 @@ class IWispService:
                 service.get("direccion") or client_data.get("direccion") or "",
                 service.get("localidad") or client_data.get("localidad") or "",
                 client_data.get("zona") or "",
-                lat, lon, json.dumps({"client": client_data, "service": service})
+                lat, lon, consumed_tb, json.dumps({"client": client_data, "service": service})
             ))
             await db.commit()
 
     async def sync_clients_from_iwisp(self, batch_size: int = 50) -> Dict[str, Any]:
         """
-        Sincroniza el inventario de clientes y sus ONTs desde la API de i-WISP Manager.
-        1. Consulta la lista de clientes registrados (/getClientDateReg).
-        2. Para cada cliente, consulta sus servicios técnicos (/getClient).
-        3. Persiste y actualiza en la base de datos local SQLite.
+        Sincroniza el inventario completo de clientes y sus ONTs desde la API de i-WISP Manager.
+        Particiona la consulta por ventanas de fecha para evitar la truncación del límite de 2000 registros de i-WISP.
         """
         api_key = await self.get_raw_api_key()
         api_url = await self.get_raw_api_url()
@@ -355,40 +437,53 @@ class IWispService:
             raise ValueError("No se ha configurado la API Key de i-WISP Manager. Por favor ingrésela en Configuración.")
 
         start_time = time.time()
-        logger.info(f"Iniciando sincronización de clientes desde i-WISP ({api_url})...")
+        logger.info(f"Iniciando sincronización completa de clientes desde i-WISP ({api_url})...")
 
-        # 1. Obtener lista de clientes con /getClientDateReg
-        clients_list = []
-        async with httpx.AsyncClient(timeout=25.0, verify=False) as client:
-            try:
-                res = await client.request(
-                    "GET",
-                    f"{api_url}/getClientDateReg",
-                    json={
-                        "api_key": api_key,
-                        "fecha_desde": "2000-01-01",
-                        "fecha_hasta": "2099-12-31"
-                    }
-                )
-                if res.status_code == 200:
-                    raw = res.json()
-                    if isinstance(raw, list):
-                        clients_list = raw
-                else:
-                    raise ValueError(f"i-WISP respondió con código {res.status_code}: {res.text[:200]}")
-            except Exception as e:
-                logger.error(f"Error consultando /getClientDateReg en i-WISP: {e}")
-                raise
+        # Ventanas de fecha particionadas para no exceder los 2000 registros por llamada
+        date_ranges = [
+            ("2017-01-01", "2019-12-31"),
+            ("2020-01-01", "2021-12-31"),
+            ("2022-01-01", "2022-12-31"),
+            ("2023-01-01", "2023-12-31"),
+            ("2024-01-01", "2024-06-30"),
+            ("2024-07-01", "2024-09-30"),
+            ("2024-10-01", "2024-12-31"),
+            ("2025-01-01", "2025-06-30"),
+            ("2025-07-01", "2025-12-31"),
+            ("2026-01-01", "2026-12-31"),
+        ]
 
-        total_registered = len(clients_list)
-        logger.info(f"i-WISP reportó {total_registered} clientes registrados. Consultando detalles de ONTs...")
+        clients_dict: Dict[str, Dict[str, Any]] = {}
+        async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
+            for f_from, f_to in date_ranges:
+                try:
+                    res = await client.request(
+                        "GET",
+                        f"{api_url}/getClientDateReg",
+                        json={
+                            "api_key": api_key,
+                            "fecha_desde": f_from,
+                            "fecha_hasta": f_to
+                        }
+                    )
+                    if res.status_code == 200:
+                        raw = res.json()
+                        if isinstance(raw, list):
+                            for c in raw:
+                                if c.get("id"):
+                                    clients_dict[str(c["id"])] = c
+                except Exception as e:
+                    logger.warning(f"Error consultando intervalo {f_from} a {f_to} en i-WISP: {e}")
+
+        total_registered = len(clients_dict)
+        clients_list = list(clients_dict.values())
+        logger.info(f"i-WISP reportó {total_registered} clientes únicos totales. Sincronizando detalles y servicios...")
 
         synced_count = 0
         onus_count = 0
         errors_count = 0
 
-        # Procesar en bloques concurrentes pequeños para no saturar la API
-        semaphore = asyncio.Semaphore(10)
+        semaphore = asyncio.Semaphore(20)
 
         async def fetch_client_detail(client_item: Dict[str, Any]):
             nonlocal synced_count, onus_count, errors_count
@@ -417,7 +512,6 @@ class IWispService:
                     errors_count += 1
                     logger.debug(f"Error obteniendo detalle para cliente {c_id}: {ex}")
 
-        # Ejecutar tareas concurrentes
         tasks = [fetch_client_detail(c) for c in clients_list]
         await asyncio.gather(*tasks, return_exceptions=True)
 
