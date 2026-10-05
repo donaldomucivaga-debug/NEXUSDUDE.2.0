@@ -8030,9 +8030,8 @@ window.addEventListener('DOMContentLoaded', async () => {
 
   // Campos Zabbix
   const inputZabbixUrl = document.getElementById('input-zabbix-url');
-  const inputZabbixUser = document.getElementById('input-zabbix-user');
-  const inputZabbixPass = document.getElementById('input-zabbix-pass');
-  const btnToggleZabbixPassVis = document.getElementById('btn-toggle-zabbix-pass-vis');
+  const inputZabbixToken = document.getElementById('input-zabbix-token');
+  const btnToggleZabbixTokenVis = document.getElementById('btn-toggle-zabbix-token-vis');
   const btnTestZabbixConn = document.getElementById('btn-test-zabbix-conn');
   const alertZabbixMsg = document.getElementById('zabbix-msg-alert');
   const badgeZabbixStatus = document.getElementById('badge-zabbix-status');
@@ -8111,11 +8110,11 @@ window.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  if (btnToggleZabbixPassVis && inputZabbixPass) {
-    btnToggleZabbixPassVis.addEventListener('click', () => {
-      const isPass = inputZabbixPass.type === 'password';
-      inputZabbixPass.type = isPass ? 'text' : 'password';
-      const icon = btnToggleZabbixPassVis.querySelector('i');
+  if (btnToggleZabbixTokenVis && inputZabbixToken) {
+    btnToggleZabbixTokenVis.addEventListener('click', () => {
+      const isPass = inputZabbixToken.type === 'password';
+      inputZabbixToken.type = isPass ? 'text' : 'password';
+      const icon = btnToggleZabbixTokenVis.querySelector('i');
       if (icon) icon.className = isPass ? 'fas fa-eye-slash' : 'fas fa-eye';
     });
   }
@@ -8136,11 +8135,10 @@ window.addEventListener('DOMContentLoaded', async () => {
         if (inputNetboxToken && data.netbox.token) inputNetboxToken.value = data.netbox.token;
       }
 
-      // Zabbix: IP y Credenciales API
+      // Zabbix: IP y API Token
       if (data.zabbix) {
         if (inputZabbixUrl && data.zabbix.url) inputZabbixUrl.value = data.zabbix.url;
-        if (inputZabbixUser && data.zabbix.user) inputZabbixUser.value = data.zabbix.user;
-        if (inputZabbixPass && data.zabbix.pass) inputZabbixPass.value = data.zabbix.pass;
+        if (inputZabbixToken && data.zabbix.token) inputZabbixToken.value = data.zabbix.token;
       }
     } catch (err) {
       console.error('Error cargando configuraciones de integraciones:', err);
@@ -8209,14 +8207,13 @@ window.addEventListener('DOMContentLoaded', async () => {
   if (btnTestZabbixConn) {
     btnTestZabbixConn.addEventListener('click', async () => {
       const url = inputZabbixUrl ? inputZabbixUrl.value.trim() : '';
-      const user = inputZabbixUser ? inputZabbixUser.value.trim() : '';
-      const pass = inputZabbixPass ? inputZabbixPass.value : '';
+      const token = inputZabbixToken ? inputZabbixToken.value.trim() : '';
 
       btnTestZabbixConn.disabled = true;
       btnTestZabbixConn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Conectando...';
 
       try {
-        const res = await API.testZabbixConnection({ url, user, pass });
+        const res = await API.testZabbixConnection({ url, token });
         if (res.success) {
           showPanelAlert(alertZabbixMsg, '✅ ' + res.message, 'success');
           if (badgeZabbixStatus) {
@@ -8250,8 +8247,7 @@ window.addEventListener('DOMContentLoaded', async () => {
 
         const zabbixPayload = {
           url: inputZabbixUrl ? inputZabbixUrl.value.trim() : '',
-          user: inputZabbixUser ? inputZabbixUser.value.trim() : '',
-          pass: inputZabbixPass ? inputZabbixPass.value : ''
+          token: inputZabbixToken ? inputZabbixToken.value.trim() : ''
         };
 
         const [resNetbox, resZabbix] = await Promise.all([

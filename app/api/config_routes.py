@@ -57,13 +57,11 @@ class NetboxTestPayload(BaseModel):
 
 class ZabbixConfigPayload(BaseModel):
     url: Optional[str] = None
-    user: Optional[str] = None
-    pass_: Optional[str] = Field(None, alias="pass")
+    token: Optional[str] = None
 
 class ZabbixTestPayload(BaseModel):
     url: Optional[str] = None
-    user: Optional[str] = None
-    pass_: Optional[str] = Field(None, alias="pass")
+    token: Optional[str] = None
 
 class IWispConfigPayload(BaseModel):
     api_key: Optional[str] = None
@@ -85,8 +83,7 @@ async def get_integrations_config(user: Dict[str, Any] = Depends(get_current_use
             },
             "zabbix": {
                 "url": settings.ZABBIX_URL,
-                "user": settings.ZABBIX_USER,
-                "pass": settings.ZABBIX_PASS
+                "token": getattr(settings, "ZABBIX_TOKEN", "")
             }
         }
     except Exception as e:
@@ -194,15 +191,14 @@ async def test_zabbix_connection(
     payload: Optional[ZabbixTestPayload] = None,
     user: Dict[str, Any] = Depends(get_current_user)
 ):
-    """Prueba la conectividad y credenciales contra la API JSON-RPC de Zabbix."""
+    """Prueba la conectividad y validez del API Token contra la API JSON-RPC de Zabbix."""
     target_url = (payload.url.strip() if payload and payload.url else settings.ZABBIX_URL).rstrip('/')
-    target_user = payload.user.strip() if payload and payload.user else settings.ZABBIX_USER
-    target_pass = payload.pass_ if payload and payload.pass_ is not None else settings.ZABBIX_PASS
+    target_token = payload.token.strip() if payload and payload.token else getattr(settings, "ZABBIX_TOKEN", "")
 
     if not target_url:
         return {"success": False, "message": "Por favor especifica la URL de Zabbix."}
-    if not target_user:
-        return {"success": False, "message": "Por favor especifica el Usuario de Zabbix."}
+    if not target_token:
+        return {"success": False, "message": "Por favor especifica el API Token de Zabbix."}
 
     api_url = f"{target_url}/api_jsonrpc.php"
 
@@ -223,32 +219,32 @@ async def test_zabbix_connection(
             ver_data = ver_res.json()
             version = ver_data.get("result", "7.0")
 
-            # 2. Autenticar usuario
-            login_res = await client.post(api_url, json={
-                "jsonrpc": "2.0",
-                "method": "user.login",
-                "params": {"username": target_user, "password": target_pass},
-                "id": 2
-            })
-            login_data = login_res.json()
-            if "error" in login_data:
-                err = login_data["error"]
-                detail = err.get("data") or err.get("message") or "Credenciales no válidas"
+            # 2. Validar autenticación con el API Token
+            test_res = await client.post(
+                api_url,
+                headers={"Authorization": f"Bearer {target_token}"},
+                json={
+                    "jsonrpc": "2.0",
+                    "method": "host.get",
+                    "params": {"countOutput": True},
+                    "auth": target_token,
+                    "id": 2
+                }
+            )
+            test_data = test_res.json()
+            if "error" in test_data:
+                err = test_data["error"]
+                detail = err.get("data") or err.get("message") or "Token inválido"
                 return {
                     "success": False,
-                    "message": f"Zabbix v{version}: Falló la autenticación ({detail})."
+                    "message": f"Zabbix v{version}: Falló la autenticación con el Token ({detail})."
                 }
 
-            auth_token = login_data.get("result")
-            if auth_token:
-                return {
-                    "success": True,
-                    "version": version,
-                    "message": f"Conexión y autenticación exitosa con Zabbix v{version} (Usuario: {target_user})."
-                }
+            host_count = test_data.get("result", 0)
             return {
-                "success": False,
-                "message": "Respuesta inesperada al autenticar en Zabbix."
+                "success": True,
+                "version": version,
+                "message": f"Conexión y autenticación exitosa con Zabbix v{version} (Total hosts: {host_count})."
             }
         except httpx.ConnectTimeout:
             return {
@@ -266,7 +262,7 @@ async def save_zabbix_config(
     payload: ZabbixConfigPayload,
     user: Dict[str, Any] = Depends(get_current_user)
 ):
-    """Guarda la configuración de IP y API de Zabbix."""
+    """Guarda la configuración de IP y API Token de Zabbix."""
     try:
         env_updates = {}
         if payload.url is not None:
@@ -275,16 +271,11 @@ async def save_zabbix_config(
             settings.ZABBIX_URL = clean_url
             env_updates["ZABBIX_URL"] = clean_url
 
-        if payload.user is not None:
-            clean_user = payload.user.strip()
-            await set_system_config("zabbix_user", clean_user, "Usuario API Zabbix")
-            settings.ZABBIX_USER = clean_user
-            env_updates["ZABBIX_USER"] = clean_user
-
-        if payload.pass_ is not None and payload.pass_:
-            await set_system_config("zabbix_pass", payload.pass_, "Contraseña / Token API Zabbix")
-            settings.ZABBIX_PASS = payload.pass_
-            env_updates["ZABBIX_PASS"] = payload.pass_
+        if payload.token is not None and payload.token.strip():
+            clean_token = payload.token.strip()
+            await set_system_config("zabbix_token", clean_token, "Token API de Zabbix")
+            settings.ZABBIX_TOKEN = clean_token
+            env_updates["ZABBIX_TOKEN"] = clean_token
 
         if env_updates:
             update_env_file(env_updates)
@@ -294,13 +285,14 @@ async def save_zabbix_config(
             from app.services.zabbix_service import zabbix_service
             zabbix_service.base_url = settings.ZABBIX_URL.rstrip('/')
             zabbix_service.api_url = f"{zabbix_service.base_url}/api_jsonrpc.php"
-            zabbix_service.auth_token = None
+            if payload.token and payload.token.strip():
+                zabbix_service.auth_token = payload.token.strip()
         except Exception:
             pass
 
         return {
             "success": True,
-            "message": "Configuración de Zabbix guardada y aplicada exitosamente."
+            "message": "Configuración de IP y API Token de Zabbix guardada y aplicada exitosamente."
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error guardando configuración de Zabbix: {str(e)}")

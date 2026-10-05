@@ -21,7 +21,8 @@ class Settings(BaseSettings):
     NETBOX_TOKEN: str = "49oUJOzZDVDrtNu32fYUU2YAbsaklSsB0haEIdP6"
     
     # Zabbix
-    ZABBIX_URL: str = "https://10.9.8.5:8082"
+    ZABBIX_URL: str = "https://10.9.1.7:8082"
+    ZABBIX_TOKEN: str = "30c4fe2150817b9985106157674f28f5ce635337ec251822959583489d05c666"
     ZABBIX_USER: str = "Admin"
     ZABBIX_PASS: str = "zabbix"
 

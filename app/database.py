@@ -332,16 +332,13 @@ async def load_system_config_into_settings():
                 from app.services.zabbix_service import zabbix_service
                 zabbix_service.base_url = settings.ZABBIX_URL.rstrip('/')
                 zabbix_service.api_url = f"{zabbix_service.base_url}/api_jsonrpc.php"
-                zabbix_service.auth_token = None
             except Exception:
                 pass
-        if "zabbix_user" in cfg and cfg["zabbix_user"]:
-            settings.ZABBIX_USER = cfg["zabbix_user"]
-        if "zabbix_pass" in cfg and cfg["zabbix_pass"]:
-            settings.ZABBIX_PASS = cfg["zabbix_pass"]
+        if "zabbix_token" in cfg and cfg["zabbix_token"]:
+            settings.ZABBIX_TOKEN = cfg["zabbix_token"]
             try:
                 from app.services.zabbix_service import zabbix_service
-                zabbix_service.auth_token = None
+                zabbix_service.auth_token = settings.ZABBIX_TOKEN
             except Exception:
                 pass
         logger.info("Configuraciones dinámicas del sistema cargadas desde SQLite a memoria.")

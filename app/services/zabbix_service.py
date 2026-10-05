@@ -51,7 +51,7 @@ class ZabbixService:
     def __init__(self):
         self.base_url = settings.ZABBIX_URL.rstrip('/')
         self.api_url = f"{self.base_url}/api_jsonrpc.php"
-        self.auth_token: Optional[str] = None
+        self.auth_token: Optional[str] = getattr(settings, 'ZABBIX_TOKEN', None) or None
         self._host_cache_by_name: Dict[str, Dict[str, Any]] = {}
         self._host_cache_by_ip: Dict[str, Dict[str, Any]] = {}
         self._cache_timestamp: float = 0
@@ -67,12 +67,14 @@ class ZabbixService:
             "params": params if params is not None else {},
             "id": 1
         }
+        headers = {}
         if auth and self.auth_token:
             payload["auth"] = self.auth_token
+            headers["Authorization"] = f"Bearer {self.auth_token}"
 
         async with httpx.AsyncClient(verify=False, timeout=10.0) as client:
             try:
-                res = await client.post(self.api_url, json=payload)
+                res = await client.post(self.api_url, json=payload, headers=headers)
                 res.raise_for_status()
                 data = res.json()
             except Exception as e:
@@ -81,12 +83,14 @@ class ZabbixService:
 
             if "error" in data:
                 err = data["error"]
-                # Si el token expiró o no es válido, intentar re-login una vez
+                # Si el token expiró o no es válido y existen credenciales de fallback, intentar re-login una vez
                 if auth and err.get("code") in (-32602, -32500) and "Session terminated" in err.get("data", ""):
                     logger.info("Sesión Zabbix expirada. Renovando token...")
                     await self.login()
-                    payload["auth"] = self.auth_token
-                    res = await client.post(self.api_url, json=payload)
+                    if self.auth_token:
+                        payload["auth"] = self.auth_token
+                        headers["Authorization"] = f"Bearer {self.auth_token}"
+                    res = await client.post(self.api_url, json=payload, headers=headers)
                     data = res.json()
                     if "error" in data:
                         raise Exception(f"Zabbix API Error ({method}): {data['error']}")
@@ -96,17 +100,23 @@ class ZabbixService:
             return data.get("result")
 
     async def login(self) -> str:
-        """Inicia sesión en Zabbix y guarda el token de autorización."""
-        res = await self._call_api("user.login", {
-            "username": settings.ZABBIX_USER,
-            "password": settings.ZABBIX_PASS
-        }, auth=False)
-
-        if isinstance(res, str):
-            self.auth_token = res
-            logger.info("Autenticación con Zabbix 7.0 exitosa.")
+        """Obtiene o valida el token de autorización de Zabbix."""
+        if getattr(settings, 'ZABBIX_TOKEN', None):
+            self.auth_token = settings.ZABBIX_TOKEN
             return self.auth_token
-        raise Exception("Respuesta inesperada al autenticar en Zabbix")
+
+        if getattr(settings, 'ZABBIX_USER', None) and getattr(settings, 'ZABBIX_PASS', None):
+            res = await self._call_api("user.login", {
+                "username": settings.ZABBIX_USER,
+                "password": settings.ZABBIX_PASS
+            }, auth=False)
+
+            if isinstance(res, str):
+                self.auth_token = res
+                logger.info("Autenticación con Zabbix 7.0 exitosa mediante credenciales.")
+                return self.auth_token
+
+        raise Exception("No se ha configurado un API Token válido para Zabbix.")
 
     async def get_status(self) -> Dict[str, Any]:
         """Obtiene el estado de conexión con Zabbix y conteo de servicios."""
