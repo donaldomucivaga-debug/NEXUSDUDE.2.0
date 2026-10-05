@@ -87,6 +87,15 @@ const API = {
     throw new Error(await res.text());
   },
 
+  async reorderMaps(items) {
+    const res = await this.fetch('/api/maps/reorder', {
+      method: 'POST',
+      body: JSON.stringify({ items })
+    });
+    if (res.ok) return await res.json();
+    throw new Error(await res.text());
+  },
+
   async deleteMap(mapId) {
     const res = await this.fetch(`/api/maps/${mapId}`, {
       method: 'DELETE'

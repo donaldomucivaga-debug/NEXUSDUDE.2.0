@@ -40,6 +40,8 @@ function getNodeStatusColor(status, isSubmap = false) {
 
 // Modal State
 let isCreatingSubmap = false;
+let draggedMapNode = null;
+let draggedMapData = null;
 
 // Definición global inmediata para evitar errores de ReferenceError
 window.loadMapsTree = function(filterText = '') {
@@ -5572,6 +5574,7 @@ async function refreshMapsTabList(filterText = '') {
     const wrapper = document.createElement('div');
     wrapper.className = 'map-node-wrapper';
     wrapper.dataset.mapId = mapObj.id;
+    wrapper.draggable = true;
 
     const children = childrenMap.get(mapObj.id) || [];
     const hasChildren = children.length > 0;
@@ -5592,7 +5595,8 @@ async function refreshMapsTabList(filterText = '') {
 
     card.innerHTML = `
       <div class="map-card-head">
-        <div class="map-card-title-group" title="Hacer clic para abrir este mapa en el lienzo">
+        <div class="map-card-title-group" title="Hacer clic para abrir este mapa en el lienzo (o arrastra para reordenar)">
+          <i class="fas fa-grip-vertical map-drag-handle" title="Arrastrar para reordenar en la lista"></i>
           ${hasChildren ? `
           <button type="button" class="map-toggle-caret" title="${isExpanded ? 'Contraer submapas' : 'Desplegar submapas'}">
             <i class="fas ${isExpanded ? 'fa-chevron-down' : 'fa-chevron-right'}"></i>
@@ -5681,15 +5685,15 @@ async function refreshMapsTabList(filterText = '') {
       caretBtn.addEventListener('click', toggleExpand);
     }
 
-    // Clic en el título para abrir mapa en el lienzo
+    // Clic en el título para abrir mapa en el lienzo (excluyendo caret y drag handle)
     card.querySelector('.map-card-title-group').addEventListener('click', (e) => {
-      if (e.target.closest('.map-toggle-caret')) return;
+      if (e.target.closest('.map-toggle-caret') || e.target.closest('.map-drag-handle')) return;
       loadMap(mapObj.id);
     });
 
     // Doble clic en el título para desplegar/contraer
     card.querySelector('.map-card-title-group').addEventListener('dblclick', (e) => {
-      if (e.target.closest('.map-toggle-caret')) return;
+      if (e.target.closest('.map-toggle-caret') || e.target.closest('.map-drag-handle')) return;
       if (hasChildren) toggleExpand(e);
     });
 
@@ -5740,8 +5744,149 @@ async function refreshMapsTabList(filterText = '') {
       });
     }
 
+    // ─── Drag & Drop Eventos para reordenar ───
+    wrapper.addEventListener('dragstart', (e) => {
+      if (e.target.closest('.map-actions') || e.target.closest('.map-toggle-caret')) {
+        e.preventDefault();
+        return;
+      }
+      draggedMapNode = wrapper;
+      draggedMapData = mapObj;
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', mapObj.id);
+      setTimeout(() => wrapper.classList.add('map-dragging'), 0);
+    });
+
+    wrapper.addEventListener('dragend', () => {
+      wrapper.classList.remove('map-dragging');
+      document.querySelectorAll('.map-item-card').forEach(c => {
+        c.classList.remove('drag-target-top', 'drag-target-bottom', 'drag-target-inside');
+      });
+      draggedMapNode = null;
+      draggedMapData = null;
+    });
+
+    card.addEventListener('dragover', (e) => {
+      if (!draggedMapNode || draggedMapNode === wrapper) return;
+      if (wrapper.closest(`.map-node-wrapper[data-map-id="${draggedMapData?.id}"]`)) return;
+
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+
+      const rect = card.getBoundingClientRect();
+      const relY = e.clientY - rect.top;
+      const height = rect.height;
+
+      card.classList.remove('drag-target-top', 'drag-target-bottom', 'drag-target-inside');
+
+      if (relY < height * 0.35) {
+        card.classList.add('drag-target-top');
+      } else if (relY > height * 0.65) {
+        card.classList.add('drag-target-bottom');
+      } else {
+        card.classList.add('drag-target-inside');
+      }
+    });
+
+    card.addEventListener('dragleave', () => {
+      card.classList.remove('drag-target-top', 'drag-target-bottom', 'drag-target-inside');
+    });
+
+    card.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      if (!draggedMapNode || draggedMapNode === wrapper) return;
+      if (wrapper.closest(`.map-node-wrapper[data-map-id="${draggedMapData?.id}"]`)) return;
+
+      const isTop = card.classList.contains('drag-target-top');
+      const isBottom = card.classList.contains('drag-target-bottom');
+      const isInside = card.classList.contains('drag-target-inside');
+
+      card.classList.remove('drag-target-top', 'drag-target-bottom', 'drag-target-inside');
+
+      let targetParentId = null;
+
+      if (isInside) {
+        targetParentId = mapObj.id;
+        expandedMapIds.add(mapObj.id);
+        saveExpandedMapIds();
+
+        let targetChildContainer = wrapper.querySelector(':scope > .map-children-container');
+        if (!targetChildContainer) {
+          targetChildContainer = document.createElement('div');
+          targetChildContainer.className = 'map-children-container';
+          targetChildContainer.style.display = 'flex';
+          wrapper.appendChild(targetChildContainer);
+        } else {
+          targetChildContainer.style.display = 'flex';
+        }
+        targetChildContainer.appendChild(draggedMapNode);
+      } else if (isTop) {
+        wrapper.parentNode.insertBefore(draggedMapNode, wrapper);
+        targetParentId = mapObj.parent_map_id || null;
+      } else {
+        wrapper.parentNode.insertBefore(draggedMapNode, wrapper.nextSibling);
+        targetParentId = mapObj.parent_map_id || null;
+      }
+
+      // Re-indexar los hermanos directos del contenedor receptor
+      const parentContainer = draggedMapNode.parentNode;
+      const siblingWrappers = Array.from(parentContainer.children).filter(el => el.classList && el.classList.contains('map-node-wrapper'));
+
+      const reorderItems = siblingWrappers.map((w, idx) => ({
+        id: w.dataset.mapId,
+        position: idx,
+        parent_map_id: (w === draggedMapNode && isInside) ? targetParentId : undefined
+      }));
+
+      if (isInside || targetParentId !== (draggedMapData.parent_map_id || null)) {
+        const draggedItem = reorderItems.find(it => it.id === draggedMapData.id);
+        if (draggedItem) {
+          draggedItem.parent_map_id = targetParentId || 'root';
+        }
+      }
+
+      try {
+        await API.reorderMaps(reorderItems);
+        await refreshMapsTabList(inputSearchMaps ? inputSearchMaps.value : '');
+      } catch (err) {
+        console.error('Error guardando reordenamiento de mapas:', err);
+        await refreshMapsTabList();
+      }
+    });
+
     return wrapper;
   }
+
+  // Soporte para arrastrar elementos al contenedor raíz (fuera de carpetas)
+  treeContainer.ondragover = (e) => {
+    if (!draggedMapNode) return;
+    if (e.target === treeContainer) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+    }
+  };
+
+  treeContainer.ondrop = async (e) => {
+    if (e.target === treeContainer && draggedMapNode) {
+      e.preventDefault();
+      treeContainer.appendChild(draggedMapNode);
+      const rootWrappers = Array.from(treeContainer.children).filter(el => el.classList && el.classList.contains('map-node-wrapper'));
+      const reorderItems = rootWrappers.map((w, idx) => ({
+        id: w.dataset.mapId,
+        position: idx,
+        parent_map_id: (w === draggedMapNode) ? 'root' : undefined
+      }));
+      try {
+        await API.reorderMaps(reorderItems);
+        await refreshMapsTabList(inputSearchMaps ? inputSearchMaps.value : '');
+      } catch (err) {
+        console.error('Error reordenando mapas a nivel raíz:', err);
+        await refreshMapsTabList();
+      }
+    }
+  };
 
   if (isSearching) {
     // Modo búsqueda: mostrar directamente todos los mapas coincidentes

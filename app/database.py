@@ -29,10 +29,16 @@ async def init_db():
                 description TEXT,
                 parent_map_id TEXT,
                 grid_size INTEGER DEFAULT 20,
+                position INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         """)
+        try:
+            await db.execute("ALTER TABLE maps ADD COLUMN position INTEGER DEFAULT 0;")
+        except Exception:
+            pass
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_maps_position ON maps(position);")
 
         # Tabla de Nodos (Dispositivos / Elementos en el lienzo)
         await db.execute("""

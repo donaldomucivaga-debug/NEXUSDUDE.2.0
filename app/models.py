@@ -139,6 +139,7 @@ class MapBase(BaseModel):
     description: Optional[str] = None
     parent_map_id: Optional[str] = None
     grid_size: Optional[int] = 20
+    position: Optional[int] = 0
 
 class MapCreate(MapBase):
     id: Optional[str] = None
@@ -148,6 +149,15 @@ class MapUpdate(BaseModel):
     description: Optional[str] = None
     parent_map_id: Optional[str] = None
     grid_size: Optional[int] = None
+    position: Optional[int] = None
+
+class MapOrderItem(BaseModel):
+    id: str
+    position: int
+    parent_map_id: Optional[str] = None
+
+class MapReorderRequest(BaseModel):
+    items: List[MapOrderItem]
 
 class MapOut(MapBase):
     id: str

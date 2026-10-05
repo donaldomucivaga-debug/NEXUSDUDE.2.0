@@ -771,6 +771,54 @@ body.sidebar-resizing-active * {
   margin-top: 6px;
 }
 
+/* Drag & Drop Reordering for Maps & Submaps */
+.map-drag-handle {
+  color: var(--text-muted);
+  cursor: grab;
+  font-size: 0.82rem;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.map-drag-handle:hover {
+  color: #a855f7;
+  background: rgba(168, 85, 247, 0.18);
+}
+
+.map-drag-handle:active {
+  cursor: grabbing;
+}
+
+.map-node-wrapper.map-dragging {
+  opacity: 0.4;
+}
+
+.map-node-wrapper.map-dragging .map-item-card {
+  border: 1px dashed #a855f7 !important;
+  background: rgba(168, 85, 247, 0.05) !important;
+}
+
+.map-item-card.drag-target-top {
+  border-top: 2px solid #a855f7 !important;
+  box-shadow: 0 -3px 8px rgba(168, 85, 247, 0.5) !important;
+}
+
+.map-item-card.drag-target-bottom {
+  border-bottom: 2px solid #a855f7 !important;
+  box-shadow: 0 3px 8px rgba(168, 85, 247, 0.5) !important;
+}
+
+.map-item-card.drag-target-inside {
+  border: 2px dashed #38bdf8 !important;
+  background: rgba(56, 189, 248, 0.1) !important;
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.3) !important;
+}
+
 /* Property Inspector / Device Info Viewer */
 .property-card {
   background: var(--bg-card);

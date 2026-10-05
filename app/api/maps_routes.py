@@ -9,7 +9,8 @@ from app.models import (
     NodeOut, NodeCreate, NodeUpdate,
     LinkOut, LinkCreate, LinkUpdate,
     CreateMapFromSiteRequest, PopulateMapFromSiteRequest,
-    BulkCreateMapsFromSitesRequest, BulkDeleteNodesRequest
+    BulkCreateMapsFromSitesRequest, BulkDeleteNodesRequest,
+    MapReorderRequest, MapOrderItem
 )
 from app.services.inventory_service import inventory_service
 from app.services.zabbix_service import zabbix_service
@@ -18,14 +19,14 @@ router = APIRouter(prefix="/maps", tags=["Maps & Topology"])
 
 @router.get("", response_model=List[MapOut])
 async def list_maps(user: Dict[str, Any] = Depends(get_current_user)):
-    """Lista todos los mapas disponibles."""
+    """Lista todos los mapas disponibles ordenados por su posición asignada."""
     async with get_db_connection() as db:
         cursor = await db.execute("""
             SELECT m.*,
                    (SELECT COUNT(*) FROM nodes n WHERE n.map_id = m.id) as nodes_count,
                    (SELECT COUNT(*) FROM links l WHERE l.map_id = m.id) as links_count
             FROM maps m
-            ORDER BY m.created_at ASC
+            ORDER BY COALESCE(m.position, 0) ASC, m.created_at ASC
         """)
         rows = await cursor.fetchall()
         return [
@@ -35,6 +36,7 @@ async def list_maps(user: Dict[str, Any] = Depends(get_current_user)):
                 description=r["description"],
                 parent_map_id=r["parent_map_id"],
                 grid_size=r["grid_size"],
+                position=r["position"] if "position" in r.keys() and r["position"] is not None else 0,
                 created_at=str(r["created_at"]),
                 updated_at=str(r["updated_at"]),
                 nodes_count=r["nodes_count"],
@@ -42,6 +44,28 @@ async def list_maps(user: Dict[str, Any] = Depends(get_current_user)):
             )
             for r in rows
         ]
+
+@router.post("/reorder")
+async def reorder_maps(
+    payload: MapReorderRequest,
+    user: Dict[str, Any] = Depends(get_current_user)
+):
+    """Actualiza la posición (orden en la lista) y opcionalmente el parent_map_id de los mapas/submapas."""
+    async with get_db_connection() as db:
+        for item in payload.items:
+            if item.parent_map_id is not None:
+                p_id = item.parent_map_id if item.parent_map_id and item.parent_map_id != 'root' else None
+                await db.execute(
+                    "UPDATE maps SET position = ?, parent_map_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (item.position, p_id, item.id)
+                )
+            else:
+                await db.execute(
+                    "UPDATE maps SET position = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (item.position, item.id)
+                )
+        await db.commit()
+    return {"success": True, "message": f"{len(payload.items)} mapas reordenados correctamente."}
 
 @router.get("/sites-status")
 async def get_sites_mapping_status(user: Dict[str, Any] = Depends(get_current_user)):
