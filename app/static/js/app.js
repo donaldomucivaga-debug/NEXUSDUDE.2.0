@@ -48,6 +48,23 @@ window.loadMapsTree = function(filterText = '') {
   }
 };
 
+window.openSettingsModal = function() {
+  const modal = document.getElementById('modal-settings');
+  if (modal) {
+    modal.style.display = 'flex';
+    if (typeof loadSettingsData === 'function') {
+      loadSettingsData();
+    }
+  }
+};
+
+window.closeSettingsModal = function() {
+  const modal = document.getElementById('modal-settings');
+  if (modal) {
+    modal.style.display = 'none';
+  }
+};
+
 // ─── 1. Autenticación SSO y Detección de Tokens ─────────────────────────────
 function initSSOAuth() {
   const hash = window.location.hash;
@@ -7158,59 +7175,64 @@ window.addEventListener('DOMContentLoaded', async () => {
     tab.addEventListener('click', () => switchTab(tab.dataset.tab));
   });
 
-  // Verificación de autenticación
-  try {
-    currentUser = await API.verifyAuth();
-    const userBadge = document.getElementById('user-badge');
-    const authOverlay = document.getElementById('auth-overlay');
+  // Verificación de autenticación y carga de datos en segundo plano sin bloquear listeners
+  initAppAsync();
 
-    if (currentUser && currentUser.authenticated) {
-      userBadge.innerHTML = `<span class="status-dot"></span><span>${currentUser.username} (${currentUser.role})</span>`;
-      userBadge.classList.remove('unauthenticated');
-      authOverlay.style.display = 'none';
+  async function initAppAsync() {
+    try {
+      currentUser = await API.verifyAuth();
+      const userBadge = document.getElementById('user-badge');
+      const authOverlay = document.getElementById('auth-overlay');
 
-      // Cargar roles y filtros de inventario antes de renderizar mapas para tener la paleta oficial
-      await loadInventoryFilters();
+      if (currentUser && currentUser.authenticated) {
+        userBadge.innerHTML = `<span class="status-dot"></span><span>${currentUser.username} (${currentUser.role})</span>`;
+        userBadge.classList.remove('unauthenticated');
+        authOverlay.style.display = 'none';
 
-      // Cargar mapas y restaurar estado de navegación persistente
-      const maps = await API.getMaps();
-      if (maps && maps.length > 0) {
-        const hashParams = new URLSearchParams((window.location.hash || '').replace(/^#/, ''));
-        const hashTab = hashParams.get('tab');
-        const hashMapId = hashParams.get('map');
-        const hashNodeId = hashParams.get('node');
+        // Cargar roles y filtros de inventario antes de renderizar mapas para tener la paleta oficial
+        await loadInventoryFilters();
 
-        const savedTab = hashTab || localStorage.getItem('nexusdude_active_tab') || 'tab-maps';
-        const savedMapId = hashMapId || localStorage.getItem('nexusdude_last_map_id');
+        // Cargar mapas y restaurar estado de navegación persistente
+        const maps = await API.getMaps();
+        if (maps && maps.length > 0) {
+          const hashParams = new URLSearchParams((window.location.hash || '').replace(/^#/, ''));
+          const hashTab = hashParams.get('tab');
+          const hashMapId = hashParams.get('map');
+          const hashNodeId = hashParams.get('node');
 
-        let targetMapId = maps[0].id;
-        if (savedMapId && maps.some(m => m.id === savedMapId)) {
-          targetMapId = savedMapId;
-        }
+          const savedTab = hashTab || localStorage.getItem('nexusdude_active_tab') || 'tab-maps';
+          const savedMapId = hashMapId || localStorage.getItem('nexusdude_last_map_id');
 
-        await loadMap(targetMapId);
+          let targetMapId = maps[0].id;
+          if (savedMapId && maps.some(m => m.id === savedMapId)) {
+            targetMapId = savedMapId;
+          }
 
-        // Restaurar pestaña activa (por defecto: Mapas)
-        switchTab(savedTab);
+          await loadMap(targetMapId);
 
-        // Si venía un nodo específico seleccionado en el hash
-        if (hashNodeId && currentMap && currentMap.nodes) {
-          const matchedNode = currentMap.nodes.find(n => n.id === hashNodeId || String(n.device_id) === hashNodeId);
-          if (matchedNode) {
-            selectNode(matchedNode);
+          // Restaurar pestaña activa (por defecto: Mapas)
+          switchTab(savedTab);
+
+          // Si venía un nodo específico seleccionado en el hash
+          if (hashNodeId && currentMap && currentMap.nodes) {
+            const matchedNode = currentMap.nodes.find(n => n.id === hashNodeId || String(n.device_id) === hashNodeId);
+            if (matchedNode) {
+              selectNode(matchedNode);
+            }
           }
         }
-      }
-      await triggerSearch();
+        await triggerSearch();
 
-    } else {
-      userBadge.innerHTML = `<span class="status-dot"></span><span>No autenticado</span>`;
-      userBadge.classList.add('unauthenticated');
-      authOverlay.style.display = 'flex';
+      } else {
+        userBadge.innerHTML = `<span class="status-dot"></span><span>No autenticado</span>`;
+        userBadge.classList.add('unauthenticated');
+        authOverlay.style.display = 'flex';
+      }
+    } catch (e) {
+      console.error('Error de autenticación o inicio:', e);
+      const authOverlay = document.getElementById('auth-overlay');
+      if (authOverlay) authOverlay.style.display = 'flex';
     }
-  } catch (e) {
-    console.error('Error de autenticación:', e);
-    document.getElementById('auth-overlay').style.display = 'flex';
   }
 
   // Buscador de inventario con debounce
@@ -7985,784 +8007,265 @@ window.addEventListener('DOMContentLoaded', async () => {
   }
 
   // ─── 23. Modal de Configuración e Integración i-WISP ───────────────────────
+  // ─── Modal de Configuración General (NetBox y Zabbix) ─────────────────────
   const modalSettings = document.getElementById('modal-settings');
   const btnOpenSettings = document.getElementById('btn-open-settings');
   const btnCloseSettingsModal = document.getElementById('btn-close-settings-modal');
   const btnCancelSettings = document.getElementById('btn-cancel-settings');
   const btnSaveSettings = document.getElementById('btn-save-settings');
-  const btnTestIwispConn = document.getElementById('btn-test-iwisp-conn');
-  const btnSyncIwispNow = document.getElementById('btn-sync-iwisp-now');
-  const btnSyncIwispMenu = document.getElementById('btn-sync-iwisp-menu');
-  const btnToggleKeyVis = document.getElementById('btn-toggle-key-visibility');
-  const inputIwispKey = document.getElementById('input-iwisp-api-key');
-  const inputIwispUrl = document.getElementById('input-iwisp-api-url');
-  const badgeIwispStatus = document.getElementById('badge-iwisp-sync-status');
-  const labelIwispClients = document.getElementById('label-iwisp-cached-clients');
-  const labelIwispOnus = document.getElementById('label-iwisp-cached-onus');
-  const labelIwispLastSync = document.getElementById('label-iwisp-last-sync');
-  const alertIwispMsg = document.getElementById('iwisp-msg-alert');
 
-  function showSettingsAlert(msg, type = 'info') {
-    if (!alertIwispMsg) return;
-    alertIwispMsg.style.display = 'block';
-    alertIwispMsg.textContent = msg;
+  // Pestañas
+  const tabBtnNetbox = document.getElementById('tab-btn-netbox');
+  const tabBtnZabbix = document.getElementById('tab-btn-zabbix');
+  const panelNetbox = document.getElementById('panel-settings-netbox');
+  const panelZabbix = document.getElementById('panel-settings-zabbix');
+
+  // Campos NetBox
+  const inputNetboxUrl = document.getElementById('input-netbox-url');
+  const inputNetboxToken = document.getElementById('input-netbox-token');
+  const btnToggleNetboxTokenVis = document.getElementById('btn-toggle-netbox-token-vis');
+  const btnTestNetboxConn = document.getElementById('btn-test-netbox-conn');
+  const alertNetboxMsg = document.getElementById('netbox-msg-alert');
+  const badgeNetboxStatus = document.getElementById('badge-netbox-status');
+
+  // Campos Zabbix
+  const inputZabbixUrl = document.getElementById('input-zabbix-url');
+  const inputZabbixUser = document.getElementById('input-zabbix-user');
+  const inputZabbixPass = document.getElementById('input-zabbix-pass');
+  const btnToggleZabbixPassVis = document.getElementById('btn-toggle-zabbix-pass-vis');
+  const btnTestZabbixConn = document.getElementById('btn-test-zabbix-conn');
+  const alertZabbixMsg = document.getElementById('zabbix-msg-alert');
+  const badgeZabbixStatus = document.getElementById('badge-zabbix-status');
+
+  // Alerta global
+  const alertGlobalSettings = document.getElementById('settings-global-alert');
+
+  function showPanelAlert(element, msg, type = 'info') {
+    if (!element) return;
+    element.style.display = 'block';
+    element.textContent = msg;
     if (type === 'success') {
-      alertIwispMsg.style.background = 'rgba(16, 185, 129, 0.15)';
-      alertIwispMsg.style.color = '#10b981';
-      alertIwispMsg.style.border = '1px solid rgba(16, 185, 129, 0.3)';
+      element.style.background = 'rgba(16, 185, 129, 0.15)';
+      element.style.color = '#10b981';
+      element.style.border = '1px solid rgba(16, 185, 129, 0.3)';
     } else if (type === 'error') {
-      alertIwispMsg.style.background = 'rgba(239, 68, 68, 0.15)';
-      alertIwispMsg.style.color = '#ef4444';
-      alertIwispMsg.style.border = '1px solid rgba(239, 68, 68, 0.3)';
+      element.style.background = 'rgba(239, 68, 68, 0.15)';
+      element.style.color = '#ef4444';
+      element.style.border = '1px solid rgba(239, 68, 68, 0.3)';
     } else {
-      alertIwispMsg.style.background = 'rgba(14, 165, 233, 0.15)';
-      alertIwispMsg.style.color = '#38bdf8';
-      alertIwispMsg.style.border = '1px solid rgba(14, 165, 233, 0.3)';
+      element.style.background = 'rgba(14, 165, 233, 0.15)';
+      element.style.color = '#38bdf8';
+      element.style.border = '1px solid rgba(14, 165, 233, 0.3)';
     }
   }
 
-  async function loadSettingsData() {
-    if (alertIwispMsg) alertIwispMsg.style.display = 'none';
-    try {
-      const [cfg, cache] = await Promise.all([
-        API.getIWispConfig().catch(e => { console.warn('Error getIWispConfig:', e); return null; }),
-        API.getIWispCacheStatus().catch(e => { console.warn('Error getIWispCacheStatus:', e); return null; })
-      ]);
+  // Cambio de pestañas en el Modal de Configuración
+  function switchSettingsTab(tabName) {
+    if (tabName === 'netbox') {
+      if (tabBtnNetbox) {
+        tabBtnNetbox.classList.add('active');
+        tabBtnNetbox.style.borderBottom = '2px solid var(--accent)';
+        tabBtnNetbox.style.background = 'var(--bg-secondary)';
+        tabBtnNetbox.style.color = '#f8fafc';
+      }
+      if (tabBtnZabbix) {
+        tabBtnZabbix.classList.remove('active');
+        tabBtnZabbix.style.borderBottom = '2px solid transparent';
+        tabBtnZabbix.style.background = 'transparent';
+        tabBtnZabbix.style.color = 'var(--text-muted)';
+      }
+      if (panelNetbox) panelNetbox.style.display = 'block';
+      if (panelZabbix) panelZabbix.style.display = 'none';
+    } else if (tabName === 'zabbix') {
+      if (tabBtnZabbix) {
+        tabBtnZabbix.classList.add('active');
+        tabBtnZabbix.style.borderBottom = '2px solid var(--accent)';
+        tabBtnZabbix.style.background = 'var(--bg-secondary)';
+        tabBtnZabbix.style.color = '#f8fafc';
+      }
+      if (tabBtnNetbox) {
+        tabBtnNetbox.classList.remove('active');
+        tabBtnNetbox.style.borderBottom = '2px solid transparent';
+        tabBtnNetbox.style.background = 'transparent';
+        tabBtnNetbox.style.color = 'var(--text-muted)';
+      }
+      if (panelZabbix) panelZabbix.style.display = 'block';
+      if (panelNetbox) panelNetbox.style.display = 'none';
+    }
+  }
 
-      if (cfg) {
-        if (inputIwispKey) {
-          inputIwispKey.value = cfg.api_key || '';
-          if (cfg.is_configured && !cfg.api_key) {
-            inputIwispKey.placeholder = `Configurada (${cfg.api_key_masked || 'activa'})`;
-          }
-        }
-        if (inputIwispUrl && cfg.api_url) {
-          inputIwispUrl.value = cfg.api_url;
-        }
-        if (badgeIwispStatus) {
-          if (cfg.is_configured) {
-            badgeIwispStatus.textContent = 'API Key Configurada';
-            badgeIwispStatus.style.color = '#10b981';
-            badgeIwispStatus.style.background = 'rgba(16, 185, 129, 0.15)';
-            badgeIwispStatus.style.borderColor = 'rgba(16, 185, 129, 0.3)';
-          } else {
-            badgeIwispStatus.textContent = 'Sin Configurar';
-            badgeIwispStatus.style.color = '#f59e0b';
-            badgeIwispStatus.style.background = 'rgba(245, 158, 11, 0.15)';
-            badgeIwispStatus.style.borderColor = 'rgba(245, 158, 11, 0.3)';
-          }
-        }
+  if (tabBtnNetbox) {
+    tabBtnNetbox.addEventListener('click', () => switchSettingsTab('netbox'));
+  }
+  if (tabBtnZabbix) {
+    tabBtnZabbix.addEventListener('click', () => switchSettingsTab('zabbix'));
+  }
+
+  // Visibilidad de contraseñas / tokens
+  if (btnToggleNetboxTokenVis && inputNetboxToken) {
+    btnToggleNetboxTokenVis.addEventListener('click', () => {
+      const isPass = inputNetboxToken.type === 'password';
+      inputNetboxToken.type = isPass ? 'text' : 'password';
+      const icon = btnToggleNetboxTokenVis.querySelector('i');
+      if (icon) icon.className = isPass ? 'fas fa-eye-slash' : 'fas fa-eye';
+    });
+  }
+
+  if (btnToggleZabbixPassVis && inputZabbixPass) {
+    btnToggleZabbixPassVis.addEventListener('click', () => {
+      const isPass = inputZabbixPass.type === 'password';
+      inputZabbixPass.type = isPass ? 'text' : 'password';
+      const icon = btnToggleZabbixPassVis.querySelector('i');
+      if (icon) icon.className = isPass ? 'fas fa-eye-slash' : 'fas fa-eye';
+    });
+  }
+
+  // Carga de configuración inicial desde el Backend
+  async function loadSettingsData() {
+    if (alertNetboxMsg) alertNetboxMsg.style.display = 'none';
+    if (alertZabbixMsg) alertZabbixMsg.style.display = 'none';
+    if (alertGlobalSettings) alertGlobalSettings.style.display = 'none';
+
+    try {
+      const data = await API.getIntegrationsConfig();
+      if (!data) return;
+
+      // NetBox: IP y API Token
+      if (data.netbox) {
+        if (inputNetboxUrl && data.netbox.url) inputNetboxUrl.value = data.netbox.url;
+        if (inputNetboxToken && data.netbox.token) inputNetboxToken.value = data.netbox.token;
       }
 
-      if (cache) {
-        if (labelIwispClients) labelIwispClients.textContent = (cache.total_clients || 0).toLocaleString();
-        if (labelIwispOnus) labelIwispOnus.textContent = (cache.total_onus || 0).toLocaleString();
-        if (labelIwispLastSync) {
-          if (cache.last_update) {
-            const d = new Date(cache.last_update);
-            labelIwispLastSync.textContent = d.toLocaleString();
-          } else {
-            labelIwispLastSync.textContent = 'Nunca sincronizado';
-          }
-        }
+      // Zabbix: IP y Credenciales API
+      if (data.zabbix) {
+        if (inputZabbixUrl && data.zabbix.url) inputZabbixUrl.value = data.zabbix.url;
+        if (inputZabbixUser && data.zabbix.user) inputZabbixUser.value = data.zabbix.user;
+        if (inputZabbixPass && data.zabbix.pass) inputZabbixPass.value = data.zabbix.pass;
       }
     } catch (err) {
-      console.error('Error cargando configuración:', err);
+      console.error('Error cargando configuraciones de integraciones:', err);
     }
   }
 
-  if (btnToggleKeyVis && inputIwispKey) {
-    btnToggleKeyVis.addEventListener('click', () => {
-      const isPass = inputIwispKey.type === 'password';
-      inputIwispKey.type = isPass ? 'text' : 'password';
-      const icon = btnToggleKeyVis.querySelector('i');
-      if (icon) {
-        icon.className = isPass ? 'fas fa-eye-slash' : 'fas fa-eye';
-      }
-    });
-  }
-
-  if (btnOpenSettings && modalSettings) {
-    btnOpenSettings.addEventListener('click', () => {
-      modalSettings.style.display = 'flex';
+  window.openSettingsModal = function() {
+    const modal = document.getElementById('modal-settings');
+    if (modal) {
+      modal.style.display = 'flex';
+      switchSettingsTab('netbox');
       loadSettingsData();
-    });
+    }
+  };
+
+  window.closeSettingsModal = function() {
+    const modal = document.getElementById('modal-settings');
+    if (modal) {
+      modal.style.display = 'none';
+    }
+  };
+
+  if (btnOpenSettings) {
+    btnOpenSettings.addEventListener('click', window.openSettingsModal);
   }
 
-  if (btnCloseSettingsModal && modalSettings) {
-    btnCloseSettingsModal.addEventListener('click', () => {
-      modalSettings.style.display = 'none';
-    });
+  if (btnCloseSettingsModal) {
+    btnCloseSettingsModal.addEventListener('click', window.closeSettingsModal);
   }
 
-  if (btnCancelSettings && modalSettings) {
-    btnCancelSettings.addEventListener('click', () => {
-      modalSettings.style.display = 'none';
-    });
+  if (btnCancelSettings) {
+    btnCancelSettings.addEventListener('click', window.closeSettingsModal);
   }
 
-  if (btnTestIwispConn) {
-    btnTestIwispConn.addEventListener('click', async () => {
-      const key = inputIwispKey ? inputIwispKey.value.trim() : '';
-      const url = inputIwispUrl ? inputIwispUrl.value.trim() : '';
-      btnTestIwispConn.disabled = true;
-      btnTestIwispConn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Probando...';
+  // Prueba de Conexión NetBox
+  if (btnTestNetboxConn) {
+    btnTestNetboxConn.addEventListener('click', async () => {
+      const url = inputNetboxUrl ? inputNetboxUrl.value.trim() : '';
+      const token = inputNetboxToken ? inputNetboxToken.value.trim() : '';
+
+      btnTestNetboxConn.disabled = true;
+      btnTestNetboxConn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Conectando...';
+
       try {
-        const res = await API.testIWispConnection({ api_key: key, api_url: url });
-        showSettingsAlert('✅ ' + (res.message || 'Conexión exitosa a i-WISP Manager.'), 'success');
+        const res = await API.testNetboxConnection({ url, token });
+        if (res.success) {
+          showPanelAlert(alertNetboxMsg, '✅ ' + res.message, 'success');
+          if (badgeNetboxStatus) {
+            badgeNetboxStatus.textContent = res.version ? `v${res.version}` : 'Conectado';
+            badgeNetboxStatus.style.background = 'rgba(16, 185, 129, 0.15)';
+            badgeNetboxStatus.style.color = '#10b981';
+          }
+        } else {
+          showPanelAlert(alertNetboxMsg, '❌ ' + (res.message || 'Error de conexión'), 'error');
+        }
       } catch (err) {
-        showSettingsAlert('❌ Falló la prueba: ' + (err.message || 'Error de conexión'), 'error');
+        showPanelAlert(alertNetboxMsg, '❌ Error al probar NetBox: ' + err.message, 'error');
       } finally {
-        btnTestIwispConn.disabled = false;
-        btnTestIwispConn.innerHTML = '<i class="fas fa-vial"></i> Probar Conexión';
+        btnTestNetboxConn.disabled = false;
+        btnTestNetboxConn.innerHTML = '<i class="fas fa-vial"></i> Probar Conexión NetBox';
       }
     });
   }
 
+  // Prueba de Conexión Zabbix
+  if (btnTestZabbixConn) {
+    btnTestZabbixConn.addEventListener('click', async () => {
+      const url = inputZabbixUrl ? inputZabbixUrl.value.trim() : '';
+      const user = inputZabbixUser ? inputZabbixUser.value.trim() : '';
+      const pass = inputZabbixPass ? inputZabbixPass.value : '';
+
+      btnTestZabbixConn.disabled = true;
+      btnTestZabbixConn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Conectando...';
+
+      try {
+        const res = await API.testZabbixConnection({ url, user, pass });
+        if (res.success) {
+          showPanelAlert(alertZabbixMsg, '✅ ' + res.message, 'success');
+          if (badgeZabbixStatus) {
+            badgeZabbixStatus.textContent = res.version ? `v${res.version}` : 'Conectado';
+            badgeZabbixStatus.style.background = 'rgba(16, 185, 129, 0.15)';
+            badgeZabbixStatus.style.color = '#10b981';
+          }
+        } else {
+          showPanelAlert(alertZabbixMsg, '❌ ' + (res.message || 'Error de conexión'), 'error');
+        }
+      } catch (err) {
+        showPanelAlert(alertZabbixMsg, '❌ Error al probar Zabbix: ' + err.message, 'error');
+      } finally {
+        btnTestZabbixConn.disabled = false;
+        btnTestZabbixConn.innerHTML = '<i class="fas fa-vial"></i> Probar Conexión Zabbix';
+      }
+    });
+  }
+
+  // Guardar ambas configuraciones (NetBox y Zabbix)
   if (btnSaveSettings) {
     btnSaveSettings.addEventListener('click', async () => {
-      const key = inputIwispKey ? inputIwispKey.value.trim() : '';
-      const url = inputIwispUrl ? inputIwispUrl.value.trim() : '';
       btnSaveSettings.disabled = true;
       btnSaveSettings.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Guardando...';
+
       try {
-        await API.saveIWispConfig({ api_key: key, api_url: url });
-        showSettingsAlert('✅ Configuración guardada correctamente.', 'success');
-        loadSettingsData();
+        const netboxPayload = {
+          url: inputNetboxUrl ? inputNetboxUrl.value.trim() : '',
+          token: inputNetboxToken ? inputNetboxToken.value.trim() : ''
+        };
+
+        const zabbixPayload = {
+          url: inputZabbixUrl ? inputZabbixUrl.value.trim() : '',
+          user: inputZabbixUser ? inputZabbixUser.value.trim() : '',
+          pass: inputZabbixPass ? inputZabbixPass.value : ''
+        };
+
+        const [resNetbox, resZabbix] = await Promise.all([
+          API.saveNetboxConfig(netboxPayload),
+          API.saveZabbixConfig(zabbixPayload)
+        ]);
+
+        showPanelAlert(alertGlobalSettings, '✅ Configuraciones de IP y API guardadas exitosamente.', 'success');
+        await loadSettingsData();
       } catch (err) {
-        showSettingsAlert('❌ Error al guardar configuración: ' + err.message, 'error');
+        showPanelAlert(alertGlobalSettings, '❌ Error al guardar configuraciones: ' + err.message, 'error');
       } finally {
         btnSaveSettings.disabled = false;
-        btnSaveSettings.innerHTML = '<i class="fas fa-save"></i> Guardar';
-      }
-    });
-  }
-
-  const triggerIwispSync = async (btn) => {
-    if (btn) {
-      btn.disabled = true;
-      btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Sincronizando...';
-    }
-    try {
-      const res = await API.syncIWispClients();
-      if (btn) {
-        showSettingsAlert(`✅ Sincronización finalizada: ${res.total_clients || 0} clientes y ${res.total_onus || 0} ONTs guardadas en caché local.`, 'success');
-      } else {
-        alert(`Sincronización i-WISP finalizada: ${res.total_clients || 0} clientes y ${res.total_onus || 0} ONTs.`);
-      }
-      loadSettingsData();
-    } catch (err) {
-      const msg = 'Error en sincronización i-WISP: ' + err.message;
-      if (btn) showSettingsAlert('❌ ' + msg, 'error');
-      else alert(msg);
-    } finally {
-      if (btn) {
-        btn.disabled = false;
-        btn.innerHTML = '<i class="fas fa-sync-alt"></i> Sincronizar Clientes';
-      }
-    }
-  };
-
-  if (btnSyncIwispNow) {
-    btnSyncIwispNow.addEventListener('click', () => triggerIwispSync(btnSyncIwispNow));
-  }
-
-  if (btnSyncIwispMenu) {
-    btnSyncIwispMenu.addEventListener('click', () => {
-      if (modalSettings) modalSettings.style.display = 'flex';
-      loadSettingsData();
-      triggerIwispSync(btnSyncIwispNow);
-    });
-  }
-
-  // ─── 24. Centro de Diagnóstico Profundo OLT & Clientes FTTH ────────────────
-  const modalOltDiag = document.getElementById('modal-olt-diagnostics');
-  const btnOpenOltDiag = document.getElementById('btn-open-olt-diagnostics');
-  const btnCloseOltDiag = document.getElementById('btn-close-olt-diagnostics');
-  const btnRefreshDiagPort = document.getElementById('btn-refresh-diagnostic-port');
-  const selectDiagOlt = document.getElementById('select-diagnostic-olt');
-  const diagPortsScroll = document.getElementById('diag-ports-scroll-container');
-  const inputSearchOnts = document.getElementById('input-search-onts');
-  const diagOntsTbody = document.getElementById('diag-onts-tbody');
-
-  let oltDiagSummaryList = [];
-  let currentDiagOlt = null;
-  let currentDiagPorts = [];
-  let currentDiagPort = null;
-  let currentDiagOnts = [];
-  let currentDiagFilter = 'all';
-  let currentDiagSearch = '';
-  let currentDiagSortCol = null;
-  let currentDiagSortDir = 'desc';
-
-  function handleDiagTableSort(col) {
-    if (currentDiagSortCol === col) {
-      currentDiagSortDir = currentDiagSortDir === 'asc' ? 'desc' : 'asc';
-    } else {
-      currentDiagSortCol = col;
-      if (col === 'consumed' || col === 'rx') {
-        currentDiagSortDir = 'desc';
-      } else {
-        currentDiagSortDir = 'asc';
-      }
-    }
-    renderDiagOntsTable();
-  }
-
-  function renderDiagKpis(data) {
-    const kpiTotal = document.getElementById('diag-kpi-total');
-    const kpiOnline = document.getElementById('diag-kpi-online');
-    const kpiOptimal = document.getElementById('diag-kpi-optimal');
-    const kpiAtypical = document.getElementById('diag-kpi-atypical');
-    const kpiDyingGasp = document.getElementById('diag-kpi-dying-gasp');
-    const kpiLosi = document.getElementById('diag-kpi-losi');
-    const kpiIwisp = document.getElementById('diag-kpi-iwisp');
-
-    const countAll = document.getElementById('count-all');
-    const countAtypical = document.getElementById('count-atypical');
-    const countDyingGasp = document.getElementById('count-dying-gasp');
-    const countLosi = document.getElementById('count-losi');
-
-    if (!data) {
-      if (kpiTotal) kpiTotal.textContent = '0';
-      if (kpiOnline) kpiOnline.textContent = '0';
-      if (kpiOptimal) kpiOptimal.textContent = '0';
-      if (kpiAtypical) kpiAtypical.textContent = '0';
-      if (kpiDyingGasp) kpiDyingGasp.textContent = '0';
-      if (kpiLosi) kpiLosi.textContent = '0';
-      if (kpiIwisp) kpiIwisp.textContent = '0';
-
-      if (countAll) countAll.textContent = '0';
-      if (countAtypical) countAtypical.textContent = '0';
-      if (countDyingGasp) countDyingGasp.textContent = '0';
-      if (countLosi) countLosi.textContent = '0';
-      return;
-    }
-
-    if (kpiTotal) kpiTotal.textContent = data.total_onts || 0;
-    if (kpiOnline) kpiOnline.textContent = data.online_count || 0;
-    if (kpiOptimal) kpiOptimal.textContent = data.optimal_count || 0;
-    if (kpiAtypical) kpiAtypical.textContent = data.atypical_count || 0;
-    if (kpiDyingGasp) kpiDyingGasp.textContent = data.dying_gasp_count || 0;
-    if (kpiLosi) kpiLosi.textContent = data.losi_count || 0;
-    if (kpiIwisp) kpiIwisp.textContent = data.iwisp_matched_count || 0;
-
-    if (countAll) countAll.textContent = data.total_onts || 0;
-    if (countAtypical) countAtypical.textContent = data.atypical_count || 0;
-    if (countDyingGasp) countDyingGasp.textContent = data.dying_gasp_count || 0;
-    if (countLosi) countLosi.textContent = data.losi_count || 0;
-  }
-
-  function renderDiagOntsTable() {
-    if (!diagOntsTbody) return;
-
-    // Actualizar iconos e indicadores de ordenamiento en cabeceras
-    const sortHeaders = document.querySelectorAll('.diag-table th.sortable');
-    sortHeaders.forEach(th => {
-      const col = th.dataset.sort;
-      const icon = th.querySelector('.sort-icon');
-      th.classList.remove('sorted-asc', 'sorted-desc');
-      if (icon) icon.className = 'fas fa-sort sort-icon';
-
-      if (col === currentDiagSortCol) {
-        th.classList.add(currentDiagSortDir === 'asc' ? 'sorted-asc' : 'sorted-desc');
-        if (icon) {
-          icon.className = `fas fa-sort-${currentDiagSortDir === 'asc' ? 'up' : 'down'} sort-icon`;
-        }
-      }
-    });
-
-    if (!currentDiagOnts || currentDiagOnts.length === 0) {
-      diagOntsTbody.innerHTML = `<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 30px;">
-        No hay ONTs registradas en este puerto GPON.
-      </td></tr>`;
-      return;
-    }
-
-    const search = (currentDiagSearch || '').trim().toLowerCase();
-
-    const filtered = currentDiagOnts.filter(ont => {
-      // 1. Filtro rápido por estado / causa
-      if (currentDiagFilter === 'atypical' && !ont.is_atypical) return false;
-      if (currentDiagFilter === 'dying-gasp') {
-        const isDg = ont.down_cause_code === 1 || (ont.down_cause || '').toLowerCase().includes('dying');
-        if (!isDg) return false;
-      }
-      if (currentDiagFilter === 'losi') {
-        const isLosi = ont.down_cause_code === 2 || (ont.down_cause || '').toLowerCase().includes('losi');
-        if (!isLosi) return false;
-      }
-      if (currentDiagFilter === 'offline' && ont.status !== 'down' && !ont.is_offline) return false;
-
-      // 2. Filtro por búsqueda de texto
-      if (search) {
-        const textTarget = [
-          ont.client_name || '',
-          ont.client_id || '',
-          ont.serial || '',
-          ont.package_name || '',
-          ont.consumed_fmt || '',
-          String(ont.consumed_tb || ''),
-          ont.down_cause || '',
-          String(ont.ont_id || '')
-        ].join(' ').toLowerCase();
-
-        if (!textTarget.includes(search)) return false;
-      }
-
-      return true;
-    });
-
-    if (filtered.length === 0) {
-      diagOntsTbody.innerHTML = `<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 30px;">
-        No se encontraron ONTs que coincidan con los filtros aplicados.
-      </td></tr>`;
-      return;
-    }
-
-    // Ordenamiento dinámico según columna y dirección activa
-    let sorted = [...filtered];
-    if (currentDiagSortCol) {
-      sorted.sort((a, b) => {
-        let valA, valB;
-        if (currentDiagSortCol === 'ont_id') {
-          valA = Number(a.ont_id ?? 0);
-          valB = Number(b.ont_id ?? 0);
-        } else if (currentDiagSortCol === 'client_id') {
-          valA = Number(a.client_id) || 0;
-          valB = Number(b.client_id) || 0;
-        } else if (currentDiagSortCol === 'client_name') {
-          valA = (a.client_name || '').toLowerCase();
-          valB = (b.client_name || '').toLowerCase();
-        } else if (currentDiagSortCol === 'package') {
-          valA = (a.package_name || '').toLowerCase();
-          valB = (b.package_name || '').toLowerCase();
-        } else if (currentDiagSortCol === 'consumed') {
-          valA = Number(a.consumed_tb !== null && a.consumed_tb !== undefined ? a.consumed_tb : -1);
-          valB = Number(b.consumed_tb !== null && b.consumed_tb !== undefined ? b.consumed_tb : -1);
-        } else if (currentDiagSortCol === 'serial') {
-          valA = (a.serial || '').toLowerCase();
-          valB = (b.serial || '').toLowerCase();
-        } else if (currentDiagSortCol === 'rx') {
-          valA = (a.rx_power_dbm !== null && a.rx_power_dbm !== undefined) ? Number(a.rx_power_dbm) : -999;
-          valB = (b.rx_power_dbm !== null && b.rx_power_dbm !== undefined) ? Number(b.rx_power_dbm) : -999;
-        } else if (currentDiagSortCol === 'status') {
-          valA = (a.status || '') + (a.down_cause || '');
-          valB = (b.status || '') + (b.down_cause || '');
-        }
-
-        if (valA < valB) return currentDiagSortDir === 'asc' ? -1 : 1;
-        if (valA > valB) return currentDiagSortDir === 'asc' ? 1 : -1;
-        return 0;
-      });
-    }
-
-    diagOntsTbody.innerHTML = sorted.map(ont => {
-      // Potencia óptica Rx
-      let rxPowerHtml = '<span style="color: var(--text-muted); font-size: 0.78rem;">--</span>';
-      if (ont.rx_power_dbm !== null && ont.rx_power_dbm !== undefined) {
-        const p = ont.rx_power_dbm;
-        let badgeClass = 'badge-quality-optimal';
-        if (p <= -27.0) {
-          badgeClass = 'badge-quality-critical';
-        } else if (p <= -24.0) {
-          badgeClass = 'badge-quality-acceptable';
-        }
-        rxPowerHtml = `<span class="${badgeClass}">${p.toFixed(2)} dBm</span>`;
-      }
-
-      // Estado / Causa Raíz
-      let statusHtml = '';
-      if (ont.status === 'online') {
-        if (ont.is_atypical) {
-          statusHtml = '<span class="band-tag" style="background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3);">🟢 Online Atenuado</span>';
-        } else {
-          statusHtml = '<span class="band-tag" style="background: rgba(160, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3);">🟢 Online Óptimo</span>';
-        }
-      } else {
-        const isDg = ont.down_cause_code === 1 || (ont.down_cause || '').toLowerCase().includes('dying');
-        const isLosi = ont.down_cause_code === 2 || (ont.down_cause || '').toLowerCase().includes('losi');
-        if (isDg) {
-          statusHtml = `<span class="badge-dying-gasp" title="${ont.down_cause || ''}"><i class="fas fa-bolt"></i> Sin Luz (Dying-Gasp)</span>`;
-        } else if (isLosi) {
-          statusHtml = `<span class="badge-losi" title="${ont.down_cause || ''}"><i class="fas fa-cut"></i> Corte Fibra (LOSi)</span>`;
-        } else {
-          statusHtml = `<span class="band-tag" style="background: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.3);" title="${ont.down_cause || ''}">🔴 Caída (${ont.down_cause || 'Offline'})</span>`;
-        }
-      }
-
-      // ID de Cliente
-      const clientIdHtml = ont.client_id
-        ? `<strong style="color: #38bdf8; font-family: monospace;">#${ont.client_id}</strong>`
-        : '<span style="color: var(--text-muted); font-size: 0.72rem;">Sin ID</span>';
-
-      // Nombre del Cliente
-      const clientName = ont.client_name || 'Sin identificar';
-      const iwispBadge = (ont.is_from_iwisp || ont.is_iwisp_matched)
-        ? '<span title="Enlazado con base de datos i-WISP" style="margin-left: 6px; font-size: 0.65rem; background: rgba(168, 85, 247, 0.2); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.4); padding: 1px 4px; border-radius: 3px;">i-WISP</span>'
-        : '<span title="Leído de descripción SNMP OLT" style="margin-left: 6px; font-size: 0.65rem; background: rgba(100, 116, 139, 0.2); color: #94a3b8; border: 1px solid rgba(100, 116, 139, 0.4); padding: 1px 4px; border-radius: 3px;">OLT</span>';
-
-      // Paquete Contratado
-      let packageHtml = '<span style="color: var(--text-muted); font-size: 0.74rem;">--</span>';
-      if (ont.package_name) {
-        const costStr = (ont.package_cost !== null && ont.package_cost !== undefined && ont.package_cost !== '') ? ` <span style="color: #34d399; font-weight: 600;">($${ont.package_cost})</span>` : '';
-        packageHtml = `<span style="font-size: 0.76rem; color: #f1f5f9; display: inline-flex; align-items: center; gap: 4px;"><i class="fas fa-box" style="font-size: 0.68rem; color: #a855f7;"></i>${ont.package_name}${costStr}</span>`;
-      }
-
-      // Consumo (TB)
-      let consumedHtml = '<span style="color: var(--text-muted); font-size: 0.76rem;">--</span>';
-      if (ont.is_online && ont.consumed_tb !== null && ont.consumed_tb !== undefined && Number(ont.consumed_tb) > 0) {
-        const tb = Number(ont.consumed_tb);
-        let badgeStyle = 'background: rgba(56, 189, 248, 0.12); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3);';
-        let iconColor = '#38bdf8';
-        if (tb >= 2.0) {
-          badgeStyle = 'background: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.35); font-weight: 700;';
-          iconColor = '#ef4444';
-        } else if (tb >= 1.0) {
-          badgeStyle = 'background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); font-weight: 600;';
-          iconColor = '#fbbf24';
-        }
-        consumedHtml = `<span style="font-family: monospace; font-size: 0.76rem; padding: 2px 7px; border-radius: 4px; display: inline-flex; align-items: center; gap: 4px; ${badgeStyle}" title="Tráfico acumulado: ${tb.toFixed(2)} TB"><i class="fas fa-chart-line" style="font-size: 0.68rem; color: ${iconColor};"></i>${tb.toFixed(2)} TB</span>`;
-      } else if (ont.consumed_fmt && ont.consumed_fmt !== '--') {
-        consumedHtml = `<span style="font-family: monospace; font-size: 0.76rem; color: #94a3b8;">${ont.consumed_fmt}</span>`;
-      }
-
-      return `
-        <tr>
-          <td style="font-weight: 700; color: #94a3b8; font-family: monospace;">ONT ${ont.ont_id}</td>
-          <td>${clientIdHtml}</td>
-          <td>
-            <div style="display: flex; align-items: center;">
-              <span style="font-weight: 600; color: #f8fafc;">${clientName}</span>
-              ${iwispBadge}
-            </div>
-          </td>
-          <td>${packageHtml}</td>
-          <td>${consumedHtml}</td>
-          <td>
-            <span style="font-family: monospace; font-size: 0.75rem; background: rgba(15, 23, 42, 0.5); padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border-color); color: #38bdf8;">
-              ${ont.serial || '--'}
-            </span>
-          </td>
-          <td>${rxPowerHtml}</td>
-          <td>${statusHtml}</td>
-        </tr>
-      `;
-    }).join('');
-  }
-
-  const alertSnmpEl = document.getElementById('diag-snmp-alert');
-  const inputDiagOltComm = document.getElementById('input-diagnostic-olt-community');
-  const btnSaveOltComm = document.getElementById('btn-save-olt-community');
-
-  function showSnmpAlert(msg, type = 'info') {
-    if (!alertSnmpEl) return;
-    if (!msg) {
-      alertSnmpEl.style.display = 'none';
-      return;
-    }
-    alertSnmpEl.style.display = 'block';
-    alertSnmpEl.innerHTML = msg;
-    if (type === 'success') {
-      alertSnmpEl.style.background = 'rgba(16, 185, 129, 0.15)';
-      alertSnmpEl.style.color = '#10b981';
-      alertSnmpEl.style.border = '1px solid rgba(16, 185, 129, 0.3)';
-    } else if (type === 'error') {
-      alertSnmpEl.style.background = 'rgba(239, 68, 68, 0.15)';
-      alertSnmpEl.style.color = '#ef4444';
-      alertSnmpEl.style.border = '1px solid rgba(239, 68, 68, 0.3)';
-    } else if (type === 'warning') {
-      alertSnmpEl.style.background = 'rgba(245, 158, 11, 0.15)';
-      alertSnmpEl.style.color = '#fbbf24';
-      alertSnmpEl.style.border = '1px solid rgba(245, 158, 11, 0.3)';
-    } else {
-      alertSnmpEl.style.background = 'rgba(14, 165, 233, 0.15)';
-      alertSnmpEl.style.color = '#38bdf8';
-      alertSnmpEl.style.border = '1px solid rgba(14, 165, 233, 0.3)';
-    }
-  }
-
-  async function selectPortForDiagnostics(port) {
-    if (!port || !currentDiagOlt) return;
-    currentDiagPort = port;
-    const portIndex = port.port_index || port.index;
-    const portName = port.if_descr || port.name || port.display_name || `GPON [${portIndex}]`;
-    showSnmpAlert(null);
-
-    // Actualizar clase activa en cards de puertos
-    if (diagPortsScroll) {
-      const cards = diagPortsScroll.querySelectorAll('.olt-port-card');
-      cards.forEach(c => {
-        if (String(c.dataset.portIndex) === String(portIndex)) {
-          c.classList.add('active');
-          c.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' });
-        } else {
-          c.classList.remove('active');
-        }
-      });
-    }
-
-    if (diagOntsTbody) {
-      diagOntsTbody.innerHTML = `<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 30px;">
-        <i class="fas fa-spinner fa-spin" style="font-size: 1.5rem; color: #38bdf8; margin-bottom: 8px; display: block;"></i>
-        Consultando telemetría SNMP en vivo de <strong>${portName}</strong>...
-      </td></tr>`;
-    }
-
-    try {
-      const activeComm = inputDiagOltComm ? inputDiagOltComm.value.trim() : null;
-      const data = await API.getOltPortOntsDetailed(currentDiagOlt.ip, portIndex, -27.0, activeComm);
-      currentDiagOnts = (data && data.onts) ? data.onts : [];
-
-      if (data && data.community_used && inputDiagOltComm) {
-        inputDiagOltComm.value = data.community_used;
-        currentDiagOlt.community = data.community_used;
-      }
-
-      renderDiagKpis(data);
-      renderDiagOntsTable();
-
-      if (currentDiagOnts.length === 0) {
-        showSnmpAlert(`ℹ️ No se detectaron ONTs por SNMP en <strong>${portName}</strong>. Si esta OLT tiene una comunidad diferente por seguridad, modifícala arriba y presiona "Aplicar".`, 'warning');
-      }
-    } catch (err) {
-      console.error('Error cargando ONTs detalladas:', err);
-      if (diagOntsTbody) {
-        diagOntsTbody.innerHTML = `<tr><td colspan="8" style="text-align: center; color: #ef4444; padding: 30px;">
-          <i class="fas fa-exclamation-triangle" style="font-size: 1.5rem; margin-bottom: 8px; display: block;"></i>
-          Error consultando SNMP de la OLT: ${err.message}
-        </td></tr>`;
-      }
-      renderDiagKpis(null);
-      showSnmpAlert(`⚠️ Error de lectura SNMP (${err.message}). Si la OLT usa una comunidad SNMP distinta por seguridad, cámbiala arriba y pulsa "Aplicar".`, 'error');
-    }
-  }
-
-  function renderDiagPortCards(preselectPortIndex = null) {
-    if (!diagPortsScroll) return;
-    diagPortsScroll.innerHTML = '';
-
-    currentDiagPorts.forEach(port => {
-      const portIndex = port.port_index || port.index;
-      const portName = port.if_descr || port.name || port.display_name || `GPON [${portIndex}]`;
-      const curPortIndex = currentDiagPort ? (currentDiagPort.port_index || currentDiagPort.index) : null;
-      const isSelected = preselectPortIndex 
-        ? String(portIndex) === String(preselectPortIndex)
-        : (curPortIndex && String(curPortIndex) === String(portIndex));
-
-      const card = document.createElement('div');
-      card.className = `olt-port-card ${isSelected ? 'active' : ''}`;
-      card.dataset.portIndex = portIndex;
-
-      const activeOnts = (port.active_onts !== undefined && port.active_onts !== null) ? port.active_onts : port.onus_online;
-      const ontBadge = (activeOnts !== undefined && activeOnts !== null)
-        ? `<span style="font-size: 0.68rem; background: rgba(56, 189, 248, 0.15); color: #38bdf8; padding: 1px 6px; border-radius: 4px; font-weight: 600;">${activeOnts} ONTs</span>`
-        : '';
-
-      card.innerHTML = `
-        <div class="port-name">
-          <span><i class="fas fa-plug" style="color: #38bdf8; font-size: 0.75rem; margin-right: 4px;"></i>${portName}</span>
-          ${ontBadge}
-        </div>
-        <div class="port-meta">
-          <span>Index: ${portIndex}</span>
-        </div>
-      `;
-
-      card.addEventListener('click', () => {
-        selectPortForDiagnostics(port);
-      });
-
-      diagPortsScroll.appendChild(card);
-    });
-  }
-
-  async function selectOltForDiagnostics(olt, preselectPortIndex = null) {
-    currentDiagOlt = olt;
-    currentDiagPort = null;
-    currentDiagOnts = [];
-    renderDiagKpis(null);
-    showSnmpAlert(null);
-
-    if (inputDiagOltComm) {
-      inputDiagOltComm.value = olt.community || 'Muci!6508_rd';
-    }
-
-    if (diagOntsTbody) {
-      diagOntsTbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 30px;">Cargando puertos GPON de la OLT...</td></tr>';
-    }
-    if (diagPortsScroll) {
-      diagPortsScroll.innerHTML = '<div style="color: var(--text-muted); font-size: 0.78rem; padding: 10px;"><i class="fas fa-spinner fa-spin"></i> Obteniendo puertos GPON...</div>';
-    }
-
-    try {
-      const ports = await API.getOltGponPorts(olt.ip);
-      currentDiagPorts = ports || [];
-      if (currentDiagPorts.length === 0) {
-        if (diagPortsScroll) diagPortsScroll.innerHTML = '<div style="color: var(--text-muted); font-size: 0.78rem; padding: 10px;">No se encontraron puertos GPON para esta OLT.</div>';
-        if (diagOntsTbody) diagOntsTbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 30px;">Esta OLT no tiene puertos GPON descubiertos en Zabbix.</td></tr>';
-        return;
-      }
-
-      renderDiagPortCards(preselectPortIndex);
-
-      // Si se especificó un puerto objetivo, seleccionarlo; de lo contrario el primero
-      let targetPort = null;
-      if (preselectPortIndex) {
-        targetPort = currentDiagPorts.find(p => String(p.port_index || p.index) === String(preselectPortIndex));
-      }
-      if (!targetPort && currentDiagPorts.length > 0) {
-        targetPort = currentDiagPorts[0];
-      }
-
-      if (targetPort) {
-        selectPortForDiagnostics(targetPort);
-      }
-    } catch (err) {
-      console.error('Error cargando puertos GPON:', err);
-      if (diagPortsScroll) diagPortsScroll.innerHTML = `<div style="color: #ef4444; font-size: 0.78rem; padding: 10px;">Error: ${err.message}</div>`;
-    }
-  }
-
-  async function loadOltDiagnosticsSuite(preselectOltIp = null, preselectPortIndex = null) {
-    if (selectDiagOlt) {
-      selectDiagOlt.innerHTML = '<option value="">Cargando OLTs disponibles...</option>';
-    }
-    if (diagPortsScroll) {
-      diagPortsScroll.innerHTML = '<div style="color: var(--text-muted); font-size: 0.78rem; padding: 10px;"><i class="fas fa-spinner fa-spin"></i> Cargando OLTs desde Zabbix...</div>';
-    }
-    if (diagOntsTbody) {
-      diagOntsTbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 30px;">Selecciona una OLT y un puerto GPON para ver la telemetría en tiempo real.</td></tr>';
-    }
-
-    try {
-      const data = await API.getOltDiagnosticSummary();
-      oltDiagSummaryList = (data && data.olts) ? data.olts : [];
-      if (oltDiagSummaryList.length === 0) {
-        if (selectDiagOlt) selectDiagOlt.innerHTML = '<option value="">No se encontraron OLTs en Zabbix</option>';
-        if (diagPortsScroll) diagPortsScroll.innerHTML = '<div style="color: var(--text-muted); font-size: 0.78rem; padding: 10px;">No se encontraron OLTs configuradas en Zabbix.</div>';
-        return;
-      }
-
-      const activeIp = preselectOltIp || (currentDiagOlt ? currentDiagOlt.ip : oltDiagSummaryList[0].ip);
-
-      if (selectDiagOlt) {
-        selectDiagOlt.innerHTML = oltDiagSummaryList.map(olt =>
-          `<option value="${olt.ip}" ${olt.ip === activeIp ? 'selected' : ''}>${olt.name} (${olt.ip})${olt.site ? ' - ' + olt.site : ''}</option>`
-        ).join('');
-      }
-
-      const foundOlt = oltDiagSummaryList.find(o => o.ip === activeIp) || oltDiagSummaryList[0];
-      if (foundOlt) {
-        selectOltForDiagnostics(foundOlt, preselectPortIndex);
-      }
-    } catch (err) {
-      console.error('Error cargando suite de diagnóstico OLT:', err);
-      if (selectDiagOlt) selectDiagOlt.innerHTML = '<option value="">Error cargando OLTs</option>';
-      if (diagPortsScroll) diagPortsScroll.innerHTML = `<div style="color: #ef4444; font-size: 0.78rem; padding: 10px;">Error: ${err.message}</div>`;
-    }
-  }
-
-  // Exponer globalmente para abrir el modal desde cualquier lugar (ej. panel de propiedades de Brazo FTTH)
-  window.openOltDiagnosticsModal = function(preselectOltIp = null, preselectPortIndex = null) {
-    if (modalOltDiag) {
-      modalOltDiag.style.display = 'flex';
-      loadOltDiagnosticsSuite(preselectOltIp, preselectPortIndex);
-    }
-  };
-
-  if (btnOpenOltDiag) {
-    btnOpenOltDiag.addEventListener('click', () => {
-      window.openOltDiagnosticsModal();
-    });
-  }
-
-  if (btnCloseOltDiag && modalOltDiag) {
-    btnCloseOltDiag.addEventListener('click', () => {
-      modalOltDiag.style.display = 'none';
-    });
-  }
-
-  if (btnRefreshDiagPort) {
-    btnRefreshDiagPort.addEventListener('click', () => {
-      if (currentDiagOlt && currentDiagPort) {
-        selectPortForDiagnostics(currentDiagPort);
-      } else if (currentDiagOlt) {
-        selectOltForDiagnostics(currentDiagOlt);
-      }
-    });
-  }
-
-  if (selectDiagOlt) {
-    selectDiagOlt.addEventListener('change', (e) => {
-      const selectedIp = e.target.value;
-      const foundOlt = oltDiagSummaryList.find(o => o.ip === selectedIp);
-      if (foundOlt) {
-        selectOltForDiagnostics(foundOlt);
-      }
-    });
-  }
-
-  if (inputSearchOnts) {
-    inputSearchOnts.addEventListener('input', (e) => {
-      currentDiagSearch = e.target.value;
-      renderDiagOntsTable();
-    });
-  }
-
-  const diagFilterButtons = document.querySelectorAll('#diag-filter-buttons-group button');
-  diagFilterButtons.forEach(btn => {
-    btn.addEventListener('click', () => {
-      diagFilterButtons.forEach(b => b.classList.remove('btn-primary'));
-      btn.classList.add('btn-primary');
-      currentDiagFilter = btn.dataset.filter || 'all';
-      renderDiagOntsTable();
-    });
-  });
-
-  const diagSortHeaders = document.querySelectorAll('.diag-table th.sortable');
-  diagSortHeaders.forEach(th => {
-    th.addEventListener('click', () => {
-      const col = th.dataset.sort;
-      if (col) handleDiagTableSort(col);
-    });
-  });
-
-  if (btnSaveOltComm && inputDiagOltComm) {
-    const handleSaveCommunity = async () => {
-      if (!currentDiagOlt) return;
-      const comm = inputDiagOltComm.value.trim();
-      if (!comm) {
-        showSnmpAlert('Por favor introduce una comunidad SNMP no vacía.', 'error');
-        return;
-      }
-      btnSaveOltComm.disabled = true;
-      btnSaveOltComm.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
-      showSnmpAlert(`Probando conectividad SNMP contra ${currentDiagOlt.name} (${currentDiagOlt.ip}) con comunidad "${comm}"...`, 'info');
-      try {
-        const res = await API.saveOltCommunity(currentDiagOlt.ip, comm);
-        if (res.success) {
-          showSnmpAlert(`✅ ${res.message}`, 'success');
-          currentDiagOlt.community = comm;
-          if (currentDiagPort) {
-            selectPortForDiagnostics(currentDiagPort);
-          }
-        } else {
-          showSnmpAlert(`⚠️ ${res.message}. Pulsa 'Refrescar Puerto' si deseas forzar la lectura.`, 'warning');
-        }
-      } catch (err) {
-        showSnmpAlert(`❌ Error probando comunidad: ${err.message}`, 'error');
-      } finally {
-        btnSaveOltComm.disabled = false;
-        btnSaveOltComm.innerHTML = '<i class="fas fa-check"></i> <span>Aplicar</span>';
-      }
-    };
-
-    btnSaveOltComm.addEventListener('click', handleSaveCommunity);
-    inputDiagOltComm.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        handleSaveCommunity();
+        btnSaveSettings.innerHTML = '<i class="fas fa-save"></i> Guardar Configuración';
       }
     });
   }

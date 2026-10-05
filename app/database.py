@@ -1,6 +1,7 @@
 import os
 import aiosqlite
 import logging
+from typing import Optional, Dict, Any
 from contextlib import asynccontextmanager
 from app.config import settings
 
@@ -289,3 +290,60 @@ async def init_db():
 
         await db.commit()
     logger.info("Base de datos SQLite de NexusDude inicializada exitosamente.")
+    await load_system_config_into_settings()
+
+async def get_system_config(key: str, default: Optional[str] = None) -> Optional[str]:
+    async with get_db_connection() as db:
+        cursor = await db.execute("SELECT value FROM system_config WHERE key = ?", (key,))
+        row = await cursor.fetchone()
+        return row["value"] if row else default
+
+async def set_system_config(key: str, value: str, description: Optional[str] = None):
+    async with get_db_connection() as db:
+        await db.execute("""
+            INSERT INTO system_config (key, value, description, updated_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                description = COALESCE(excluded.description, system_config.description),
+                updated_at = CURRENT_TIMESTAMP
+        """, (key, value, description))
+        await db.commit()
+
+async def get_all_system_config() -> dict:
+    async with get_db_connection() as db:
+        cursor = await db.execute("SELECT key, value FROM system_config")
+        rows = await cursor.fetchall()
+        return {r["key"]: r["value"] for r in rows}
+
+async def load_system_config_into_settings():
+    """Carga variables guardadas en SQLite hacia settings en memoria."""
+    try:
+        cfg = await get_all_system_config()
+        if "netbox_url" in cfg and cfg["netbox_url"]:
+            settings.NETBOX_URL = cfg["netbox_url"]
+        if "netbox_external_url" in cfg and cfg["netbox_external_url"]:
+            settings.NETBOX_EXTERNAL_URL = cfg["netbox_external_url"]
+        if "netbox_token" in cfg and cfg["netbox_token"]:
+            settings.NETBOX_TOKEN = cfg["netbox_token"]
+        if "zabbix_url" in cfg and cfg["zabbix_url"]:
+            settings.ZABBIX_URL = cfg["zabbix_url"]
+            try:
+                from app.services.zabbix_service import zabbix_service
+                zabbix_service.base_url = settings.ZABBIX_URL.rstrip('/')
+                zabbix_service.api_url = f"{zabbix_service.base_url}/api_jsonrpc.php"
+                zabbix_service.auth_token = None
+            except Exception:
+                pass
+        if "zabbix_user" in cfg and cfg["zabbix_user"]:
+            settings.ZABBIX_USER = cfg["zabbix_user"]
+        if "zabbix_pass" in cfg and cfg["zabbix_pass"]:
+            settings.ZABBIX_PASS = cfg["zabbix_pass"]
+            try:
+                from app.services.zabbix_service import zabbix_service
+                zabbix_service.auth_token = None
+            except Exception:
+                pass
+        logger.info("Configuraciones dinámicas del sistema cargadas desde SQLite a memoria.")
+    except Exception as e:
+        logger.warning(f"No se pudieron cargar configuraciones dinámicas desde SQLite: {e}")

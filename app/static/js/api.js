@@ -430,6 +430,49 @@ const API = {
     return [];
   },
 
+  // --- Integraciones NetBox y Zabbix (NexusDude Configuración) ---
+  async getIntegrationsConfig() {
+    const res = await this.fetch('/api/config/integrations');
+    if (res.ok) return await res.json();
+    throw new Error(await res.text());
+  },
+
+  async saveNetboxConfig(payload) {
+    const res = await this.fetch('/api/config/netbox', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+    if (res.ok) return await res.json();
+    throw new Error(await res.text());
+  },
+
+  async testNetboxConnection(payload = {}) {
+    const res = await this.fetch('/api/config/netbox/test', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+    if (res.ok) return await res.json();
+    throw new Error(await res.text());
+  },
+
+  async saveZabbixConfig(payload) {
+    const res = await this.fetch('/api/config/zabbix', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+    if (res.ok) return await res.json();
+    throw new Error(await res.text());
+  },
+
+  async testZabbixConnection(payload = {}) {
+    const res = await this.fetch('/api/config/zabbix/test', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+    if (res.ok) return await res.json();
+    throw new Error(await res.text());
+  },
+
   // --- Configuración e Integración i-WISP ---
   async getIWispConfig() {
     const res = await this.fetch('/api/config/iwisp');
