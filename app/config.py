@@ -3,7 +3,7 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     APP_NAME: str = "NexusDude"
-    APP_VERSION: str = "1.0.0"
+    APP_VERSION: str = "2.0.0"
     ENVIRONMENT: str = "production"
     PORT: int = 8000
     CORS_ORIGINS: str = "*"
