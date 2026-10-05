@@ -7398,9 +7398,11 @@ window.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  // Botones de crear mapa en topbar
-  document.getElementById('btn-new-submap').addEventListener('click', () => openCreateMapModal(true, currentMap?.id));
-  document.getElementById('btn-new-root-map').addEventListener('click', () => openCreateMapModal(false));
+  // Botón crear mapa raíz (los submapas se gestionan desde la pestaña de mapas en la barra lateral)
+  const btnNewRootMap = document.getElementById('btn-new-root-map');
+  if (btnNewRootMap) {
+    btnNewRootMap.addEventListener('click', () => openCreateMapModal(false));
+  }
   document.getElementById('btn-close-map-modal').addEventListener('click', () => {
     document.getElementById('modal-map').style.display = 'none';
   });
