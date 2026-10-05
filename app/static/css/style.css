@@ -50,29 +50,83 @@ body {
 .brand-section {
   display: flex;
   align-items: center;
-  gap: 12px;
+  flex-shrink: 0;
 }
 
-.brand {
+/* Enlace raíz del logo (sin subrayado) */
+.brand-logo-link {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-weight: 800;
-  font-size: 1.18rem;
-  letter-spacing: -0.5px;
-  color: #ffffff;
+  gap: 11px;
+  text-decoration: none;
+  user-select: none;
+  transition: opacity 0.18s ease;
+}
+.brand-logo-link:hover {
+  opacity: 0.85;
 }
 
-.brand-badge {
-  font-size: 0.68rem;
-  font-weight: 700;
-  background: linear-gradient(135deg, var(--accent), var(--accent-purple));
-  color: white;
-  padding: 2px 8px;
-  border-radius: 12px;
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
+/* Contenedor del SVG isotipo */
+.brand-isotipo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  /* Sombra suave que refleja el gradiente del SVG */
+  box-shadow: 0 0 14px rgba(14, 165, 233, 0.45), 0 2px 6px rgba(0,0,0,0.35);
+  flex-shrink: 0;
+  transition: box-shadow 0.18s ease, transform 0.18s ease;
 }
+.brand-logo-link:hover .brand-isotipo {
+  box-shadow: 0 0 22px rgba(14, 165, 233, 0.7), 0 2px 8px rgba(0,0,0,0.4);
+  transform: scale(1.05);
+}
+
+/* Bloque de textos a la derecha del isotipo */
+.brand-text-block {
+  display: flex;
+  flex-direction: column;
+  line-height: 1;
+  gap: 3px;
+}
+
+/* Nombre principal */
+.brand-name {
+  font-size: 1.13rem;
+  font-weight: 800;
+  letter-spacing: -0.4px;
+  color: #f8fafc;
+  line-height: 1;
+}
+
+/* Badge de versión ND3.0 */
+.brand-version-tag {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  background: linear-gradient(90deg, rgba(14,165,233,0.25) 0%, rgba(139,92,246,0.25) 100%);
+  border: 1px solid rgba(139, 92, 246, 0.45);
+  color: #bae6fd;
+  padding: 2px 7px;
+  border-radius: 10px;
+  line-height: 1.5;
+  width: fit-content;
+}
+.brand-version-tag strong {
+  color: #e0f2fe;
+  font-weight: 800;
+  margin-left: 1px;
+}
+
+/* Clases legacy — mantener por si algún componente aún las referencia */
+.brand { display: none; }
+.brand-badge { display: none; }
+
 
 /* Breadcrumb Navigation */
 .breadcrumb-container {
