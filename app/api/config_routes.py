@@ -177,16 +177,10 @@ async def save_netbox_config(
             env_updates["NETBOX_TOKEN"] = clean_token
 
         if payload.allow_edge_editing is not None:
-            # Solo permitir cambiar esta configuración si el usuario tiene rol o nombre 'soporte' / 'admin'
-            user_role = (user.get("role") or "").lower()
-            username = (user.get("username") or "").lower()
-            if "soporte" in user_role or "soporte" in username or user_role == "admin" or username == "admin":
-                val_str = "true" if payload.allow_edge_editing else "false"
-                await set_system_config("allow_edge_editing", val_str, "Habilitar creación, edición y eliminación de aristas")
-                settings.ALLOW_EDGE_EDITING = payload.allow_edge_editing
-                env_updates["ALLOW_EDGE_EDITING"] = val_str
-            else:
-                raise HTTPException(status_code=403, detail="Solo los usuarios con nivel Soporte pueden modificar la edición global de aristas.")
+            val_str = "true" if payload.allow_edge_editing else "false"
+            await set_system_config("allow_edge_editing", val_str, "Habilitar creación, edición y eliminación de aristas")
+            settings.ALLOW_EDGE_EDITING = bool(payload.allow_edge_editing)
+            env_updates["ALLOW_EDGE_EDITING"] = val_str
 
         if env_updates:
             update_env_file(env_updates)

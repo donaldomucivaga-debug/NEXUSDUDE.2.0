@@ -2400,7 +2400,6 @@ function renderLink(link, nodesDict) {
 
 function openLinkPropertiesModal(link, sourceNode, targetNode) {
   if (window.allowEdgeEditing === false) {
-    alert('⚠️ La edición de aristas está deshabilitada globalmente en la configuración de NetBox (Nivel Soporte).');
     return;
   }
   const modal = document.getElementById('modal-link-properties');
@@ -2937,7 +2936,6 @@ function updateAllLinks() {
 // ─── 5. Herramienta de Conexión de Enlaces ──────────────────────────────────
 function startLinkMode() {
   if (window.allowEdgeEditing === false) {
-    alert('⚠️ La creación y edición de aristas está deshabilitada globalmente en la configuración de NetBox (Nivel Soporte).');
     return;
   }
   linkMode = true;
@@ -4880,7 +4878,6 @@ function showMultiSelectionNotice(count) {
     if (btnBulkDeleteLinks) {
       btnBulkDeleteLinks.addEventListener('click', async () => {
         if (window.allowEdgeEditing === false) {
-          alert('⚠️ La eliminación de aristas está deshabilitada globalmente en la configuración de NetBox (Nivel Soporte).');
           return;
         }
         if (selectedNodes.size === 0) return;
@@ -8453,7 +8450,6 @@ window.addEventListener('DOMContentLoaded', async () => {
   if (btnDeleteNodeLinks) {
     btnDeleteNodeLinks.addEventListener('click', async () => {
       if (window.allowEdgeEditing === false) {
-        alert('⚠️ La eliminación de aristas está deshabilitada globalmente en la configuración de NetBox (Nivel Soporte).');
         return;
       }
       if (!selectedNode) return;
@@ -8960,35 +8956,30 @@ window.addEventListener('DOMContentLoaded', async () => {
         const isAllowed = data.netbox.allow_edge_editing !== false;
         window.allowEdgeEditing = isAllowed;
 
-        // Verificar si el usuario actual tiene nivel Soporte o Admin
-        const role = (currentUser?.role || '').toLowerCase();
-        const username = (currentUser?.username || '').toLowerCase();
-        const isSoporteOrAdmin = role.includes('soporte') || username.includes('soporte') || role === 'admin' || username === 'admin';
-
+        // Verificar si el control de Soporte está disponible
         if (netboxSoporteEdgeControl) {
-          if (isSoporteOrAdmin) {
-            netboxSoporteEdgeControl.style.display = 'block';
-            if (chkNetboxAllowEdgeEditing) {
-              chkNetboxAllowEdgeEditing.checked = isAllowed;
-              chkNetboxAllowEdgeEditing.onchange = () => {
-                if (badgeEdgeEditingStatus) {
-                  if (chkNetboxAllowEdgeEditing.checked) {
-                    badgeEdgeEditingStatus.textContent = 'Edición Habilitada';
-                    badgeEdgeEditingStatus.style.background = 'rgba(16, 185, 129, 0.15)';
-                    badgeEdgeEditingStatus.style.color = '#10b981';
-                    badgeEdgeEditingStatus.style.borderColor = 'rgba(16, 185, 129, 0.3)';
-                  } else {
-                    badgeEdgeEditingStatus.textContent = 'Edición Bloqueada';
-                    badgeEdgeEditingStatus.style.background = 'rgba(239, 68, 68, 0.15)';
-                    badgeEdgeEditingStatus.style.color = '#ef4444';
-                    badgeEdgeEditingStatus.style.borderColor = 'rgba(239, 68, 68, 0.3)';
-                  }
+          netboxSoporteEdgeControl.style.display = 'block';
+          if (chkNetboxAllowEdgeEditing) {
+            chkNetboxAllowEdgeEditing.checked = isAllowed;
+            const updateBadge = () => {
+              const checked = chkNetboxAllowEdgeEditing.checked;
+              window.allowEdgeEditing = checked;
+              if (badgeEdgeEditingStatus) {
+                if (checked) {
+                  badgeEdgeEditingStatus.textContent = 'Edición Habilitada';
+                  badgeEdgeEditingStatus.style.background = 'rgba(16, 185, 129, 0.15)';
+                  badgeEdgeEditingStatus.style.color = '#10b981';
+                  badgeEdgeEditingStatus.style.borderColor = 'rgba(16, 185, 129, 0.3)';
+                } else {
+                  badgeEdgeEditingStatus.textContent = 'Edición Bloqueada';
+                  badgeEdgeEditingStatus.style.background = 'rgba(239, 68, 68, 0.15)';
+                  badgeEdgeEditingStatus.style.color = '#ef4444';
+                  badgeEdgeEditingStatus.style.borderColor = 'rgba(239, 68, 68, 0.3)';
                 }
-              };
-              chkNetboxAllowEdgeEditing.onchange();
-            }
-          } else {
-            netboxSoporteEdgeControl.style.display = 'none';
+              }
+            };
+            chkNetboxAllowEdgeEditing.onchange = updateBadge;
+            updateBadge();
           }
         }
       }
@@ -9108,8 +9099,9 @@ window.addEventListener('DOMContentLoaded', async () => {
           url: inputNetboxUrl ? inputNetboxUrl.value.trim() : '',
           token: inputNetboxToken ? inputNetboxToken.value.trim() : ''
         };
-        if (chkNetboxAllowEdgeEditing && netboxSoporteEdgeControl && netboxSoporteEdgeControl.style.display !== 'none') {
+        if (chkNetboxAllowEdgeEditing) {
           netboxPayload.allow_edge_editing = chkNetboxAllowEdgeEditing.checked;
+          window.allowEdgeEditing = chkNetboxAllowEdgeEditing.checked;
         }
 
         const pollInt = selectZabbixPollInterval ? (parseInt(selectZabbixPollInterval.value, 10) || 30) : 30;
