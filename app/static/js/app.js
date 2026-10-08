@@ -2654,6 +2654,136 @@ function openLinkPropertiesModal(link, sourceNode, targetNode) {
   setupSideControls(sourceNode, true, 'link-src-submap-container', 'select-link-src-submap-dev', selectSrcIface, inputSrcIface, link.source_interface, link.source_interface_id);
   setupSideControls(targetNode, false, 'link-tgt-submap-container', 'select-link-tgt-submap-dev', selectTgtIface, inputTgtIface, link.target_interface, link.target_interface_id);
 
+  const btnExportNetbox = document.getElementById('btn-export-link-netbox');
+  const btnImportNetbox = document.getElementById('btn-import-link-netbox');
+  const netboxSyncMsg = document.getElementById('link-netbox-sync-msg');
+
+  if (netboxSyncMsg) {
+    netboxSyncMsg.style.display = 'none';
+    netboxSyncMsg.innerHTML = '';
+  }
+
+  const showNetboxMsg = (htmlText, isError = false) => {
+    if (!netboxSyncMsg) return;
+    netboxSyncMsg.style.display = 'block';
+    netboxSyncMsg.style.background = isError ? 'rgba(239, 68, 68, 0.15)' : 'rgba(16, 185, 129, 0.15)';
+    netboxSyncMsg.style.border = isError ? '1px solid #ef4444' : '1px solid #10b981';
+    netboxSyncMsg.style.color = isError ? '#fca5a5' : '#6ee7b7';
+    netboxSyncMsg.innerHTML = htmlText;
+  };
+
+  const updateNetboxBadge = (cableId, cableStatus) => {
+    if (!badgeNetbox) return;
+    if (cableId) {
+      badgeNetbox.textContent = `NetBox Cable #${cableId} (${cableStatus || 'connected'})`;
+      badgeNetbox.style.background = 'rgba(16, 185, 129, 0.15)';
+      badgeNetbox.style.color = '#10b981';
+      badgeNetbox.style.borderColor = 'rgba(16, 185, 129, 0.3)';
+    } else {
+      badgeNetbox.textContent = 'Sin Cable en NetBox';
+      badgeNetbox.style.background = 'rgba(148, 163, 184, 0.1)';
+      badgeNetbox.style.color = 'var(--text-muted)';
+      badgeNetbox.style.borderColor = 'var(--border-color)';
+    }
+  };
+
+  if (btnExportNetbox) {
+    btnExportNetbox.onclick = async () => {
+      let srcIface = selectSrcIface && selectSrcIface.value === '__manual__' ? (inputSrcIface ? inputSrcIface.value.trim() : '') : (selectSrcIface && selectSrcIface.value ? selectSrcIface.value : (inputSrcIface ? inputSrcIface.value.trim() : ''));
+      let tgtIface = selectTgtIface && selectTgtIface.value === '__manual__' ? (inputTgtIface ? inputTgtIface.value.trim() : '') : (selectTgtIface && selectTgtIface.value ? selectTgtIface.value : (inputTgtIface ? inputTgtIface.value.trim() : ''));
+
+      if (!srcIface || !tgtIface) {
+        showNetboxMsg('⚠️ Selecciona o escribe el puerto físico en ambos nodos antes de exportar a NetBox.', true);
+        return;
+      }
+
+      btnExportNetbox.disabled = true;
+      const origHtml = btnExportNetbox.innerHTML;
+      btnExportNetbox.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Exportando...';
+
+      try {
+        await API.updateLink(link.id, {
+          source_interface: srcIface,
+          target_interface: tgtIface,
+          cable_type: selectCableType ? selectCableType.value : 'cat6',
+          cable_status: selectCableStatus ? selectCableStatus.value : 'connected'
+        });
+
+        const res = await API.exportLinkToNetbox(link.id);
+        link.netbox_cable_id = res.netbox_cable_id;
+        link.cable_type = res.cable_type || link.cable_type;
+        link.cable_status = res.cable_status || link.cable_status;
+        link.source_interface = srcIface;
+        link.target_interface = tgtIface;
+
+        updateNetboxBadge(link.netbox_cable_id, link.cable_status);
+        showNetboxMsg(`✅ <strong>Exportado a NetBox:</strong> Cable físico #${res.netbox_cable_id} creado/asociado con éxito.`);
+
+        const linkEntry = linkLines.get(link.id);
+        if (linkEntry) {
+          if (linkEntry.line) linkEntry.line.destroy();
+          if (linkEntry.hitLine) linkEntry.hitLine.destroy();
+          if (linkEntry.srcLabel) linkEntry.srcLabel.destroy();
+          if (linkEntry.tgtLabel) linkEntry.tgtLabel.destroy();
+          if (linkEntry.midLabel) linkEntry.midLabel.destroy();
+          if (linkEntry.dirArrow) linkEntry.dirArrow.destroy();
+          linkLines.delete(link.id);
+          renderLink(link);
+          layer.draw();
+        }
+      } catch (err) {
+        showNetboxMsg(`❌ <strong>Error en NetBox:</strong> ${err.message}`, true);
+      } finally {
+        btnExportNetbox.disabled = false;
+        btnExportNetbox.innerHTML = origHtml;
+      }
+    };
+  }
+
+  if (btnImportNetbox) {
+    btnImportNetbox.onclick = async () => {
+      btnImportNetbox.disabled = true;
+      const origHtml = btnImportNetbox.innerHTML;
+      btnImportNetbox.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Importando...';
+
+      try {
+        const res = await API.importLinkFromNetbox(link.id);
+        link.netbox_cable_id = res.netbox_cable_id;
+        link.cable_type = res.cable_type || link.cable_type;
+        link.cable_status = res.cable_status || link.cable_status;
+        if (res.source_interface) link.source_interface = res.source_interface;
+        if (res.target_interface) link.target_interface = res.target_interface;
+
+        if (selectCableType && res.cable_type) selectCableType.value = res.cable_type;
+        if (selectCableStatus && res.cable_status) selectCableStatus.value = res.cable_status;
+
+        await setupSideControls(sourceNode, true, 'link-src-submap-container', 'select-link-src-submap-dev', selectSrcIface, inputSrcIface, link.source_interface, link.source_interface_id);
+        await setupSideControls(targetNode, false, 'link-tgt-submap-container', 'select-link-tgt-submap-dev', selectTgtIface, inputTgtIface, link.target_interface, link.target_interface_id);
+
+        updateNetboxBadge(link.netbox_cable_id, link.cable_status);
+        showNetboxMsg(`📥 <strong>Importado desde NetBox:</strong> Cable #${res.netbox_cable_id} (${link.source_interface || 'P1'} ↔ ${link.target_interface || 'P2'}) tipo ${link.cable_type}.`);
+
+        const linkEntry = linkLines.get(link.id);
+        if (linkEntry) {
+          if (linkEntry.line) linkEntry.line.destroy();
+          if (linkEntry.hitLine) linkEntry.hitLine.destroy();
+          if (linkEntry.srcLabel) linkEntry.srcLabel.destroy();
+          if (linkEntry.tgtLabel) linkEntry.tgtLabel.destroy();
+          if (linkEntry.midLabel) linkEntry.midLabel.destroy();
+          if (linkEntry.dirArrow) linkEntry.dirArrow.destroy();
+          linkLines.delete(link.id);
+          renderLink(link);
+          layer.draw();
+        }
+      } catch (err) {
+        showNetboxMsg(`❌ <strong>Error en NetBox:</strong> ${err.message}`, true);
+      } finally {
+        btnImportNetbox.disabled = false;
+        btnImportNetbox.innerHTML = origHtml;
+      }
+    };
+  }
+
   modal.style.display = 'flex';
 
   const cleanUp = () => {
@@ -2662,6 +2792,8 @@ function openLinkPropertiesModal(link, sourceNode, targetNode) {
     if (btnCancel) btnCancel.onclick = null;
     if (btnSave) btnSave.onclick = null;
     if (btnDelete) btnDelete.onclick = null;
+    if (btnExportNetbox) btnExportNetbox.onclick = null;
+    if (btnImportNetbox) btnImportNetbox.onclick = null;
     if (selectSrcIface) selectSrcIface.onchange = null;
     if (selectTgtIface) selectTgtIface.onchange = null;
   };
@@ -7912,26 +8044,93 @@ window.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  // Botón Sincronizar Nodos y Enlaces del mapa actual con NetBox en Toolbar
+  // ─── Sincronizaciones NetBox (Menú Toolbar) ─────────────────────────
+
+  // 1. Exportar Conexiones del Mapa a NetBox
+  const btnExportNetboxCables = document.getElementById('btn-export-netbox-cables');
+  if (btnExportNetboxCables) {
+    btnExportNetboxCables.addEventListener('click', async () => {
+      if (!currentMap) return;
+      const origHtml = btnExportNetboxCables.innerHTML;
+      btnExportNetboxCables.style.pointerEvents = 'none';
+      btnExportNetboxCables.innerHTML = '<i class="fas fa-spinner fa-spin" style="color: #10b981;"></i> <span>Exportando cables...</span>';
+
+      try {
+        const res = await API.exportMapNetboxCables(currentMap.id);
+        await loadMap(currentMap.id);
+        alert(`📤 Exportación de Conexiones a NetBox completada:\n\n${res.message || 'Cables procesados con éxito.'}`);
+      } catch (err) {
+        alert('❌ Error exportando conexiones a NetBox: ' + err.message);
+      } finally {
+        btnExportNetboxCables.style.pointerEvents = '';
+        btnExportNetboxCables.innerHTML = origHtml;
+      }
+    });
+  }
+
+  // 2. Importar Conexiones de NetBox hacia el Mapa
+  const btnImportNetboxCables = document.getElementById('btn-import-netbox-cables');
+  if (btnImportNetboxCables) {
+    btnImportNetboxCables.addEventListener('click', async () => {
+      if (!currentMap) return;
+      const origHtml = btnImportNetboxCables.innerHTML;
+      btnImportNetboxCables.style.pointerEvents = 'none';
+      btnImportNetboxCables.innerHTML = '<i class="fas fa-spinner fa-spin" style="color: #38bdf8;"></i> <span>Importando cables...</span>';
+
+      try {
+        const res = await API.syncMapNetboxCables(currentMap.id);
+        await loadMap(currentMap.id);
+        alert(`📥 Importación de Conexiones desde NetBox completada:\n\n${res.message || 'Cables importados correctamente.'}`);
+      } catch (err) {
+        alert('❌ Error importando conexiones desde NetBox: ' + err.message);
+      } finally {
+        btnImportNetboxCables.style.pointerEvents = '';
+        btnImportNetboxCables.innerHTML = origHtml;
+      }
+    });
+  }
+
+  // 3. Exportar Mapa Actual a NetBox
+  const btnExportNetboxMap = document.getElementById('btn-export-netbox-map');
+  if (btnExportNetboxMap) {
+    btnExportNetboxMap.addEventListener('click', async () => {
+      if (!currentMap) return;
+      const origHtml = btnExportNetboxMap.innerHTML;
+      btnExportNetboxMap.style.pointerEvents = 'none';
+      btnExportNetboxMap.innerHTML = '<i class="fas fa-spinner fa-spin" style="color: #10b981;"></i> <span>Exportando mapa...</span>';
+
+      try {
+        const res = await API.exportMapToNetbox(currentMap.id);
+        await loadMap(currentMap.id);
+        alert(`📤 Exportación del Mapa a NetBox completada:\n\n${res.message || 'Estructura y cables sincronizados con éxito.'}`);
+      } catch (err) {
+        alert('❌ Error exportando mapa a NetBox: ' + err.message);
+      } finally {
+        btnExportNetboxMap.style.pointerEvents = '';
+        btnExportNetboxMap.innerHTML = origHtml;
+      }
+    });
+  }
+
+  // 4. Importar / Actualizar Mapa Actual desde NetBox (Nodos y Dispositivos)
   const btnSyncNetbox = document.getElementById('btn-sync-netbox-nodes');
   if (btnSyncNetbox) {
     btnSyncNetbox.addEventListener('click', async () => {
       if (!currentMap) return;
       const origHtml = btnSyncNetbox.innerHTML;
-      btnSyncNetbox.disabled = true;
-      btnSyncNetbox.innerHTML = '<i class="fas fa-spinner fa-spin"></i> <span>Sincronizando NetBox...</span>';
+      btnSyncNetbox.style.pointerEvents = 'none';
+      btnSyncNetbox.innerHTML = '<i class="fas fa-spinner fa-spin" style="color: #34d399;"></i> <span>Actualizando nodos...</span>';
 
       try {
         await API.refreshInventory();
         await loadInventoryFilters();
         const resNodes = await API.syncMapNetboxNodes(currentMap.id);
-        const resCables = await API.syncMapNetboxCables(currentMap.id);
         await loadMap(currentMap.id);
-        alert(`Sincronización NetBox completada:\n• Nodos: ${resNodes.message || 'Actualizados'}\n• Enlaces Físicos / Cables: ${resCables.message || 'Actualizados'}`);
+        alert(`📥 Sincronización de Dispositivos desde NetBox completada:\n\n${resNodes.message || 'Nodos actualizados con éxito.'}`);
       } catch (err) {
-        alert('Error sincronizando con NetBox: ' + err.message);
+        alert('❌ Error sincronizando nodos con NetBox: ' + err.message);
       } finally {
-        btnSyncNetbox.disabled = false;
+        btnSyncNetbox.style.pointerEvents = '';
         btnSyncNetbox.innerHTML = origHtml;
       }
     });
@@ -8739,10 +8938,15 @@ window.addEventListener('DOMContentLoaded', async () => {
       dropdownSyncContainer.classList.toggle('open');
     });
 
-    // Cerrar el menú desplegable al hacer clic en cualquier opción interna
+    // Cerrar el menú desplegable al hacer clic en cualquier opción interna (excepto triggers de submenú)
     const dropdownItems = dropdownSyncContainer.querySelectorAll('.dropdown-item');
     dropdownItems.forEach(item => {
-      item.addEventListener('click', () => {
+      item.addEventListener('click', (e) => {
+        if (item.parentElement && item.parentElement.classList.contains('dropdown-submenu')) {
+          e.stopPropagation();
+          item.parentElement.classList.toggle('open');
+          return;
+        }
         dropdownSyncContainer.classList.remove('open');
       });
     });

@@ -407,6 +407,18 @@ class InventoryService:
                 logger.error(f"Error creando cable en NetBox: {res.status_code} - {res.text}")
                 raise Exception(f"NetBox no pudo crear el cable: {res.text}")
 
+    async def get_netbox_cable(self, cable_id: int) -> Optional[Dict[str, Any]]:
+        """Obtiene los datos completos de un cable desde NetBox por su ID."""
+        headers = await self.get_headers()
+        try:
+            async with httpx.AsyncClient(verify=False, timeout=10.0) as client:
+                res = await client.get(f"{settings.NETBOX_URL}/api/dcim/cables/{cable_id}/", headers=headers)
+                if res.status_code == 200:
+                    return res.json()
+        except Exception as e:
+            logger.error(f"Error consultando cable {cable_id} en NetBox: {e}")
+        return None
+
     async def delete_netbox_cable(self, cable_id: int) -> bool:
         """Elimina un Cable de NetBox al desconectar un enlace en NexusDude."""
         headers = await self.get_headers()
@@ -427,4 +439,5 @@ class InventoryService:
             return False
 
 inventory_service = InventoryService()
+
 

@@ -1730,10 +1730,65 @@ body.sidebar-resizing-active * {
   color: var(--accent);
 }
 
+.dropdown-header {
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #94a3b8;
+  padding: 6px 14px 2px 14px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .dropdown-divider {
   height: 1px;
   background-color: var(--border-color);
   margin: 5px 0;
+}
+
+/* Submenús Desplegables (Cascada) */
+.dropdown-submenu {
+  position: relative;
+}
+
+.dropdown-submenu > .dropdown-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.dropdown-submenu-menu {
+  display: none;
+  position: absolute;
+  top: -4px;
+  left: 100%;
+  margin-left: 4px;
+  min-width: 270px;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.75);
+  z-index: 1010;
+  padding: 6px 0;
+}
+
+.dropdown-submenu:hover > .dropdown-submenu-menu,
+.dropdown-submenu.open > .dropdown-submenu-menu {
+  display: block;
+  animation: fadeInRight 0.15s ease-out;
+}
+
+@keyframes fadeInRight {
+  from {
+    opacity: 0;
+    transform: translateX(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 /* Botón OLT en Toolbar con brillo destacado */

@@ -4,8 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>NexusDude - The Modern Network Dude</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=4.8">
-  <link rel="stylesheet" href="/static/css/docs.css?v=2.6">
+  <link rel="stylesheet" href="/static/css/style.css?v=5.0">
+  <link rel="stylesheet" href="/static/css/docs.css?v=5.0">
   <!-- FontAwesome Icons -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <!-- Konva Canvas Library -->
@@ -100,20 +100,70 @@
           <i class="fas fa-sync-alt"></i>
           <span>Sincronización <i class="fas fa-chevron-down" style="font-size: 0.65rem; margin-left: 2px;"></i></span>
         </button>
-        <div class="dropdown-menu" id="sync-dropdown-menu">
-          <div class="dropdown-item" id="btn-sync-netbox-nodes" title="Actualizar nombres, roles, colores e IPs de los nodos desde NetBox">
-            <i class="fas fa-sync-alt" style="color: #10b981;"></i>
-            <span>Actualizar con NetBox</span>
+        <div class="dropdown-menu" id="sync-dropdown-menu" style="min-width: 280px;">
+          <!-- Submenú Cascada: NetBox Conexiones -->
+          <div class="dropdown-submenu" id="submenu-netbox-connections">
+            <div class="dropdown-item">
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <i class="fas fa-plug" style="color: #38bdf8;"></i>
+                <span style="font-weight: 600;">NetBox • Conexiones</span>
+              </div>
+              <i class="fas fa-chevron-right" style="font-size: 0.65rem; color: #94a3b8;"></i>
+            </div>
+            <div class="dropdown-submenu-menu">
+              <div class="dropdown-header">
+                <i class="fas fa-plug" style="color: #38bdf8;"></i> Conexiones del Mapa Actual
+              </div>
+              <div class="dropdown-item" id="btn-export-netbox-cables" title="Exportar todas las conexiones y cables del mapa actual a NetBox">
+                <i class="fas fa-file-export" style="color: #10b981;"></i>
+                <span>Exportar Conexiones a NetBox</span>
+              </div>
+              <div class="dropdown-item" id="btn-import-netbox-cables" title="Importar cables y conexiones físicas desde NetBox hacia el mapa actual">
+                <i class="fas fa-file-import" style="color: #38bdf8;"></i>
+                <span>Importar Conexiones de NetBox</span>
+              </div>
+            </div>
           </div>
-          <div class="dropdown-item" id="btn-populate-current-map" style="display: none;" title="Poblar este mapa con los equipos de su Sitio NetBox">
-            <i class="fas fa-magic" style="color: #38bdf8;"></i>
-            <span id="btn-populate-text">Poblar desde Sitio NetBox</span>
+
+          <!-- Submenú Cascada: NetBox Mapa General -->
+          <div class="dropdown-submenu" id="submenu-netbox-map">
+            <div class="dropdown-item">
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <i class="fas fa-network-wired" style="color: #10b981;"></i>
+                <span style="font-weight: 600;">NetBox • Mapa General</span>
+              </div>
+              <i class="fas fa-chevron-right" style="font-size: 0.65rem; color: #94a3b8;"></i>
+            </div>
+            <div class="dropdown-submenu-menu">
+              <div class="dropdown-header">
+                <i class="fas fa-network-wired" style="color: #10b981;"></i> Topología y Nodos
+              </div>
+              <div class="dropdown-item" id="btn-export-netbox-map" title="Exportar la estructura y cables del mapa actual hacia NetBox">
+                <i class="fas fa-cloud-upload-alt" style="color: #10b981;"></i>
+                <span>Exportar Mapa Actual a NetBox</span>
+              </div>
+              <div class="dropdown-item" id="btn-sync-netbox-nodes" title="Actualizar nombres, roles, colores e IPs de los nodos del mapa actual desde NetBox">
+                <i class="fas fa-cloud-download-alt" style="color: #34d399;"></i>
+                <span>Importar / Actualizar Mapa Actual</span>
+              </div>
+              <div class="dropdown-item" id="btn-populate-current-map" style="display: none;" title="Poblar este mapa con los equipos de su Sitio NetBox">
+                <i class="fas fa-magic" style="color: #38bdf8;"></i>
+                <span id="btn-populate-text">Poblar desde Sitio NetBox</span>
+              </div>
+            </div>
           </div>
+
+          <div class="dropdown-divider"></div>
+
+          <!-- Zabbix -->
           <div class="dropdown-item" id="btn-open-zabbix-sync" title="Sincronizar topología jerárquica con Zabbix Services (BSM)">
             <i class="fas fa-satellite-dish" style="color: #a855f7;"></i>
             <span>Sincronizar Zabbix (BSM)</span>
           </div>
+
           <div class="dropdown-divider"></div>
+
+          <!-- Navegación -->
           <div class="dropdown-item" id="btn-ensure-parent-node" style="display: none;" title="Insertar o verificar nodo de navegación para subir al mapa padre">
             <i class="fas fa-level-up-alt" style="color: #38bdf8;"></i>
             <span>Insertar Acceso a Padre</span>
@@ -1070,6 +1120,17 @@
               </select>
             </div>
           </div>
+
+          <!-- Acciones Individuales NetBox (Exportar / Importar Conexión) -->
+          <div style="display: flex; gap: 8px; margin-top: 4px;">
+            <button type="button" class="btn" id="btn-export-link-netbox" style="flex: 1; font-size: 0.74rem; padding: 6px 10px; background: rgba(16, 185, 129, 0.15); border: 1px solid #10b981; color: #34d399; justify-content: center;" title="Crear o actualizar este cable físico en NetBox">
+              <i class="fas fa-file-export"></i> Exportar a NetBox
+            </button>
+            <button type="button" class="btn" id="btn-import-link-netbox" style="flex: 1; font-size: 0.74rem; padding: 6px 10px; background: rgba(56, 189, 248, 0.15); border: 1px solid #38bdf8; color: #38bdf8; justify-content: center;" title="Importar o sincronizar estado del cable desde NetBox">
+              <i class="fas fa-file-import"></i> Importar de NetBox
+            </button>
+          </div>
+          <div id="link-netbox-sync-msg" style="display: none; font-size: 0.72rem; padding: 6px 10px; border-radius: 6px; line-height: 1.3;"></div>
         </div>
 
 
@@ -1911,9 +1972,9 @@
   </div>
 
   <!-- Scripts -->
-  <script src="/static/js/api.js?v=4.6"></script>
-  <script src="/static/js/app.js?v=4.9"></script>
-  <script src="/static/js/docs.js?v=2.6"></script>
+  <script src="/static/js/api.js?v=5.0"></script>
+  <script src="/static/js/app.js?v=5.0"></script>
+  <script src="/static/js/docs.js?v=5.0"></script>
 </body>
 </html>
 

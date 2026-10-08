@@ -318,6 +318,38 @@ const API = {
     throw new Error(await res.text());
   },
 
+  async exportMapNetboxCables(mapId) {
+    const res = await this.fetch(`/api/maps/${mapId}/export-netbox-cables`, {
+      method: 'POST'
+    });
+    if (res.ok) return await res.json();
+    throw new Error(await res.text());
+  },
+
+  async exportMapToNetbox(mapId) {
+    const res = await this.fetch(`/api/maps/${mapId}/export-netbox-map`, {
+      method: 'POST'
+    });
+    if (res.ok) return await res.json();
+    throw new Error(await res.text());
+  },
+
+  async exportLinkToNetbox(linkId) {
+    const res = await this.fetch(`/api/maps/links/${linkId}/export-netbox`, {
+      method: 'POST'
+    });
+    if (res.ok) return await res.json();
+    throw new Error(await res.text());
+  },
+
+  async importLinkFromNetbox(linkId) {
+    const res = await this.fetch(`/api/maps/links/${linkId}/import-netbox`, {
+      method: 'POST'
+    });
+    if (res.ok) return await res.json();
+    throw new Error(await res.text());
+  },
+
   async getInventorySites() {
     const res = await this.fetch('/api/inventory/sites');
     if (res.ok) return await res.json();
@@ -580,5 +612,8 @@ const API = {
     throw new Error(await res.text());
   }
 };
+
+window.API = API;
+
 
 

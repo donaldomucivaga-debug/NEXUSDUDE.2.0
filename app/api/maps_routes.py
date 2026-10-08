@@ -1678,6 +1678,283 @@ async def delete_link(link_id: str, user: Dict[str, Any] = Depends(get_current_u
         await db.commit()
         return {"status": "success", "message": f"Enlace {link_id} eliminado de NexusDude y NetBox"}
 
+
+# --- Sincronización Individual de Aristas con NetBox ---
+
+@router.post("/links/{link_id}/export-netbox")
+async def export_link_to_netbox(link_id: str, user: Dict[str, Any] = Depends(get_current_user)):
+    """
+    Exporta una conexión/arista individual hacia NetBox como cable físico (dcim.cables).
+    Asocia los puertos físicos de ambos dispositivos en NetBox y actualiza el netbox_cable_id en NexusDude.
+    """
+    if not getattr(settings, "ALLOW_EDGE_EDITING", True):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="La creación y edición de aristas está deshabilitada globalmente por el nivel de Soporte en NetBox."
+        )
+
+    async with get_db_connection() as db:
+        c_link = await db.execute("SELECT * FROM links WHERE id = ?", (link_id,))
+        link = await c_link.fetchone()
+        if not link:
+            raise HTTPException(status_code=404, detail="Enlace no encontrado")
+
+        c_src = await db.execute("SELECT id, device_id, name, extra_data FROM nodes WHERE id = ?", (link["source_node_id"],))
+        src_node = await c_src.fetchone()
+        c_tgt = await db.execute("SELECT id, device_id, name, extra_data FROM nodes WHERE id = ?", (link["target_node_id"],))
+        tgt_node = await c_tgt.fetchone()
+
+        if not src_node or not tgt_node:
+            raise HTTPException(status_code=400, detail="Los nodos extremos del enlace no existen")
+
+        extra_data = json.loads(link["extra_data"]) if link["extra_data"] else {}
+
+        # Resolver device_id para ambos extremos (directo o submapa)
+        src_dev_id = src_node["device_id"] or extra_data.get("source_submap_device_id") or extra_data.get("remote_node_id")
+        tgt_dev_id = tgt_node["device_id"] or extra_data.get("target_submap_device_id") or extra_data.get("remote_node_id")
+
+        if not src_dev_id or not tgt_dev_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Ambos extremos del enlace deben estar asociados a dispositivos registrados en NetBox con ID válido."
+            )
+
+        src_iface = link["source_interface"]
+        tgt_iface = link["target_interface"]
+
+        if not src_iface or not tgt_iface:
+            raise HTTPException(
+                status_code=400,
+                detail="Debes seleccionar el puerto físico en ambos nodos para exportar el cable a NetBox."
+            )
+
+        cable_type = link["cable_type"] or "cat6"
+        description = f"Enlace exportado desde NexusDude [{src_node['name']} ({src_iface}) <-> {tgt_node['name']} ({tgt_iface})]"
+
+        try:
+            cable_res = await inventory_service.create_netbox_cable(
+                int(src_dev_id), str(src_iface),
+                int(tgt_dev_id), str(tgt_iface),
+                cable_type=cable_type,
+                description=description
+            )
+            new_cable_id = cable_res.get("cable_id")
+            new_cable_status = cable_res.get("cable_status", "connected")
+            new_cable_type = cable_res.get("cable_type", cable_type)
+
+            await db.execute("""
+                UPDATE links
+                SET netbox_cable_id = ?, cable_type = ?, cable_status = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            """, (new_cable_id, new_cable_type, new_cable_status, link_id))
+            await db.commit()
+
+            return {
+                "status": "success",
+                "message": f"Conexión exportada exitosamente a NetBox (Cable #{new_cable_id})",
+                "netbox_cable_id": new_cable_id,
+                "cable_type": new_cable_type,
+                "cable_status": new_cable_status
+            }
+        except Exception as e:
+            logger.error(f"Error exportando cable individual a NetBox: {e}")
+            raise HTTPException(status_code=500, detail=f"Error en NetBox: {str(e)}")
+
+
+@router.post("/links/{link_id}/import-netbox")
+async def import_link_from_netbox(link_id: str, user: Dict[str, Any] = Depends(get_current_user)):
+    """
+    Importa o refresca la información de la conexión seleccionada desde NetBox.
+    Actualiza interfaces, tipo de cable y estado operativo directamente desde NetBox.
+    """
+    async with get_db_connection() as db:
+        c_link = await db.execute("SELECT * FROM links WHERE id = ?", (link_id,))
+        link = await c_link.fetchone()
+        if not link:
+            raise HTTPException(status_code=404, detail="Enlace no encontrado")
+
+        c_src = await db.execute("SELECT id, device_id, name, extra_data FROM nodes WHERE id = ?", (link["source_node_id"],))
+        src_node = await c_src.fetchone()
+        c_tgt = await db.execute("SELECT id, device_id, name, extra_data FROM nodes WHERE id = ?", (link["target_node_id"],))
+        tgt_node = await c_tgt.fetchone()
+
+        extra_data = json.loads(link["extra_data"]) if link["extra_data"] else {}
+        src_dev_id = (src_node["device_id"] if src_node else None) or extra_data.get("source_submap_device_id")
+        tgt_dev_id = (tgt_node["device_id"] if tgt_node else None) or extra_data.get("target_submap_device_id")
+
+        cable_id = link["netbox_cable_id"]
+        found_cable = None
+
+        if cable_id:
+            found_cable = await inventory_service.get_netbox_cable(cable_id)
+
+        # Si no hay cable_id o no se encontró por ID, buscar en interfaces de NetBox
+        if not found_cable and src_dev_id:
+            ifaces = await inventory_service.get_device_interfaces(int(src_dev_id))
+            for iface in ifaces:
+                if str(iface.get("connected_device_id")) == str(tgt_dev_id):
+                    found_cable = {
+                        "id": iface.get("cable_id"),
+                        "type": {"value": iface.get("cable_type") or "cat6"},
+                        "status": {"value": iface.get("cable_status") or "connected"},
+                        "src_iface": iface.get("name"),
+                        "tgt_iface": iface.get("connected_interface")
+                    }
+                    break
+
+        if not found_cable:
+            raise HTTPException(
+                status_code=404,
+                detail="No se encontró ningún cable físico o conexión registrada en NetBox para estos dispositivos."
+            )
+
+        new_cable_id = found_cable.get("id") or cable_id
+        new_cable_type = found_cable.get("type", {}).get("value") if isinstance(found_cable.get("type"), dict) else (found_cable.get("type") or link["cable_type"] or "cat6")
+        new_cable_status = found_cable.get("status", {}).get("value") if isinstance(found_cable.get("status"), dict) else (found_cable.get("status") or "connected")
+
+        src_if_name = link["source_interface"]
+        tgt_if_name = link["target_interface"]
+        a_terms = found_cable.get("a_terminations", [])
+        b_terms = found_cable.get("b_terminations", [])
+        if a_terms and b_terms:
+            dev_a = a_terms[0].get("object", {}).get("device", {}).get("id")
+            if str(dev_a) == str(src_dev_id):
+                src_if_name = a_terms[0].get("object", {}).get("name") or src_if_name
+                tgt_if_name = b_terms[0].get("object", {}).get("name") or tgt_if_name
+            else:
+                src_if_name = b_terms[0].get("object", {}).get("name") or src_if_name
+                tgt_if_name = a_terms[0].get("object", {}).get("name") or tgt_if_name
+        elif found_cable.get("src_iface"):
+            src_if_name = found_cable.get("src_iface") or src_if_name
+            tgt_if_name = found_cable.get("tgt_iface") or tgt_if_name
+
+        await db.execute("""
+            UPDATE links
+            SET netbox_cable_id = ?, source_interface = ?, target_interface = ?,
+                cable_type = ?, cable_status = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        """, (new_cable_id, src_if_name, tgt_if_name, new_cable_type, new_cable_status, link_id))
+        await db.commit()
+
+        return {
+            "status": "success",
+            "message": f"Conexión sincronizada exitosamente desde NetBox (Cable #{new_cable_id})",
+            "netbox_cable_id": new_cable_id,
+            "source_interface": src_if_name,
+            "target_interface": tgt_if_name,
+            "cable_type": new_cable_type,
+            "cable_status": new_cable_status
+        }
+
+
+# --- Sincronización a Nivel de Mapa con NetBox ---
+
+@router.post("/{map_id}/export-netbox-cables")
+async def export_map_netbox_cables(map_id: str, user: Dict[str, Any] = Depends(get_current_user)):
+    """
+    Exporta todas las conexiones / aristas del mapa actual hacia NetBox como cables físicos.
+    Crea los cables en NetBox para aquellos enlaces que tengan puertos definidos y no estén cableados aún.
+    """
+    if not getattr(settings, "ALLOW_EDGE_EDITING", True):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="La creación y edición de aristas está deshabilitada globalmente por el nivel de Soporte en NetBox."
+        )
+
+    async with get_db_connection() as db:
+        c_nodes = await db.execute("SELECT id, device_id, name, extra_data FROM nodes WHERE map_id = ?", (map_id,))
+        nodes_rows = await c_nodes.fetchall()
+        node_map = {n["id"]: n for n in nodes_rows}
+
+        c_links = await db.execute("SELECT * FROM links WHERE map_id = ?", (map_id,))
+        links = await c_links.fetchall()
+
+        if not links:
+            return {"status": "success", "exported_count": 0, "already_synced_count": 0, "message": "No hay conexiones en este mapa."}
+
+        exported_count = 0
+        already_synced_count = 0
+        skipped_count = 0
+        errors = []
+
+        for link in links:
+            link_id = link["id"]
+            cable_id = link["netbox_cable_id"]
+            if cable_id:
+                already_synced_count += 1
+                continue
+
+            src_node = node_map.get(link["source_node_id"])
+            tgt_node = node_map.get(link["target_node_id"])
+            if not src_node or not tgt_node:
+                skipped_count += 1
+                continue
+
+            extra_data = json.loads(link["extra_data"]) if link["extra_data"] else {}
+            src_dev_id = src_node["device_id"] or extra_data.get("source_submap_device_id") or extra_data.get("remote_node_id")
+            tgt_dev_id = tgt_node["device_id"] or extra_data.get("target_submap_device_id") or extra_data.get("remote_node_id")
+
+            src_iface = link["source_interface"]
+            tgt_iface = link["target_interface"]
+
+            if not src_dev_id or not tgt_dev_id or not src_iface or not tgt_iface:
+                skipped_count += 1
+                continue
+
+            cable_type = link["cable_type"] or "cat6"
+            description = f"Exportado desde NexusDude [{src_node['name']} ({src_iface}) <-> {tgt_node['name']} ({tgt_iface})]"
+
+            try:
+                cable_res = await inventory_service.create_netbox_cable(
+                    int(src_dev_id), str(src_iface),
+                    int(tgt_dev_id), str(tgt_iface),
+                    cable_type=cable_type,
+                    description=description
+                )
+                new_cable_id = cable_res.get("cable_id")
+                new_cable_status = cable_res.get("cable_status", "connected")
+                new_cable_type = cable_res.get("cable_type", cable_type)
+
+                await db.execute("""
+                    UPDATE links
+                    SET netbox_cable_id = ?, cable_type = ?, cable_status = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                """, (new_cable_id, new_cable_type, new_cable_status, link_id))
+                exported_count += 1
+            except Exception as e:
+                errors.append(f"Enlace {src_node['name']} - {tgt_node['name']}: {str(e)}")
+
+        await db.commit()
+
+        msg = f"Se exportaron {exported_count} cables a NetBox. ({already_synced_count} ya estaban sincronizados, {skipped_count} omitidos por falta de puertos)."
+        if errors:
+            msg += f" Hubo {len(errors)} advertencias."
+
+        return {
+            "status": "success",
+            "exported_count": exported_count,
+            "already_synced_count": already_synced_count,
+            "skipped_count": skipped_count,
+            "errors": errors,
+            "message": msg
+        }
+
+
+@router.post("/{map_id}/export-netbox-map")
+async def export_map_to_netbox(map_id: str, user: Dict[str, Any] = Depends(get_current_user)):
+    """
+    Sincroniza y exporta la estructura completa del mapa actual hacia NetBox.
+    Exporta todas las conexiones / cables y actualiza el mapa con los datos del sitio.
+    """
+    cables_res = await export_map_netbox_cables(map_id, user)
+    return {
+        "status": "success",
+        "map_id": map_id,
+        "message": f"Mapa exportado a NetBox con éxito. {cables_res.get('message', '')}",
+        "cables_summary": cables_res
+    }
+
+
 @router.post("/{map_id}/sync-netbox-cables")
 async def sync_map_netbox_cables(map_id: str, user: Dict[str, Any] = Depends(get_current_user)):
     """
