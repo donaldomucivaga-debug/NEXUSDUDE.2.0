@@ -2115,7 +2115,8 @@ function createLinkPortBadge(text, color = '#38bdf8') {
     fontFamily: 'monospace',
     fontStyle: 'bold',
     fill: '#f8fafc',
-    padding: 0
+    padding: 0,
+    perfectDrawEnabled: false
   });
   const w = txt.width() + padX * 2;
   const h = txt.height() + padY * 2;
@@ -2126,10 +2127,7 @@ function createLinkPortBadge(text, color = '#38bdf8') {
     stroke: color,
     strokeWidth: 1,
     cornerRadius: 2.5,
-    shadowColor: 'rgba(0, 0, 0, 0.6)',
-    shadowBlur: 3,
-    shadowOffset: { x: 0, y: 1 },
-    shadowOpacity: 0.4
+    perfectDrawEnabled: false
   });
   txt.x(padX);
   txt.y(padY);
@@ -2195,7 +2193,6 @@ function renderLink(link, nodesDict) {
         srcBadge.position({ x: bx, y: by });
         srcBadge.rotation(angleDeg);
         srcBadge.visible(true);
-        srcBadge.moveToTop();
       } else {
         srcBadge.visible(false);
       }
@@ -2223,7 +2220,6 @@ function renderLink(link, nodesDict) {
         tgtBadge.position({ x: bx, y: by });
         tgtBadge.rotation(angleDeg);
         tgtBadge.visible(true);
-        tgtBadge.moveToTop();
       } else {
         tgtBadge.visible(false);
       }
@@ -2243,7 +2239,7 @@ function renderLink(link, nodesDict) {
   }
   updateBadgesPos(arrowPts);
 
-  line.on('mouseenter mousemove', (e) => {
+  line.on('mouseenter', (e) => {
     document.body.style.cursor = 'pointer';
     line.stroke('#38bdf8');
     line.fill('#38bdf8');
@@ -2254,13 +2250,13 @@ function renderLink(link, nodesDict) {
     const gponTooltip = document.getElementById('canvas-gpon-tooltip');
     const standardTooltip = document.getElementById('canvas-link-tooltip');
 
+    const evt = e.evt || window.event;
     if (isGponBranch && gponTooltip) {
       const ftthNode = target.device_type === 'ftth_branch' ? target : source;
       const otherNode = target.device_type === 'ftth_branch' ? source : target;
       const extra = ftthNode.extra_data || {};
       const gponPort = extra.gpon_port || link.source_interface || 'GPON';
 
-      const evt = e.evt || window.event;
       if (evt) {
         gponTooltip.style.left = `${evt.clientX + 14}px`;
         gponTooltip.style.top = `${evt.clientY + 14}px`;
@@ -2302,16 +2298,14 @@ function renderLink(link, nodesDict) {
           statusEl.style.color = telem.port_status === 'down' ? '#f87171' : (telem.atypical_count > 0 ? '#fbbf24' : '#10b981');
           statusEl.style.background = telem.port_status === 'down' ? 'rgba(239,68,68,0.2)' : (telem.atypical_count > 0 ? 'rgba(245,158,11,0.2)' : 'rgba(16,185,129,0.2)');
         }
-      });
+      }).catch(() => {});
       return;
     }
 
-    const tooltip = document.getElementById('canvas-link-tooltip');
-    if (tooltip) {
-      const evt = e.evt || window.event;
+    if (standardTooltip) {
       if (evt) {
-        tooltip.style.left = `${evt.clientX + 14}px`;
-        tooltip.style.top = `${evt.clientY + 14}px`;
+        standardTooltip.style.left = `${evt.clientX + 14}px`;
+        standardTooltip.style.top = `${evt.clientY + 14}px`;
       }
 
       const sNodeName = source.name || 'Nodo A';
@@ -2331,7 +2325,7 @@ function renderLink(link, nodesDict) {
       if (cableBadge) cableBadge.textContent = link.netbox_cable_id ? `NetBox Cable #${link.netbox_cable_id}` : 'Lógico / Visual';
 
       API.getLinkTelemetry(link.id).then(telem => {
-        if (!telem) return;
+        if (!telem || standardTooltip.style.display === 'none') return;
 
         let hasExtraTelemetry = false;
         const optRow = document.getElementById('tooltip-optical-row');
@@ -2366,7 +2360,22 @@ function renderLink(link, nodesDict) {
         }
       }).catch(() => {});
 
-      tooltip.style.display = 'block';
+      standardTooltip.style.display = 'block';
+    }
+  });
+
+  line.on('mousemove', (e) => {
+    const isGponBranch = target.device_type === 'ftth_branch' || source.device_type === 'ftth_branch' || !!link.extra_data?.is_gpon_branch;
+    const gponTooltip = document.getElementById('canvas-gpon-tooltip');
+    const standardTooltip = document.getElementById('canvas-link-tooltip');
+    const evt = e.evt || window.event;
+    if (!evt) return;
+    if (isGponBranch && gponTooltip && gponTooltip.style.display !== 'none') {
+      gponTooltip.style.left = `${evt.clientX + 14}px`;
+      gponTooltip.style.top = `${evt.clientY + 14}px`;
+    } else if (standardTooltip && standardTooltip.style.display !== 'none') {
+      standardTooltip.style.left = `${evt.clientX + 14}px`;
+      standardTooltip.style.top = `${evt.clientY + 14}px`;
     }
   });
 
@@ -2420,6 +2429,7 @@ function openLinkPropertiesModal(link, sourceNode, targetNode) {
   const inputSrcIface = document.getElementById('input-link-src-iface');
   const inputTgtIface = document.getElementById('input-link-tgt-iface');
   const selectCableType = document.getElementById('select-link-cable-type');
+  const selectCableStatus = document.getElementById('select-link-cable-status');
   const badgeNetbox = document.getElementById('link-netbox-cable-badge');
 
   const radioSrcToTgt = document.getElementById('radio-dir-source-to-target');
@@ -2430,7 +2440,7 @@ function openLinkPropertiesModal(link, sourceNode, targetNode) {
   const btnSave = document.getElementById('btn-save-link-modal');
   const btnDelete = document.getElementById('btn-delete-link-modal');
 
-  inputId.value = link.id;
+  if (inputId) inputId.value = link.id;
   const sName = sourceNode.name || 'Nodo A';
   const tName = targetNode.name || 'Nodo B';
 
@@ -2456,6 +2466,9 @@ function openLinkPropertiesModal(link, sourceNode, targetNode) {
 
   if (selectCableType) {
     selectCableType.value = link.cable_type || 'cat6';
+  }
+  if (selectCableStatus) {
+    selectCableStatus.value = link.cable_status || 'connected';
   }
 
   if (badgeNetbox) {
@@ -2550,57 +2563,12 @@ function openLinkPropertiesModal(link, sourceNode, targetNode) {
     };
   };
 
-  // Carga asíncrona de interfaces monitoreadas desde Zabbix
-  const populateZabbixSelect = async (node, selectEl, currentZbxIface, fallbackPhysicalName) => {
-    if (!selectEl) return;
-    selectEl.innerHTML = '<option value="">⏳ Cargando Zabbix...</option>';
-    let ifaces = [];
-    try {
-      ifaces = await API.getNodeZabbixInterfaces(node.id);
-    } catch (e) {
-      console.warn('Error fetching zabbix ifaces:', e);
-    }
-
-    selectEl.innerHTML = '<option value="">-- Detectar Automáticamente --</option>';
-    let matchFound = false;
-
-    if (Array.isArray(ifaces) && ifaces.length > 0) {
-      ifaces.forEach(iface => {
-        const opt = document.createElement('option');
-        opt.value = iface.name;
-        const speedText = iface.speed && iface.speed !== '—' ? ` (${iface.speed})` : '';
-        const trafficText = (iface.traffic_in_fmt && iface.traffic_in_fmt !== '—') ? ` [⬇ ${iface.traffic_in_fmt} / ⬆ ${iface.traffic_out_fmt}]` : '';
-        const optText = iface.optical && iface.optical.rx_power_dbm !== undefined ? ` [Rx: ${iface.optical.rx_power_dbm} dBm]` : '';
-        const wText = iface.wireless && iface.wireless.rssi_dbm !== undefined ? ` [RSSI: ${iface.wireless.rssi_dbm} dBm]` : '';
-
-        opt.textContent = `${iface.display_name}${speedText}${trafficText}${optText}${wText}`;
-
-        if (currentZbxIface && (iface.name.toLowerCase() === currentZbxIface.toLowerCase() || iface.key.toLowerCase() === currentZbxIface.toLowerCase())) {
-          opt.selected = true;
-          matchFound = true;
-        } else if (!currentZbxIface && fallbackPhysicalName && (iface.name.toLowerCase() === fallbackPhysicalName.toLowerCase() || iface.key.toLowerCase() === fallbackPhysicalName.toLowerCase())) {
-          opt.selected = true;
-          matchFound = true;
-        }
-        selectEl.appendChild(opt);
-      });
-    }
-
-    if (currentZbxIface && !matchFound) {
-      const customOpt = document.createElement('option');
-      customOpt.value = currentZbxIface;
-      customOpt.textContent = `⚡ ${currentZbxIface} (Configurado)`;
-      customOpt.selected = true;
-      selectEl.appendChild(customOpt);
-    }
-  };
-
   let chosenSrcSubmapDev = null;
   let chosenTgtSubmapDev = null;
   let srcTargetMapId = null;
   let tgtTargetMapId = null;
 
-  const setupSideControls = async (node, isSource, subContainerId, subSelectId, ifaceSelectEl, ifaceInputEl, zbxSelectEl, currentIfaceName, currentIfaceId, currentZbxIface) => {
+  const setupSideControls = async (node, isSource, subContainerId, subSelectId, ifaceSelectEl, ifaceInputEl, currentIfaceName, currentIfaceId) => {
     const isSubmap = node.device_type === 'submap' || node.device_type === 'parent_map' || !!node.extra_data?.is_parent_shortcut;
     const subContainer = document.getElementById(subContainerId);
     const subSelect = document.getElementById(subSelectId);
@@ -2610,7 +2578,7 @@ function openLinkPropertiesModal(link, sourceNode, targetNode) {
       let tMapId = node.extra_data?.target_map_id;
       if (!tMapId) {
         if (node.device_type === 'parent_map' || node.extra_data?.is_parent_shortcut) {
-          tMapId = currentMap.parent_map_id;
+          tMapId = currentMap?.parent_map_id;
         } else if (Array.isArray(allMaps)) {
           const clean = (node.name || '').replace('📁', '').trim().toLowerCase();
           const matched = allMaps.find(m => m.name.toLowerCase().trim() === clean || m.id === clean);
@@ -2667,7 +2635,6 @@ function openLinkPropertiesModal(link, sourceNode, targetNode) {
           const applySubmapDev = (dev) => {
             if (isSource) chosenSrcSubmapDev = dev; else chosenTgtSubmapDev = dev;
             populateIfaceSelect(dev, ifaceSelectEl, ifaceInputEl, currentIfaceName, currentIfaceId);
-            populateZabbixSelect(dev, zbxSelectEl, currentZbxIface, currentIfaceName);
           };
 
           if (matchedDev) applySubmapDev(matchedDev);
@@ -2681,40 +2648,11 @@ function openLinkPropertiesModal(link, sourceNode, targetNode) {
     } else {
       if (subContainer) subContainer.style.display = 'none';
       populateIfaceSelect(node, ifaceSelectEl, ifaceInputEl, currentIfaceName, currentIfaceId);
-      populateZabbixSelect(node, zbxSelectEl, currentZbxIface, currentIfaceName);
     }
   };
 
-  setupSideControls(sourceNode, true, 'link-src-submap-container', 'select-link-src-submap-dev', selectSrcIface, inputSrcIface, selectZbxSrc, link.source_interface, link.source_interface_id, link.zabbix_src_interface);
-  setupSideControls(targetNode, false, 'link-tgt-submap-container', 'select-link-tgt-submap-dev', selectTgtIface, inputTgtIface, selectZbxTgt, link.target_interface, link.target_interface_id, link.zabbix_tgt_interface);
-
-  // Consultar telemetría viva del enlace para el preview en modal
-  API.getLinkTelemetry(link.id).then(telemetry => {
-    if (!telemetry) return;
-    if (previewIn) previewIn.textContent = telemetry.source?.telemetry?.traffic_in_fmt || telemetry.target?.telemetry?.traffic_in_fmt || '—';
-    if (previewOut) previewOut.textContent = telemetry.source?.telemetry?.traffic_out_fmt || telemetry.target?.telemetry?.traffic_out_fmt || '—';
-    if (previewExtra) {
-      let extraTxt = [];
-      const opt = telemetry.source?.telemetry?.optical || telemetry.target?.telemetry?.optical;
-      if (opt && opt.rx_power_dbm !== undefined) extraTxt.push(`Rx: ${opt.rx_power_dbm} dBm`);
-      const w = telemetry.source?.telemetry?.wireless || telemetry.target?.telemetry?.wireless;
-      if (w && w.rssi_dbm !== undefined) extraTxt.push(`RSSI: ${w.rssi_dbm} dBm`);
-      if (extraTxt.length > 0) previewExtra.textContent = extraTxt.join(' · ');
-    }
-    if (zbxStatusBadge) {
-      if (telemetry.status === 'down') {
-        zbxStatusBadge.textContent = '● Caído (Down)';
-        zbxStatusBadge.style.color = '#f87171';
-        zbxStatusBadge.style.background = 'rgba(239, 68, 68, 0.2)';
-        zbxStatusBadge.style.borderColor = 'rgba(239, 68, 68, 0.4)';
-      } else {
-        zbxStatusBadge.textContent = '● Operativo (Up)';
-        zbxStatusBadge.style.color = '#10b981';
-        zbxStatusBadge.style.background = 'rgba(16, 185, 129, 0.15)';
-        zbxStatusBadge.style.borderColor = 'rgba(16, 185, 129, 0.3)';
-      }
-    }
-  }).catch(() => {});
+  setupSideControls(sourceNode, true, 'link-src-submap-container', 'select-link-src-submap-dev', selectSrcIface, inputSrcIface, link.source_interface, link.source_interface_id);
+  setupSideControls(targetNode, false, 'link-tgt-submap-container', 'select-link-tgt-submap-dev', selectTgtIface, inputTgtIface, link.target_interface, link.target_interface_id);
 
   modal.style.display = 'flex';
 
@@ -2764,8 +2702,7 @@ function openLinkPropertiesModal(link, sourceNode, targetNode) {
       }
 
       const cableType = selectCableType ? selectCableType.value : (link.cable_type || 'cat6');
-      const zbxSrcIface = selectZbxSrc ? selectZbxSrc.value.trim() : '';
-      const zbxTgtIface = selectZbxTgt ? selectZbxTgt.value.trim() : '';
+      const cableStatus = selectCableStatus ? selectCableStatus.value : (link.cable_status || 'connected');
       const visualOnly = checkVisualOnly ? checkVisualOnly.checked : false;
 
       const updatedExtra = Object.assign({}, link.extra_data || {}, {
@@ -2802,8 +2739,7 @@ function openLinkPropertiesModal(link, sourceNode, targetNode) {
           source_interface_id: srcIfaceId,
           target_interface_id: tgtIfaceId,
           cable_type: cableType,
-          zabbix_src_interface: zbxSrcIface || null,
-          zabbix_tgt_interface: zbxTgtIface || null,
+          cable_status: cableStatus,
           extra_data: updatedExtra
         };
 
@@ -2816,9 +2752,7 @@ function openLinkPropertiesModal(link, sourceNode, targetNode) {
         link.target_interface_id = res.target_interface_id ?? tgtIfaceId;
         link.netbox_cable_id = res.netbox_cable_id ?? link.netbox_cable_id;
         link.cable_type = res.cable_type ?? cableType;
-        link.cable_status = res.cable_status ?? link.cable_status;
-        link.zabbix_src_interface = res.zabbix_src_interface ?? zbxSrcIface;
-        link.zabbix_tgt_interface = res.zabbix_tgt_interface ?? zbxTgtIface;
+        link.cable_status = res.cable_status ?? cableStatus;
 
         // Re-renderizar el enlace para actualizar etiquetas de puertos y flechas
         const linkEntry = linkLines.get(link.id);
@@ -8957,8 +8891,11 @@ window.addEventListener('DOMContentLoaded', async () => {
         window.allowEdgeEditing = isAllowed;
 
         // Verificar si el control de Soporte está disponible
+        const userRoleLower = (currentUser?.role || '').toLowerCase();
+        const userNameLower = (currentUser?.username || '').toLowerCase();
+        const isSoporteOrAdmin = userRoleLower.includes('soporte') || userRoleLower.includes('admin') || userNameLower.includes('admin') || userNameLower.includes('soporte') || currentUser?.permissions?.can_manage_users || currentUser?.permissions?.can_edit_topology;
         if (netboxSoporteEdgeControl) {
-          netboxSoporteEdgeControl.style.display = 'block';
+          netboxSoporteEdgeControl.style.display = isSoporteOrAdmin ? 'block' : 'none';
           if (chkNetboxAllowEdgeEditing) {
             chkNetboxAllowEdgeEditing.checked = isAllowed;
             const updateBadge = () => {
