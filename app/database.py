@@ -393,6 +393,11 @@ async def load_system_config_into_settings():
                 zabbix_service.auth_token = settings.ZABBIX_TOKEN
             except Exception:
                 pass
+        if "zabbix_poll_interval" in cfg and cfg["zabbix_poll_interval"]:
+            try:
+                settings.ZABBIX_POLL_INTERVAL = int(cfg["zabbix_poll_interval"])
+            except (ValueError, TypeError):
+                pass
         logger.info("Configuraciones dinámicas del sistema cargadas desde SQLite a memoria.")
     except Exception as e:
         logger.warning(f"No se pudieron cargar configuraciones dinámicas desde SQLite: {e}")

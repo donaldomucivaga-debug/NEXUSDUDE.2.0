@@ -453,37 +453,19 @@
                 </button>
               </div>
 
-              <!-- Diagnóstico Dual: Conectividad ICMP Ping vs Telemetría SNMP -->
-              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin-bottom: 6px;">
-                <div id="telemetry-ping-pill" style="background: rgba(16,185,129,0.1); border: 1px solid rgba(16,185,129,0.3); border-radius: 6px; padding: 5px 6px; display: flex; align-items: center; gap: 5px;">
-                  <span id="telemetry-ping-dot" style="width: 7px; height: 7px; border-radius: 50%; background: #10b981; display: inline-block; flex-shrink: 0;"></span>
-                  <div style="font-size: 0.65rem; line-height: 1.1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+              <!-- Conectividad ICMP Ping -->
+              <div style="margin-bottom: 6px;">
+                <div id="telemetry-ping-pill" style="background: rgba(16,185,129,0.1); border: 1px solid rgba(16,185,129,0.3); border-radius: 6px; padding: 6px 8px; display: flex; align-items: center; gap: 6px;">
+                  <span id="telemetry-ping-dot" style="width: 8px; height: 8px; border-radius: 50%; background: #10b981; display: inline-block; flex-shrink: 0;"></span>
+                  <div style="font-size: 0.68rem; line-height: 1.1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
                     <div style="color: var(--text-muted); font-size: 0.58rem;">ICMP PING</div>
                     <strong id="telemetry-ping-text" style="color: #10b981;">En línea</strong>
                   </div>
                 </div>
-                <div id="telemetry-snmp-pill" style="background: rgba(56,189,248,0.1); border: 1px solid rgba(56,189,248,0.3); border-radius: 6px; padding: 5px 6px; display: flex; align-items: center; gap: 5px;">
-                  <span id="telemetry-snmp-dot" style="width: 7px; height: 7px; border-radius: 50%; background: #38bdf8; display: inline-block; flex-shrink: 0;"></span>
-                  <div style="font-size: 0.65rem; line-height: 1.1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-                    <div style="color: var(--text-muted); font-size: 0.58rem;">SNMP AGENT</div>
-                    <strong id="telemetry-snmp-text" style="color: #38bdf8;">Conectado</strong>
-                  </div>
-                </div>
               </div>
 
-              <!-- Banner de Advertencia cuando hay Ping pero NO SNMP -->
-              <div id="telemetry-snmp-warning-box" style="display: none; background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.4); border-radius: 6px; padding: 6px 8px; margin-bottom: 6px; font-size: 0.68rem; color: #fde68a;">
-                <div style="display: flex; align-items: flex-start; gap: 6px;">
-                  <i class="fas fa-exclamation-triangle" style="color: #f59e0b; margin-top: 2px; flex-shrink: 0;"></i>
-                  <div>
-                    <strong style="color: #fbbf24; display: block;">Ping OK · Sin telemetría SNMP</strong>
-                    <span id="telemetry-snmp-warning-desc" style="color: #fde68a; font-size: 0.64rem;">El equipo responde a Ping pero el agente SNMP no entrega datos (Timeout / Comunidad no coincide).</span>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Métricas ICMP en 3 cards -->
-              <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 5px; margin-bottom: 6px;">
+              <!-- Métricas ICMP en 2 cards (RTT y Pérdida) -->
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin-bottom: 6px;">
                 <div style="background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 6px; padding: 6px; text-align: center;">
                   <div id="telemetry-rtt" style="font-size: 1.0rem; font-weight: 800; color: #38bdf8;">—</div>
                   <div style="font-size: 0.62rem; color: var(--text-muted); margin-top: 1px;">RTT Ping</div>
@@ -491,10 +473,6 @@
                 <div style="background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 6px; padding: 6px; text-align: center;">
                   <div id="telemetry-loss" style="font-size: 1.0rem; font-weight: 800; color: #10b981;">—</div>
                   <div style="font-size: 0.62rem; color: var(--text-muted); margin-top: 1px;">Pérdida</div>
-                </div>
-                <div style="background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 6px; padding: 6px; text-align: center;">
-                  <div id="telemetry-problems-count" style="font-size: 1.0rem; font-weight: 800; color: #f59e0b;">—</div>
-                  <div style="font-size: 0.62rem; color: var(--text-muted); margin-top: 1px;">Alertas</div>
                 </div>
               </div>
 
@@ -536,95 +514,10 @@
                 </div>
               </div>
 
-              <!-- Hardware & Recursos (MikroTik / Routers / Switches) -->
-              <div id="telemetry-hardware-box" style="display: none; margin-top: 6px; margin-bottom: 6px; background: rgba(15,23,42,0.6); border: 1px solid var(--border-color); border-radius: 8px; padding: 8px;">
-                <div style="font-size: 0.72rem; font-weight: 700; color: #a855f7; margin-bottom: 6px; display: flex; align-items: center; gap: 5px;">
-                  <i class="fas fa-microchip"></i> Recursos de Hardware & Sensores
-                </div>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px; font-size: 0.74rem;">
-                  <div style="background: var(--bg-card); border-radius: 5px; padding: 4px 6px;">
-                    <span style="color: var(--text-muted); font-size: 0.62rem; display: block;">Uso de CPU:</span>
-                    <strong id="telemetry-cpu-util" style="color: #38bdf8; font-family: monospace;">—</strong>
-                  </div>
-                  <div style="background: var(--bg-card); border-radius: 5px; padding: 4px 6px;">
-                    <span style="color: var(--text-muted); font-size: 0.62rem; display: block;">Memoria RAM:</span>
-                    <strong id="telemetry-mem-util" style="color: #10b981; font-family: monospace;">—</strong>
-                  </div>
-                  <div style="background: var(--bg-card); border-radius: 5px; padding: 4px 6px;">
-                    <span style="color: var(--text-muted); font-size: 0.62rem; display: block;">Temperatura CPU:</span>
-                    <strong id="telemetry-temp-cpu" style="color: #f59e0b; font-family: monospace;">—</strong>
-                  </div>
-                  <div style="background: var(--bg-card); border-radius: 5px; padding: 4px 6px;">
-                    <span style="color: var(--text-muted); font-size: 0.62rem; display: block;">Voltaje / Board:</span>
-                    <strong id="telemetry-voltage" style="color: #cbd5e1; font-family: monospace;">—</strong>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Sistema & Inventario Zabbix -->
-              <div id="telemetry-system-box" style="display: none; margin-top: 6px; margin-bottom: 6px; background: rgba(15,23,42,0.6); border: 1px solid var(--border-color); border-radius: 8px; padding: 8px;">
-                <div style="font-size: 0.72rem; font-weight: 700; color: #10b981; margin-bottom: 6px; display: flex; align-items: center; gap: 5px;">
-                  <i class="fas fa-server"></i> Sistema & Inventario
-                </div>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px; font-size: 0.74rem;">
-                  <div style="background: var(--bg-card); border-radius: 5px; padding: 4px 6px; grid-column: span 2;">
-                    <span style="color: var(--text-muted); font-size: 0.62rem; display: block;">Modelo / Firmware:</span>
-                    <strong id="telemetry-model-fw" style="color: #f8fafc; font-family: monospace; font-size: 0.7rem;">—</strong>
-                  </div>
-                  <div style="background: var(--bg-card); border-radius: 5px; padding: 4px 6px;">
-                    <span style="color: var(--text-muted); font-size: 0.62rem; display: block;">N° de Serie:</span>
-                    <strong id="telemetry-serial" style="color: #38bdf8; font-family: monospace; font-size: 0.68rem;">—</strong>
-                  </div>
-                  <div style="background: var(--bg-card); border-radius: 5px; padding: 4px 6px;">
-                    <span style="color: var(--text-muted); font-size: 0.62rem; display: block;">Tiempo Activo:</span>
-                    <strong id="telemetry-uptime" style="color: #10b981; font-family: monospace; font-size: 0.68rem;">—</strong>
-                  </div>
-                  <div id="box-telemetry-mac" style="background: var(--bg-card); border-radius: 5px; padding: 4px 6px; grid-column: span 2; display: none;">
-                    <span style="color: var(--text-muted); font-size: 0.62rem; display: block;">Dirección MAC:</span>
-                    <strong id="telemetry-mac" style="color: #cbd5e1; font-family: monospace; font-size: 0.68rem;">—</strong>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Tráfico de Red LAN -->
-              <div id="telemetry-lan-box" style="display: none; margin-top: 6px; margin-bottom: 6px; background: rgba(15,23,42,0.6); border: 1px solid var(--border-color); border-radius: 8px; padding: 8px;">
-                <div style="font-size: 0.72rem; font-weight: 700; color: #38bdf8; margin-bottom: 6px; display: flex; align-items: center; justify-content: space-between;">
-                  <span><i class="fas fa-network-wired"></i> Interfaz LAN</span>
-                  <span id="telemetry-lan-status" style="font-size: 0.65rem; background: rgba(16,185,129,0.15); color: #10b981; padding: 1px 5px; border-radius: 4px; font-weight: bold;">Up</span>
-                </div>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px; font-size: 0.74rem;">
-                  <div style="background: var(--bg-card); border-radius: 5px; padding: 4px 6px;">
-                    <span style="color: var(--text-muted); font-size: 0.62rem; display: block;"><i class="fas fa-arrow-down" style="color: #10b981;"></i> Tráfico Bajada:</span>
-                    <strong id="telemetry-lan-in" style="color: #10b981; font-family: monospace;">—</strong>
-                  </div>
-                  <div style="background: var(--bg-card); border-radius: 5px; padding: 4px 6px;">
-                    <span style="color: var(--text-muted); font-size: 0.62rem; display: block;"><i class="fas fa-arrow-up" style="color: #38bdf8;"></i> Tráfico Subida:</span>
-                    <strong id="telemetry-lan-out" style="color: #38bdf8; font-family: monospace;">—</strong>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Lista de problemas activos -->
-              <div id="telemetry-problems-list" style="display: none; max-height: 120px; overflow-y: auto; display: flex; flex-direction: column; gap: 3px;"></div>
-
               <!-- Indicador de actualización -->
               <div style="font-size: 0.62rem; color: var(--text-muted); margin-top: 4px; text-align: right;">
                 <i class="fas fa-circle" id="telemetry-source-dot" style="color: #22c55e; font-size: 0.5rem;"></i>
                 Fuente: Zabbix 7.0 · <span id="telemetry-last-update">—</span>
-              </div>
-            </div>
-
-            <!-- Puertos & Interfaces Físicas (NetBox) -->
-            <div id="node-ports-card" style="display: none; margin-top: 6px; background: rgba(15, 23, 42, 0.6); border: 1px solid var(--border-color); border-radius: 8px; padding: 8px;">
-              <div style="font-size: 0.72rem; font-weight: 700; color: #38bdf8; margin-bottom: 6px; display: flex; align-items: center; justify-content: space-between;">
-                <span><i class="fas fa-network-wired"></i> Puertos & Conexiones Físicas</span>
-                <span id="node-ports-count-badge" class="badge" style="font-size: 0.65rem; background: rgba(56, 189, 248, 0.15); color: #38bdf8;">0 Puertos</span>
-              </div>
-              <div id="node-ports-loading" style="display: none; font-size: 0.72rem; color: var(--text-muted); text-align: center; padding: 6px;">
-                <i class="fas fa-spinner fa-spin"></i> Consultando puertos NetBox...
-              </div>
-              <div id="node-ports-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(75px, 1fr)); gap: 4px; max-height: 170px; overflow-y: auto; padding: 2px;">
-                <!-- Se llenan dinámicamente con chips de puertos -->
               </div>
             </div>
 
@@ -1673,12 +1566,9 @@
 
   <!-- Tooltip Flotante de Arista / Telemetría en Tiempo Real de Enlace -->
   <div id="canvas-link-tooltip" style="display: none; position: fixed; z-index: 9999; pointer-events: none; background: rgba(15, 23, 42, 0.95); backdrop-filter: blur(8px); border: 1px solid rgba(56, 189, 248, 0.4); border-radius: 8px; padding: 10px 14px; box-shadow: 0 10px 25px rgba(0,0,0,0.6); max-width: 380px; font-family: system-ui, -apple-system, sans-serif;">
-    <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 6px; margin-bottom: 6px;">
+    <div style="margin-bottom: 6px; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 6px;">
       <span style="font-size: 0.78rem; font-weight: 700; color: #38bdf8; display: flex; align-items: center; gap: 5px;" id="tooltip-link-title">
         <i class="fas fa-network-wired"></i> Enlace Físico
-      </span>
-      <span id="tooltip-link-status" class="badge" style="font-size: 0.65rem; background: rgba(16,185,129,0.2); color: #10b981; border: 1px solid rgba(16,185,129,0.4);">
-        ● Up
       </span>
     </div>
     
@@ -1700,17 +1590,13 @@
       <span id="tooltip-link-cable-badge" style="color: #38bdf8; font-family: monospace;">NetBox Sync</span>
     </div>
 
-    <!-- Telemetría en Vivo Zabbix -->
-    <div id="tooltip-link-telemetry-box" style="background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.2); border-radius: 6px; padding: 6px 8px; font-size: 0.72rem;">
-      <div style="display: flex; justify-content: space-between; font-weight: 700; margin-bottom: 3px;">
-        <span style="color: #10b981;"><i class="fas fa-arrow-down"></i> <span id="tooltip-traffic-in">—</span></span>
-        <span style="color: #38bdf8;"><i class="fas fa-arrow-up"></i> <span id="tooltip-traffic-out">—</span></span>
-      </div>
-      <div id="tooltip-optical-row" style="display: none; justify-content: space-between; font-size: 0.68rem; color: #cbd5e1; font-family: monospace; border-top: 1px dashed rgba(255,255,255,0.1); padding-top: 3px; margin-top: 3px;">
+    <!-- Telemetría RF / Óptica Zabbix -->
+    <div id="tooltip-link-telemetry-box" style="display: none; background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.2); border-radius: 6px; padding: 6px 8px; font-size: 0.72rem;">
+      <div id="tooltip-optical-row" style="display: none; justify-content: space-between; font-size: 0.68rem; color: #cbd5e1; font-family: monospace;">
         <span>Rx Power: <strong id="tooltip-optical-rx" style="color: #38bdf8;">—</strong></span>
         <span>Tx Power: <strong id="tooltip-optical-tx" style="color: #a855f7;">—</strong></span>
       </div>
-      <div id="tooltip-wireless-row" style="display: none; justify-content: space-between; font-size: 0.68rem; color: #cbd5e1; font-family: monospace; border-top: 1px dashed rgba(255,255,255,0.1); padding-top: 3px; margin-top: 3px;">
+      <div id="tooltip-wireless-row" style="display: none; justify-content: space-between; font-size: 0.68rem; color: #cbd5e1; font-family: monospace;">
         <span>RSSI: <strong id="tooltip-wireless-rssi" style="color: #10b981;">—</strong></span>
         <span>SNR: <strong id="tooltip-wireless-snr" style="color: #38bdf8;">—</strong></span>
       </div>
@@ -2005,6 +1891,19 @@
             </div>
           </div>
 
+          <div class="prop-row" style="margin-bottom: 12px;">
+            <label class="prop-label"><i class="fas fa-clock"></i> Intervalo de Actualización de Telemetría</label>
+            <select id="select-zabbix-poll-interval" class="input-text" style="width: 100%; cursor: pointer;">
+              <option value="12">12s (12 segundos)</option>
+              <option value="20">20s (20 segundos)</option>
+              <option value="30" selected>30s (30 segundos)</option>
+              <option value="60">1m (1 minuto)</option>
+            </select>
+            <div style="font-size: 0.70rem; color: var(--text-muted); margin-top: 4px;">
+              Frecuencia de consulta en tiempo real para el estado Ping ICMP, aristas y espectro RF.
+            </div>
+          </div>
+
           <div id="zabbix-msg-alert" style="display: none; padding: 8px 12px; border-radius: 6px; font-size: 0.76rem; margin-top: 8px;"></div>
 
           <div style="margin-top: 12px;">
@@ -2027,9 +1926,9 @@
   </div>
 
   <!-- Scripts -->
-  <script src="/static/js/api.js?v=4.5"></script>
-  <script src="/static/js/app.js?v=4.5"></script>
-  <script src="/static/js/docs.js?v=2.5"></script>
+  <script src="/static/js/api.js?v=4.6"></script>
+  <script src="/static/js/app.js?v=4.6"></script>
+  <script src="/static/js/docs.js?v=2.6"></script>
 </body>
 </html>
 

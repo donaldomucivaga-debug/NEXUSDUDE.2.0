@@ -12,6 +12,7 @@ let currentMap = null;
 let currentUser = null;
 let snapToGrid = true;
 const GRID_SIZE = 20;
+window.currentPollIntervalSeconds = 30;
 
 // Estado de modo conexión de enlaces
 let linkMode = false;
@@ -1176,11 +1177,9 @@ function renderNode(node) {
   group.isSubmap = isSubmap;
   group.isParentShortcut = isParentShortcut;
 
-  // Estado PING (Contorno del nodo) y Estado SNMP (Punto interior)
+  // Estado gobernado por PING (Contorno del nodo y Punto interior)
   const pingStatus = node.ping_status || node.status;
-  const snmpStatus = node.snmp_status || node.status;
   const pingColor = isParentShortcut ? '#38bdf8' : getNodeStatusColor(pingStatus, isSubmap);
-  const snmpColor = isParentShortcut ? '#38bdf8' : getNodeStatusColor(snmpStatus, isSubmap);
   const roleHex = getNodeRoleColor(node);
 
   // Caja de fondo: relleno translúcido con el color del rol/función de NetBox (22-26% alpha)
@@ -1210,12 +1209,12 @@ function renderNode(node) {
     name: 'box'
   });
 
-  // Indicador de estado circular (SNMP): aumentado 50% de tamaño (de radio 4.5 a 6.75)
+  // Indicador de estado circular interior gobernado por PING
   const statusDot = new Konva.Circle({
     x: 13,
     y: isSubmap ? 16 : 15,
     radius: 6.75,
-    fill: isParentShortcut ? '#38bdf8' : snmpColor,
+    fill: isParentShortcut ? '#38bdf8' : pingColor,
     stroke: 'rgba(0, 0, 0, 0.35)',
     strokeWidth: 1,
     listening: false,
@@ -2064,23 +2063,20 @@ function getLinkColor(link, sourceNode, targetNode) {
 
   const isIntermap = !!(link && link.extra_data && (link.extra_data.is_intermap || link.extra_data.remote_node_id));
 
+  // El comportamiento de la arista está gobernado por el PING del nodo destino
   const tgtPing = targetNode ? (targetNode.ping_status || targetNode.status || 'ok') : (link?.status || 'ok');
-  const srcPing = sourceNode ? (sourceNode.ping_status || sourceNode.status || 'ok') : 'ok';
-  const linkStat = link ? link.status : 'ok';
 
   const isProblem = (
-    tgtPing === 'problem' || tgtPing === 'down' || tgtPing === 'critical' || tgtPing === 'error' ||
-    srcPing === 'problem' || srcPing === 'down' || srcPing === 'critical' || srcPing === 'error' ||
-    linkStat === 'problem' || linkStat === 'down' || linkStat === 'critical'
+    tgtPing === 'problem' || tgtPing === 'down' || tgtPing === 'critical' || tgtPing === 'error'
   );
 
   if (isProblem) {
-    return '#ef4444'; // Rojo fijo para problemas de ping / conectividad
+    return '#ef4444'; // Rojo si el nodo destino tiene problema de ping / fuera de línea
   }
   if (isIntermap) {
-    return '#a855f7'; // Violeta para enlaces intermapa cuando está OK
+    return '#a855f7'; // Violeta para enlaces intermapa cuando el destino está OK
   }
-  return '#22c55e'; // Verde fijo cuando el ping al equipo está OK
+  return '#22c55e'; // Verde gobernado por el ping del nodo destino en línea (OK)
 }
 
 function updateAllLinkColors() {
@@ -2335,20 +2331,8 @@ function renderLink(link, nodesDict) {
 
       API.getLinkTelemetry(link.id).then(telem => {
         if (!telem) return;
-        const statusEl = document.getElementById('tooltip-link-status');
-        if (statusEl) {
-          statusEl.textContent = telem.status === 'down' ? '● Caído (Down)' : '● Operativo (Up)';
-          statusEl.style.color = telem.status === 'down' ? '#f87171' : '#10b981';
-          statusEl.style.background = telem.status === 'down' ? 'rgba(239,68,68,0.2)' : 'rgba(16,185,129,0.2)';
-        }
 
-        const tIn = telem.source?.telemetry?.traffic_in_fmt || telem.target?.telemetry?.traffic_in_fmt || '—';
-        const tOut = telem.source?.telemetry?.traffic_out_fmt || telem.target?.telemetry?.traffic_out_fmt || '—';
-        const inEl = document.getElementById('tooltip-traffic-in');
-        const outEl = document.getElementById('tooltip-traffic-out');
-        if (inEl) inEl.textContent = tIn;
-        if (outEl) outEl.textContent = tOut;
-
+        let hasExtraTelemetry = false;
         const optRow = document.getElementById('tooltip-optical-row');
         const optData = telem.source?.telemetry?.optical || telem.target?.telemetry?.optical;
         if (optData && optData.rx_power_dbm !== undefined && optRow) {
@@ -2357,6 +2341,7 @@ function renderLink(link, nodesDict) {
           const txEl = document.getElementById('tooltip-optical-tx');
           if (rxEl) rxEl.textContent = `${optData.rx_power_dbm} dBm`;
           if (txEl) txEl.textContent = optData.tx_power_dbm !== undefined ? `${optData.tx_power_dbm} dBm` : '—';
+          hasExtraTelemetry = true;
         } else if (optRow) {
           optRow.style.display = 'none';
         }
@@ -2369,8 +2354,14 @@ function renderLink(link, nodesDict) {
           const snrEl = document.getElementById('tooltip-wireless-snr');
           if (rssiEl) rssiEl.textContent = `${wData.rssi_dbm} dBm`;
           if (snrEl) snrEl.textContent = wData.snr_db !== undefined ? `${wData.snr_db} dB` : '—';
+          hasExtraTelemetry = true;
         } else if (wRow) {
           wRow.style.display = 'none';
+        }
+
+        const telemBox = document.getElementById('tooltip-link-telemetry-box');
+        if (telemBox) {
+          telemBox.style.display = hasExtraTelemetry ? 'block' : 'none';
         }
       }).catch(() => {});
 
@@ -3755,8 +3746,6 @@ function _selectNoteNode(node) {
   if (webAdminBtn) webAdminBtn.style.display = 'none';
   const telemetryPanel = document.getElementById('telemetry-panel');
   if (telemetryPanel) telemetryPanel.style.display = 'none';
-  const portsCard = document.getElementById('node-ports-card');
-  if (portsCard) portsCard.style.display = 'none';
   const convertBox = document.getElementById('convert-submap-action-box');
   if (convertBox) convertBox.style.display = 'none';
   const submapBox = document.getElementById('submap-action-box');
@@ -3908,8 +3897,6 @@ function _selectFtthBranchNode(node) {
   if (webAdminBtn) webAdminBtn.style.display = 'none';
   const telemetryPanel = document.getElementById('telemetry-panel');
   if (telemetryPanel) telemetryPanel.style.display = 'none';
-  const portsCard = document.getElementById('node-ports-card');
-  if (portsCard) portsCard.style.display = 'none';
   const convertBox = document.getElementById('convert-submap-action-box');
   if (convertBox) convertBox.style.display = 'none';
   const submapBox = document.getElementById('submap-action-box');
@@ -4601,84 +4588,7 @@ function selectNode(node) {
     }
   }
 
-  // ─── PUERTOS & INTERFACES FÍSICAS (NetBox) ──────────────────────────────
-  const portsCard = document.getElementById('node-ports-card');
-  const portsGrid = document.getElementById('node-ports-grid');
-  const portsBadge = document.getElementById('node-ports-count-badge');
-  const portsLoading = document.getElementById('node-ports-loading');
 
-  if (portsCard && portsGrid) {
-    const devId = node ? (node.device_id || node.extra_data?.device_id || node.extra_data?.netbox_id) : null;
-    if (devId && !isParentShortcut && !isSubmap) {
-      portsCard.style.display = 'block';
-      if (portsLoading) portsLoading.style.display = 'block';
-      portsGrid.innerHTML = '';
-      if (portsBadge) portsBadge.textContent = '...';
-
-      API.getDeviceInterfaces(devId).then(ifaces => {
-        if (!selectedNode || selectedNode.id !== node.id) return;
-        if (portsLoading) portsLoading.style.display = 'none';
-        if (portsBadge) portsBadge.textContent = `${ifaces.length} Puertos`;
-
-        if (!ifaces || ifaces.length === 0) {
-          portsGrid.innerHTML = '<div style="grid-column: span 3; font-size: 0.72rem; color: var(--text-muted); text-align: center;">Sin puertos registrados</div>';
-          return;
-        }
-
-        portsGrid.innerHTML = '';
-        ifaces.forEach(iface => {
-          const isConn = iface.is_connected;
-          const isFiber = (iface.type || '').includes('sfp');
-          const chip = document.createElement('div');
-          chip.className = 'port-slot-chip';
-          chip.style.cssText = `
-            display: flex; flex-direction: column; align-items: center; justify-content: center;
-            background: ${isConn ? 'rgba(56, 189, 248, 0.12)' : 'rgba(15, 23, 42, 0.7)'};
-            border: 1px solid ${isConn ? '#38bdf8' : (isFiber ? 'rgba(168, 85, 247, 0.4)' : 'rgba(148, 163, 184, 0.25)')};
-            border-radius: 5px; padding: 4px 3px; cursor: pointer; transition: all 0.15s ease;
-          `;
-          
-          const icon = isFiber ? '<i class="fas fa-bolt" style="font-size: 0.65rem; color: #c084fc;"></i>' : '<i class="fas fa-ethernet" style="font-size: 0.65rem; color: #38bdf8;"></i>';
-          const statusDot = `<span style="display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: ${isConn ? '#10b981' : '#64748b'}; margin-left: 2px;"></span>`;
-          
-          chip.innerHTML = `
-            <div style="font-size: 0.68rem; font-weight: 700; color: #f8fafc; display: flex; align-items: center; gap: 3px;">
-              ${icon} <span>${iface.name}</span> ${statusDot}
-            </div>
-            <div style="font-size: 0.58rem; color: var(--text-muted); margin-top: 1px;">
-              ${iface.type ? (iface.type.includes('sfp') ? 'SFP+' : '1G') : 'Port'}
-            </div>
-          `;
-
-          const peerInfo = iface.connected_device ? `Conectado a ${iface.connected_device} (${iface.connected_interface})` : (isConn ? 'Conectado' : 'Disponible');
-          chip.title = `${iface.name} (${iface.type || 'Port'}) — ${peerInfo}. Clic para iniciar trazado de enlace desde este puerto.`;
-
-          chip.onmouseenter = () => {
-            chip.style.transform = 'translateY(-1px)';
-            chip.style.borderColor = '#38bdf8';
-            chip.style.boxShadow = '0 2px 6px rgba(56, 189, 248, 0.25)';
-          };
-          chip.onmouseleave = () => {
-            chip.style.transform = '';
-            chip.style.borderColor = isConn ? '#38bdf8' : (isFiber ? 'rgba(168, 85, 247, 0.4)' : 'rgba(148, 163, 184, 0.25)');
-            chip.style.boxShadow = '';
-          };
-
-          chip.onclick = () => {
-            startLinkMode();
-            handleLinkNodeClick(node);
-          };
-
-          portsGrid.appendChild(chip);
-        });
-      }).catch(err => {
-        if (portsLoading) portsLoading.style.display = 'none';
-        portsGrid.innerHTML = `<div style="grid-column: span 3; font-size: 0.7rem; color: #f87171;">Error cargando puertos: ${err.message}</div>`;
-      });
-    } else {
-      portsCard.style.display = 'none';
-    }
-  }
 
   // Cambiar a la pestaña de propiedades
   switchTab('tab-properties');
@@ -5037,7 +4947,6 @@ function setTelemetryLoading() {
   const safe = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
   safe('telemetry-rtt', '…');
   safe('telemetry-loss', '…');
-  safe('telemetry-problems-count', '…');
   safe('telemetry-last-update', 'cargando…');
   safe('telemetry-channel-bw', '…');
   safe('telemetry-freq', '…');
@@ -5051,8 +4960,6 @@ function setTelemetryLoading() {
   const lbl = document.getElementById('telemetry-status-label');
   if (dot) { dot.style.background = '#64748b'; dot.style.boxShadow = 'none'; }
   if (lbl) lbl.textContent = 'Consultando…';
-  const list = document.getElementById('telemetry-problems-list');
-  if (list) { list.innerHTML = ''; list.style.display = 'none'; }
 }
 
 function applyTelemetryToPanel(data) {
@@ -5094,31 +5001,7 @@ function applyTelemetryToPanel(data) {
     if (pingPill) pingPill.style.borderColor = pColor + '55';
   }
 
-  const snmpDot = document.getElementById('telemetry-snmp-dot');
-  const snmpText = document.getElementById('telemetry-snmp-text');
-  const snmpPill = document.getElementById('telemetry-snmp-pill');
-  if (snmpDot && snmpText) {
-    const sColor = snmpStatus === 'ok' ? '#10b981' : (snmpStatus === 'warning' ? '#f59e0b' : (snmpStatus === 'down' ? '#ef4444' : '#64748b'));
-    snmpDot.style.background = sColor;
-    snmpText.style.color = sColor;
-    snmpText.textContent = snmpStatus === 'ok' ? 'Activo (v2c)' : (snmpStatus === 'down' || data.snmp_available === 2 ? 'Timeout / Falló' : (snmpStatus === 'warning' ? 'Alertas SNMP' : 'Sin datos'));
-    if (snmpPill) snmpPill.style.borderColor = sColor + '55';
-  }
-
-  const snmpWarnBox = document.getElementById('telemetry-snmp-warning-box');
-  const snmpWarnDesc = document.getElementById('telemetry-snmp-warning-desc');
-  if (snmpWarnBox) {
-    if (hasSnmpIssue) {
-      snmpWarnBox.style.display = 'block';
-      if (snmpWarnDesc) {
-        snmpWarnDesc.textContent = data.snmp_warning_message || (data.snmp_error ? `Fallo SNMP: ${data.snmp_error}` : 'El equipo responde a Ping ICMP por IP pero el agente SNMP no entrega datos (Timeout en puerto 161 o comunidad no coincide).');
-      }
-    } else {
-      snmpWarnBox.style.display = 'none';
-    }
-  }
-
-  // 1. Parámetros Inalámbricos (Cambium / Altai / Ubiquiti / Mimosa)
+  // 1. Parámetros Inalámbricos RF (Cambium / Altai / Ubiquiti / Mimosa)
   const wBox = document.getElementById('telemetry-wireless-box');
   const w = data.wireless;
   if (wBox) {
@@ -5161,87 +5044,6 @@ function applyTelemetryToPanel(data) {
       }
     } else {
       wBox.style.display = 'none';
-    }
-  }
-
-  // 2. Recursos de Hardware & Sensores (MikroTik / Routers / Switches)
-  const hwBox = document.getElementById('telemetry-hardware-box');
-  const hw = data.hardware;
-  if (hwBox) {
-    if (hw && (hw.cpu_util_pct != null || hw.memory_util_pct != null || hw.temp_cpu_c != null || hw.voltage_v != null)) {
-      hwBox.style.display = 'block';
-      safe('telemetry-cpu-util', hw.cpu_util_pct != null ? `${parseFloat(hw.cpu_util_pct).toFixed(1)}%` : '—');
-      safe('telemetry-mem-util', hw.memory_util_pct != null ? `${parseFloat(hw.memory_util_pct).toFixed(1)}%` : '—');
-      safe('telemetry-temp-cpu', hw.temp_cpu_c != null ? `${hw.temp_cpu_c} °C` : (hw.temp_board_c != null ? `${hw.temp_board_c} °C (Board)` : '—'));
-      safe('telemetry-voltage', hw.voltage_v != null ? `${hw.voltage_v} V` : '—');
-    } else {
-      hwBox.style.display = 'none';
-    }
-  }
-
-  // 3. Sistema & Inventario
-  const sysBox = document.getElementById('telemetry-system-box');
-  const sys = data.system;
-  if (sysBox) {
-    if (sys && (sys.model || sys.serial || sys.firmware || sys.mac || (sys.uptime_text && sys.uptime_text !== '—'))) {
-      sysBox.style.display = 'block';
-      const modelFw = [sys.model, sys.firmware ? `v${sys.firmware}` : ''].filter(Boolean).join(' · ');
-      safe('telemetry-model-fw', modelFw || sys.sys_name || 'Dispositivo');
-      safe('telemetry-serial', sys.serial || '—');
-      safe('telemetry-uptime', sys.uptime_text || '—');
-
-      const boxMac = document.getElementById('box-telemetry-mac');
-      if (boxMac) {
-        if (sys.mac) {
-          boxMac.style.display = 'block';
-          safe('telemetry-mac', sys.mac);
-        } else {
-          boxMac.style.display = 'none';
-        }
-      }
-    } else {
-      sysBox.style.display = 'none';
-    }
-  }
-
-  // 4. Interfaz LAN
-  const lanBox = document.getElementById('telemetry-lan-box');
-  const lan = data.lan;
-  if (lanBox) {
-    if (lan && (lan.in_text || lan.out_text || lan.status)) {
-      lanBox.style.display = 'block';
-      const lanStatusEl = document.getElementById('telemetry-lan-status');
-      if (lanStatusEl) {
-        lanStatusEl.textContent = lan.status || 'Up';
-        lanStatusEl.style.color = lan.status === 'Up' ? '#10b981' : '#ef4444';
-        lanStatusEl.style.background = lan.status === 'Up' ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)';
-      }
-      safe('telemetry-lan-in', lan.in_text || '—');
-      safe('telemetry-lan-out', lan.out_text || '—');
-    } else {
-      lanBox.style.display = 'none';
-    }
-  }
-
-  const problems = data.problems || [];
-  safe('telemetry-problems-count', problems.length > 0 ? String(problems.length) : '0');
-
-  const priorityLabel = { 0: 'Info', 1: 'Info', 2: '⚠ Warning', 3: '🔶 Average', 4: '🔴 High', 5: '🚨 Disaster' };
-  const priorityColors = { 0: '#64748b', 1: '#64748b', 2: '#f59e0b', 3: '#f97316', 4: '#ef4444', 5: '#dc2626' };
-
-  const list = document.getElementById('telemetry-problems-list');
-  if (list) {
-    if (problems.length > 0) {
-      list.innerHTML = problems.map(p => `
-        <div style="background: rgba(239,68,68,0.08); border-left: 3px solid ${priorityColors[p.priority] || '#ef4444'}; border-radius: 4px; padding: 4px 8px; font-size: 0.7rem;">
-          <span style="color: ${priorityColors[p.priority] || '#ef4444'}; font-weight: 700;">${priorityLabel[p.priority] || 'Alerta'}</span>
-          <span style="color: #cbd5e1; margin-left: 4px;">${p.description || 'Sin descripción'}</span>
-        </div>
-      `).join('');
-      list.style.display = 'flex';
-    } else {
-      list.innerHTML = `<div style="font-size: 0.7rem; color: #10b981; padding: 2px 0;"><i class="fas fa-check-circle"></i> Sin alertas activas</div>`;
-      list.style.display = 'flex';
     }
   }
 
@@ -5288,47 +5090,27 @@ function applyNodeStatusToCanvas(nodeId, statusData) {
   const isSubmap = grp.isSubmap || false;
 
   let pingStatus = 'ok';
-  let snmpStatus = 'ok';
-  let hasSnmpIssue = false;
 
   if (typeof statusData === 'object' && statusData !== null) {
     pingStatus = statusData.ping_status || statusData.status || 'ok';
-    snmpStatus = statusData.snmp_status || statusData.status || 'ok';
-    hasSnmpIssue = !!statusData.has_snmp_issue || (pingStatus === 'ok' && (snmpStatus === 'down' || snmpStatus === 'unknown' || statusData.snmp_available === 2));
   } else if (typeof statusData === 'string') {
     pingStatus = statusData;
-    snmpStatus = statusData;
   }
 
+  // Iluminación gobernada por PING (tanto el contorno como el punto interior)
   const pingColor = isParentShortcut ? '#38bdf8' : getNodeStatusColor(pingStatus, isSubmap);
-  const snmpColor = isParentShortcut ? '#38bdf8' : getNodeStatusColor(snmpStatus, isSubmap);
 
   if (dotShape) {
-    dotShape.fill(snmpColor);
+    dotShape.fill(pingColor);
   }
   if (boxShape && !boxShape.isHighlighted) {
     boxShape.stroke(pingColor);
   }
 
-  // Indicador visual de alerta SNMP en esquina si hay Ping pero fallo de SNMP
-  let snmpAlertBadge = grp.findOne('.snmpAlertBadge');
-  if (hasSnmpIssue && !isSubmap && !isParentShortcut) {
-    if (!snmpAlertBadge) {
-      const boxW = boxShape ? boxShape.width() : 130;
-      snmpAlertBadge = new Konva.Text({
-        x: boxW - 20,
-        y: 3,
-        text: '⚠️',
-        fontSize: 10,
-        listening: false,
-        name: 'snmpAlertBadge'
-      });
-      grp.add(snmpAlertBadge);
-    } else {
-      snmpAlertBadge.show();
-    }
-  } else if (snmpAlertBadge) {
-    snmpAlertBadge.hide();
+  // Eliminar cualquier badge previo de SNMP si existiera
+  const snmpAlertBadge = grp.findOne('.snmpAlertBadge');
+  if (snmpAlertBadge) {
+    snmpAlertBadge.destroy();
   }
 
   nodesLayer.batchDraw();
@@ -5391,9 +5173,10 @@ function startRealtimePolling(mapId) {
     }
   };
 
-  // Primera ejecución inmediata + polling cada 45s
+  // Primera ejecución inmediata + polling periódico según intervalo configurado
   poll();
-  _realtimePollInterval = setInterval(poll, 45000);
+  const intervalMs = Math.max(5000, (window.currentPollIntervalSeconds || 30) * 1000);
+  _realtimePollInterval = setInterval(poll, intervalMs);
 }
 
 function updateUrlHashState() {
@@ -6911,6 +6694,8 @@ function switchTab(tabId) {
   }
   if (tabId === 'tab-spectrum') {
     handleSpectrumTabActivated();
+  } else {
+    stopSpectrumPolling();
   }
   updateUrlHashState();
 }
@@ -6922,6 +6707,7 @@ let spectrumSidebarZoom = 1.0;
 let spectrumModalZoom = 1.0;
 let spectrumFilterText = '';
 let spectrumRoleFilter = 'all';
+let _spectrumPollInterval = null;
 
 const MIN_SPEC_FREQ = 4850;
 const MAX_SPEC_FREQ = 7250;
@@ -6943,7 +6729,33 @@ function handleSpectrumTabActivated() {
   populateSpectrumMapSelector();
   const selectMap = document.getElementById('select-spectrum-map');
   const targetMap = (selectMap && selectMap.value && selectMap.value !== 'current') ? selectMap.value : (currentMap ? currentMap.id : 'default-map');
-  loadSpectrumData(targetMap);
+  loadSpectrumData(targetMap, false);
+  startSpectrumPolling();
+}
+
+function startSpectrumPolling() {
+  if (_spectrumPollInterval) {
+    clearInterval(_spectrumPollInterval);
+    _spectrumPollInterval = null;
+  }
+  const intervalMs = Math.max(5000, (window.currentPollIntervalSeconds || 30) * 1000);
+  _spectrumPollInterval = setInterval(() => {
+    const activeTab = document.querySelector('.sidebar-tab.active');
+    if (activeTab && activeTab.dataset.tab === 'tab-spectrum') {
+      const selectMap = document.getElementById('select-spectrum-map');
+      const targetMap = (selectMap && selectMap.value && selectMap.value !== 'current') ? selectMap.value : (currentMap ? currentMap.id : 'default-map');
+      loadSpectrumData(targetMap, true);
+    } else {
+      stopSpectrumPolling();
+    }
+  }, intervalMs);
+}
+
+function stopSpectrumPolling() {
+  if (_spectrumPollInterval) {
+    clearInterval(_spectrumPollInterval);
+    _spectrumPollInterval = null;
+  }
 }
 
 function populateSpectrumMapSelector() {
@@ -6961,9 +6773,9 @@ function populateSpectrumMapSelector() {
   selectMap.value = currentVal;
 }
 
-async function loadSpectrumData(mapId = null) {
+async function loadSpectrumData(mapId = null, isBackground = false) {
   const listEl = document.getElementById('spectrum-devices-list');
-  if (listEl) {
+  if (listEl && !isBackground && !spectrumData) {
     listEl.innerHTML = `
       <div style="text-align: center; color: var(--text-muted); font-size: 0.75rem; padding: 20px 0;">
         <i class="fas fa-spinner fa-spin"></i> Consultando telemetría de radio en Zabbix...
@@ -8046,6 +7858,13 @@ window.addEventListener('DOMContentLoaded', async () => {
         // Cargar roles y filtros de inventario antes de renderizar mapas para tener la paleta oficial
         await loadInventoryFilters();
 
+        // Cargar intervalo de polling configurado de Zabbix
+        API.getIntegrationsConfig().then(cfg => {
+          if (cfg?.zabbix?.poll_interval) {
+            window.currentPollIntervalSeconds = parseInt(cfg.zabbix.poll_interval, 10) || 30;
+          }
+        }).catch(() => {});
+
         // Cargar mapas y restaurar estado de navegación persistente
         const maps = await API.getMaps();
         cachedMaps = Array.isArray(maps) ? maps : [];
@@ -9022,6 +8841,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   const btnTestZabbixConn = document.getElementById('btn-test-zabbix-conn');
   const alertZabbixMsg = document.getElementById('zabbix-msg-alert');
   const badgeZabbixStatus = document.getElementById('badge-zabbix-status');
+  const selectZabbixPollInterval = document.getElementById('select-zabbix-poll-interval');
 
   // Alerta global
   const alertGlobalSettings = document.getElementById('settings-global-alert');
@@ -9122,10 +8942,16 @@ window.addEventListener('DOMContentLoaded', async () => {
         if (inputNetboxToken && data.netbox.token) inputNetboxToken.value = data.netbox.token;
       }
 
-      // Zabbix: IP y API Token
+      // Zabbix: IP, API Token e Intervalo de actualización
       if (data.zabbix) {
         if (inputZabbixUrl && data.zabbix.url) inputZabbixUrl.value = data.zabbix.url;
         if (inputZabbixToken && data.zabbix.token) inputZabbixToken.value = data.zabbix.token;
+        if (selectZabbixPollInterval && data.zabbix.poll_interval) {
+          selectZabbixPollInterval.value = String(data.zabbix.poll_interval);
+        }
+        if (data.zabbix.poll_interval) {
+          window.currentPollIntervalSeconds = parseInt(data.zabbix.poll_interval, 10) || 30;
+        }
       }
     } catch (err) {
       console.error('Error cargando configuraciones de integraciones:', err);
@@ -9232,9 +9058,11 @@ window.addEventListener('DOMContentLoaded', async () => {
           token: inputNetboxToken ? inputNetboxToken.value.trim() : ''
         };
 
+        const pollInt = selectZabbixPollInterval ? (parseInt(selectZabbixPollInterval.value, 10) || 30) : 30;
         const zabbixPayload = {
           url: inputZabbixUrl ? inputZabbixUrl.value.trim() : '',
-          token: inputZabbixToken ? inputZabbixToken.value.trim() : ''
+          token: inputZabbixToken ? inputZabbixToken.value.trim() : '',
+          poll_interval: pollInt
         };
 
         const [resNetbox, resZabbix] = await Promise.all([
@@ -9242,7 +9070,16 @@ window.addEventListener('DOMContentLoaded', async () => {
           API.saveZabbixConfig(zabbixPayload)
         ]);
 
-        showPanelAlert(alertGlobalSettings, '✅ Configuraciones de IP y API guardadas exitosamente.', 'success');
+        window.currentPollIntervalSeconds = pollInt;
+        if (currentMap) {
+          startRealtimePolling(currentMap.id);
+        }
+        const activeTabEl = document.querySelector('.sidebar-tab.active');
+        if (activeTabEl && activeTabEl.dataset.tab === 'tab-spectrum') {
+          startSpectrumPolling();
+        }
+
+        showPanelAlert(alertGlobalSettings, '✅ Configuraciones de IP, API e intervalo guardadas exitosamente.', 'success');
         await loadSettingsData();
       } catch (err) {
         showPanelAlert(alertGlobalSettings, '❌ Error al guardar configuraciones: ' + err.message, 'error');

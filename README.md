@@ -67,6 +67,12 @@ Plataforma de mapeo, análisis y monitoreo visual de topologías de red en tiemp
 - **Optimización de Renderizado Reactivo:** Indexación en memoria de enlaces (`_getOrBuildNodeMap`, `registerAttachedLink`) que elimina el lag al arrastrar nodos conectados a múltiples aristas.
 - **Soporte para Nodos Especiales:** Dispositivos de red, submapas, notas adhesivas, nubes WAN y brazos FTTH (`ftth_branch`) con semáforo óptico en vivo.
 
+### 7. 🟢 Iluminación Gobernada por Ping & Telemetría Simplificada
+- **Gobernanza Visual por ICMP Ping:** La iluminación operativa (verde/rojo) del contorno del nodo (`box.stroke`) y del punto de estado interno (`statusDot.fill`) responde exclusivamente al estado Ping.
+- **Enlaces Vinculados al Nodo Destino:** El color del enlace (`getLinkColor`) evalúa directamente la disponibilidad Ping del nodo destino.
+- **Limpieza de Tooltips y Propiedades:** Eliminación de gráficos de tráfico e indicadores SNMP no requeridos; visualización enfocada en RTT, pérdida de paquetes y Parámetros RF / Espectro.
+- **Intervalo de Sondeo de Zabbix Ajustable:** Selector en configuración (`12s`, `20s`, `30s`, `1m`) para regular el refresco del lienzo y del analizador de espectro RF.
+
 ---
 
 ## 🏗️ Arquitectura del Sistema
@@ -260,6 +266,12 @@ print('Respaldo SQL completado con éxito.')
 ---
 
 ## 📋 Historial de Versiones
+
+### Versión 2.1.0 (Release NEXUSDUDE.2.0 - Telemetry & Visual Streamlining) — 2026-10-08
+- **Gobernanza de Iluminación por ICMP Ping:** Contorno del nodo, indicador circular interno y enlaces asociados al estado Ping del nodo destino.
+- **Optimización de Telemetría en Panel de Propiedades:** Depuración de interfaces/puertos, alertas SNMP y tráfico LAN superfluo; conservación de ICMP Ping y Parámetros RF.
+- **Depuración de Tooltip de Aristas:** Eliminación de gráficos de tráfico y badges innecesarios en el hover de enlaces.
+- **Intervalo de Actualización Configurable:** Opciones de `12s`, `20s`, `30s` y `1m` para Zabbix y refresco periódico del Espectro RF.
 
 ### Versión 2.0.0 (Release NEXUSDUDE.2.0) — 2026-10-07
 - **Jerarquía Matricial N-a-N (`map_hierarchy`):** Soporte de accesos múltiples a mapas, alias contextuales y fusión de mapas duplicados (`/api/maps/merge-duplicates`).

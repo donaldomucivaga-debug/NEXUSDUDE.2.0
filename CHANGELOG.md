@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.1.0] - 2026-10-08 (Release NEXUSDUDE.2.0 - Telemetry & Visual Streamlining)
+
+### 🌟 Changed & Streamlined (Gobernanza Ping & Telemetría Esencial)
+- **Iluminación Visual Gobernada Exclusivamente por ICMP Ping:**
+  - El contorno exterior del nodo (`box.stroke`) y el indicador circular interno (`statusDot.fill`) ahora reflejan fielmente el estado ICMP Ping (Verde para estado operativo `ok`, Rojo para `down`/`problem`).
+  - El comportamiento y color de las aristas/enlaces (`getLinkColor`) queda asociado al **estado ICMP Ping del nodo destino** (`targetNode.ping_status`).
+  - Eliminado el badge de estado SNMP superpuesto en el lienzo para evitar ruido visual y falsos positivos.
+
+- **Depuración del Panel Lateral de Propiedades (`#node-properties-panel`):**
+  - **Eliminado:** Sección "Puertos & Conexiones Físicas" (`#node-ports-card`), píldora e indicadores de "SNMP AGENT", alertas SNMP activas y lista de problemas, tráfico LAN de subida y bajada (`#telemetry-lan-box`), telemetría de sensores de hardware y tarjetas de inventario del sistema.
+  - **Conservado & Optimizado:** Telemetría esencial de ICMP Ping (RTT en ms y Pérdida en %) en tarjeta de métricas de 2 columnas de alta legibilidad, y sección de Parámetros RF / Antena (`#prop-node-rf-box` y `#telemetry-wireless-box`).
+
+- **Simplificación del Tooltip Flotante de Enlaces (`canvas-link-tooltip`):**
+  - Eliminado el badge redundante de status y la sección de tráfico de subida/bajada.
+  - Se conservan exclusivamente: puntos extremos (origen/destino), badges de puertos físicos NetBox, tipo de cable, potencias ópticas (Rx/Tx) y parámetros inalámbricos RF (RSSI/SNR).
+
+- **Intervalo de Actualización de Telemetría Configurable en Zabbix:**
+  - Nuevo selector en la ventana modal de configuración de Zabbix (`#panel-settings-zabbix`) con opciones: `12s`, `20s`, `30s`, `1m`.
+  - Persistencia de `poll_interval` en SQLite (`system_config.zabbix_poll_interval`) y `.env` (`ZABBIX_POLL_INTERVAL`).
+  - Aplicación dinámica al polling en tiempo real del lienzo (`startRealtimePolling`).
+
+- **Monitoreo Continuo de Espectro RF (`tab-spectrum`):**
+  - El analizador de espectro de radiofrecuencias actualiza la telemetría periódicamente según el intervalo configurado de Zabbix (`startSpectrumPolling`), sincronizando frecuencias, anchos de canal y equipos automáticamente.
+
+- **Documentación Técnica Integrada (`docs.js`):**
+  - Actualizado el manual de operaciones in-app (`F1`) detallando las nuevas reglas de iluminación, la gobernanza por Ping, la asociación del enlace al nodo destino y la gestión del intervalo de muestreo.
+
+---
+
 ## [1.0.0] - 2026-09-24 (Release NEXUSDUDE.1.0)
 
 ### 🌟 Added

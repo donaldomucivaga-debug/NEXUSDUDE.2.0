@@ -224,10 +224,10 @@
         <p>Visualización en cuadrícula de tarjetas de todos los mapas del sistema con buscador de texto y conteo de nodos. Puedes arrastrar cualquier tarjeta directamente al lienzo para crear un acceso directo de submapa.</p>
 
         <h3>Pestaña 4: Propiedades</h3>
-        <p>Muestra los detalles técnicos del nodo o enlace actualmente seleccionado en el lienzo (IP, modelo, fabricante, interfaces conectadas, telemetría y métricas de tráfico).</p>
+        <p>Muestra los detalles técnicos del nodo seleccionado (IP, modelo, fabricante, rol, coordenadas) junto con sus <strong>Parámetros RF / Orientación de Antena</strong> (Azimuth, Tilt, Altura de NetBox) y telemetría en tiempo real centrada en <strong>ICMP Ping (RTT y Pérdida)</strong> y parámetros inalámbricos de radio (frecuencia, ancho de canal, RSSI, SNR, modulación MCS, distancia y SSID). Se simplificó eliminando la telemetría pesada de SNMP, recursos de hardware, contadores LAN y alertas secundarias para una visualización rápida y clara.</p>
 
         <h3>Pestaña 5: Espectro RF</h3>
-        <p>Herramienta para operadores WISP: analiza el uso de canales y frecuencias de radio (2.4 GHz, 5 GHz, 60 GHz) para evitar interferencias entre torres vecinas.</p>
+        <p>Analizador de Espectro RF y Regla de Frecuencias (4850 a 7250 MHz) para operadores WISP. Muestra la ocupación espectral y anchos de canal de los radios en el mapa seleccionado, con actualización automática periódica configurable (12s, 20s, 30s o 1m).</p>
       `
     },
     {
@@ -295,6 +295,15 @@
             </tr>
           </tbody>
         </table>
+
+        <h3>Reglas de Iluminación y Estados Operativos (Gobernado por PING):</h3>
+        <p>En NexusDude 2.0 la semántica de iluminación de la topología está gobernada directamente por <strong>ICMP Ping</strong> para garantizar una lectura inmediata del estado de conectividad:</p>
+        <ul>
+          <li><strong>Contorno del Nodo:</strong> El borde del nodo se ilumina en <span class="docs-badge green">Verde</span> si el equipo responde al Ping ICMP, o en <span class="docs-badge red">Rojo</span> si está fuera de línea.</li>
+          <li><strong>Punto Interior del Nodo (Dot):</strong> El indicador circular dentro del nodo está gobernado por el <strong>Ping</strong> (<span class="docs-badge green">Verde</span> en línea, <span class="docs-badge red">Rojo</span> caído), garantizando sincronía visual completa con el contorno.</li>
+          <li><strong>Arista / Enlace (Link):</strong> El comportamiento y color de la arista está asociado al estado de Ping del <strong>Nodo Destino</strong>. Si el equipo destino responde a Ping, la arista se dibuja en <span class="docs-badge green">Verde</span> (o <span class="docs-badge purple">Violeta</span> en enlaces inter-mapa); si el nodo destino cae, la arista cambia automáticamente a <span class="docs-badge red">Rojo</span>.</li>
+          <li><strong>Tooltip Flotante en Aristas:</strong> Al pasar el cursor sobre cualquier arista se muestran los extremos (origen/destino), puertos e interfaces NetBox, tipo de cable y parámetros de radio o fibra (Rx/Tx Power, RSSI, SNR), eliminando contadores de tráfico o badges de estado para máxima legibilidad.</li>
+        </ul>
       `
     },
     {
@@ -403,6 +412,14 @@
           <li><strong>🌿 Rama Actual:</strong> Sincroniza únicamente el mapa activo y sus submapas dependientes. Es la opción recomendada para actualizar una zona o torre sin afectar el resto del sistema.</li>
           <li><strong>🌐 Todo el Sistema (Global):</strong> Sincroniza la red completa (+260 mapas).</li>
           <li><strong>Limpiar Servicios Previos:</strong> Elimina los servicios anteriores de la rama para reconstruirlos desde cero, ideal si reestructuraste profundamente las dependencias.</li>
+        </ul>
+
+        <h3>Intervalos de Consulta y Telemetría en Tiempo Real:</h3>
+        <p>En el modal de <strong>Configuración (⚙) &gt; Zabbix</strong> puedes configurar el tiempo de actualización de la telemetría:</p>
+        <ul>
+          <li><strong>Opciones configurables:</strong> <code>12s</code>, <code>20s</code>, <code>30s</code> (predeterminado) o <code>1m</code>.</li>
+          <li><strong>Refresco del Lienzo:</strong> Determina la frecuencia con la que se actualiza el estado Ping ICMP de todos los nodos, la coloración de las aristas orientadas a los nodos destino y las métricas de RTT/Pérdida.</li>
+          <li><strong>Actualización de Espectro RF:</strong> Mientras la pestaña <em>Espectro RF</em> permanezca abierta, la ocupación de canales y frecuencias de los radios se sincroniza automáticamente en segundo plano utilizando este mismo intervalo.</li>
         </ul>
       `
     },

@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     ZABBIX_TOKEN: str = "30c4fe2150817b9985106157674f28f5ce635337ec251822959583489d05c666"
     ZABBIX_USER: str = "Admin"
     ZABBIX_PASS: str = "zabbix"
+    ZABBIX_POLL_INTERVAL: int = 30
 
     class Config:
         env_file = ".env"

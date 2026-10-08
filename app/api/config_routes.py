@@ -58,6 +58,7 @@ class NetboxTestPayload(BaseModel):
 class ZabbixConfigPayload(BaseModel):
     url: Optional[str] = None
     token: Optional[str] = None
+    poll_interval: Optional[int] = None
 
 class ZabbixTestPayload(BaseModel):
     url: Optional[str] = None
@@ -83,7 +84,8 @@ async def get_integrations_config(user: Dict[str, Any] = Depends(get_current_use
             },
             "zabbix": {
                 "url": settings.ZABBIX_URL,
-                "token": getattr(settings, "ZABBIX_TOKEN", "")
+                "token": getattr(settings, "ZABBIX_TOKEN", ""),
+                "poll_interval": getattr(settings, "ZABBIX_POLL_INTERVAL", 30)
             }
         }
     except Exception as e:
@@ -276,6 +278,12 @@ async def save_zabbix_config(
             await set_system_config("zabbix_token", clean_token, "Token API de Zabbix")
             settings.ZABBIX_TOKEN = clean_token
             env_updates["ZABBIX_TOKEN"] = clean_token
+
+        if payload.poll_interval is not None:
+            clean_interval = int(payload.poll_interval)
+            await set_system_config("zabbix_poll_interval", str(clean_interval), "Intervalo de polling Zabbix (segundos)")
+            settings.ZABBIX_POLL_INTERVAL = clean_interval
+            env_updates["ZABBIX_POLL_INTERVAL"] = str(clean_interval)
 
         if env_updates:
             update_env_file(env_updates)
