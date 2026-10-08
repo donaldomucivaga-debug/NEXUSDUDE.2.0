@@ -13,6 +13,7 @@ let currentUser = null;
 let snapToGrid = true;
 const GRID_SIZE = 20;
 window.currentPollIntervalSeconds = 30;
+window.allowEdgeEditing = true;
 
 // Estado de modo conexión de enlaces
 let linkMode = false;
@@ -2398,6 +2399,10 @@ function renderLink(link, nodesDict) {
 }
 
 function openLinkPropertiesModal(link, sourceNode, targetNode) {
+  if (window.allowEdgeEditing === false) {
+    alert('⚠️ La edición de aristas está deshabilitada globalmente en la configuración de NetBox (Nivel Soporte).');
+    return;
+  }
   const modal = document.getElementById('modal-link-properties');
   if (!modal) return;
 
@@ -2417,13 +2422,6 @@ function openLinkPropertiesModal(link, sourceNode, targetNode) {
   const inputTgtIface = document.getElementById('input-link-tgt-iface');
   const selectCableType = document.getElementById('select-link-cable-type');
   const badgeNetbox = document.getElementById('link-netbox-cable-badge');
-
-  const selectZbxSrc = document.getElementById('select-link-zbx-src-iface');
-  const selectZbxTgt = document.getElementById('select-link-zbx-tgt-iface');
-  const previewIn = document.getElementById('link-preview-in');
-  const previewOut = document.getElementById('link-preview-out');
-  const previewExtra = document.getElementById('link-preview-extra');
-  const zbxStatusBadge = document.getElementById('link-zbx-status-badge');
 
   const radioSrcToTgt = document.getElementById('radio-dir-source-to-target');
   const radioTgtToSrc = document.getElementById('radio-dir-target-to-source');
@@ -2938,6 +2936,10 @@ function updateAllLinks() {
 
 // ─── 5. Herramienta de Conexión de Enlaces ──────────────────────────────────
 function startLinkMode() {
+  if (window.allowEdgeEditing === false) {
+    alert('⚠️ La creación y edición de aristas está deshabilitada globalmente en la configuración de NetBox (Nivel Soporte).');
+    return;
+  }
   linkMode = true;
   linkSourceNode = null;
   linkTargetNodes.clear();
@@ -4877,6 +4879,10 @@ function showMultiSelectionNotice(count) {
     const btnBulkDeleteLinks = document.getElementById('btn-bulk-delete-links');
     if (btnBulkDeleteLinks) {
       btnBulkDeleteLinks.addEventListener('click', async () => {
+        if (window.allowEdgeEditing === false) {
+          alert('⚠️ La eliminación de aristas está deshabilitada globalmente en la configuración de NetBox (Nivel Soporte).');
+          return;
+        }
         if (selectedNodes.size === 0) return;
         const selectedIds = new Set(Array.from(selectedNodes).map(n => n.id));
         const linksToDelete = [];
@@ -7858,10 +7864,13 @@ window.addEventListener('DOMContentLoaded', async () => {
         // Cargar roles y filtros de inventario antes de renderizar mapas para tener la paleta oficial
         await loadInventoryFilters();
 
-        // Cargar intervalo de polling configurado de Zabbix
+        // Cargar intervalo de polling configurado de Zabbix y estado de edición de aristas
         API.getIntegrationsConfig().then(cfg => {
           if (cfg?.zabbix?.poll_interval) {
             window.currentPollIntervalSeconds = parseInt(cfg.zabbix.poll_interval, 10) || 30;
+          }
+          if (cfg?.netbox && cfg.netbox.allow_edge_editing !== undefined) {
+            window.allowEdgeEditing = cfg.netbox.allow_edge_editing !== false;
           }
         }).catch(() => {});
 
@@ -8443,6 +8452,10 @@ window.addEventListener('DOMContentLoaded', async () => {
   const btnDeleteNodeLinks = document.getElementById('btn-delete-node-links');
   if (btnDeleteNodeLinks) {
     btnDeleteNodeLinks.addEventListener('click', async () => {
+      if (window.allowEdgeEditing === false) {
+        alert('⚠️ La eliminación de aristas está deshabilitada globalmente en la configuración de NetBox (Nivel Soporte).');
+        return;
+      }
       if (!selectedNode) return;
       const targetLinks = [];
       linkLines.forEach(({ line, sourceId, targetId }, linkId) => {
@@ -8833,6 +8846,9 @@ window.addEventListener('DOMContentLoaded', async () => {
   const btnTestNetboxConn = document.getElementById('btn-test-netbox-conn');
   const alertNetboxMsg = document.getElementById('netbox-msg-alert');
   const badgeNetboxStatus = document.getElementById('badge-netbox-status');
+  const netboxSoporteEdgeControl = document.getElementById('netbox-soporte-edge-control');
+  const chkNetboxAllowEdgeEditing = document.getElementById('chk-netbox-allow-edge-editing');
+  const badgeEdgeEditingStatus = document.getElementById('badge-edge-editing-status');
 
   // Campos Zabbix
   const inputZabbixUrl = document.getElementById('input-zabbix-url');
@@ -8940,6 +8956,41 @@ window.addEventListener('DOMContentLoaded', async () => {
       if (data.netbox) {
         if (inputNetboxUrl && data.netbox.url) inputNetboxUrl.value = data.netbox.url;
         if (inputNetboxToken && data.netbox.token) inputNetboxToken.value = data.netbox.token;
+
+        const isAllowed = data.netbox.allow_edge_editing !== false;
+        window.allowEdgeEditing = isAllowed;
+
+        // Verificar si el usuario actual tiene nivel Soporte o Admin
+        const role = (currentUser?.role || '').toLowerCase();
+        const username = (currentUser?.username || '').toLowerCase();
+        const isSoporteOrAdmin = role.includes('soporte') || username.includes('soporte') || role === 'admin' || username === 'admin';
+
+        if (netboxSoporteEdgeControl) {
+          if (isSoporteOrAdmin) {
+            netboxSoporteEdgeControl.style.display = 'block';
+            if (chkNetboxAllowEdgeEditing) {
+              chkNetboxAllowEdgeEditing.checked = isAllowed;
+              chkNetboxAllowEdgeEditing.onchange = () => {
+                if (badgeEdgeEditingStatus) {
+                  if (chkNetboxAllowEdgeEditing.checked) {
+                    badgeEdgeEditingStatus.textContent = 'Edición Habilitada';
+                    badgeEdgeEditingStatus.style.background = 'rgba(16, 185, 129, 0.15)';
+                    badgeEdgeEditingStatus.style.color = '#10b981';
+                    badgeEdgeEditingStatus.style.borderColor = 'rgba(16, 185, 129, 0.3)';
+                  } else {
+                    badgeEdgeEditingStatus.textContent = 'Edición Bloqueada';
+                    badgeEdgeEditingStatus.style.background = 'rgba(239, 68, 68, 0.15)';
+                    badgeEdgeEditingStatus.style.color = '#ef4444';
+                    badgeEdgeEditingStatus.style.borderColor = 'rgba(239, 68, 68, 0.3)';
+                  }
+                }
+              };
+              chkNetboxAllowEdgeEditing.onchange();
+            }
+          } else {
+            netboxSoporteEdgeControl.style.display = 'none';
+          }
+        }
       }
 
       // Zabbix: IP, API Token e Intervalo de actualización
@@ -9057,6 +9108,9 @@ window.addEventListener('DOMContentLoaded', async () => {
           url: inputNetboxUrl ? inputNetboxUrl.value.trim() : '',
           token: inputNetboxToken ? inputNetboxToken.value.trim() : ''
         };
+        if (chkNetboxAllowEdgeEditing && netboxSoporteEdgeControl && netboxSoporteEdgeControl.style.display !== 'none') {
+          netboxPayload.allow_edge_editing = chkNetboxAllowEdgeEditing.checked;
+        }
 
         const pollInt = selectZabbixPollInterval ? (parseInt(selectZabbixPollInterval.value, 10) || 30) : 30;
         const zabbixPayload = {

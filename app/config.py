@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     ZABBIX_USER: str = "Admin"
     ZABBIX_PASS: str = "zabbix"
     ZABBIX_POLL_INTERVAL: int = 30
+    ALLOW_EDGE_EDITING: bool = True
 
     class Config:
         env_file = ".env"

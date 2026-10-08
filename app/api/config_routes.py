@@ -50,6 +50,7 @@ def update_env_file(key_values: Dict[str, str]):
 class NetboxConfigPayload(BaseModel):
     url: Optional[str] = None
     token: Optional[str] = None
+    allow_edge_editing: Optional[bool] = None
 
 class NetboxTestPayload(BaseModel):
     url: Optional[str] = None
@@ -80,7 +81,8 @@ async def get_integrations_config(user: Dict[str, Any] = Depends(get_current_use
         return {
             "netbox": {
                 "url": settings.NETBOX_URL,
-                "token": settings.NETBOX_TOKEN
+                "token": settings.NETBOX_TOKEN,
+                "allow_edge_editing": getattr(settings, "ALLOW_EDGE_EDITING", True)
             },
             "zabbix": {
                 "url": settings.ZABBIX_URL,
@@ -173,6 +175,18 @@ async def save_netbox_config(
             await set_system_config("netbox_token", clean_token, "Token API de NetBox")
             settings.NETBOX_TOKEN = clean_token
             env_updates["NETBOX_TOKEN"] = clean_token
+
+        if payload.allow_edge_editing is not None:
+            # Solo permitir cambiar esta configuración si el usuario tiene rol o nombre 'soporte' / 'admin'
+            user_role = (user.get("role") or "").lower()
+            username = (user.get("username") or "").lower()
+            if "soporte" in user_role or "soporte" in username or user_role == "admin" or username == "admin":
+                val_str = "true" if payload.allow_edge_editing else "false"
+                await set_system_config("allow_edge_editing", val_str, "Habilitar creación, edición y eliminación de aristas")
+                settings.ALLOW_EDGE_EDITING = payload.allow_edge_editing
+                env_updates["ALLOW_EDGE_EDITING"] = val_str
+            else:
+                raise HTTPException(status_code=403, detail="Solo los usuarios con nivel Soporte pueden modificar la edición global de aristas.")
 
         if env_updates:
             update_env_file(env_updates)

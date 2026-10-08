@@ -398,6 +398,8 @@ async def load_system_config_into_settings():
                 settings.ZABBIX_POLL_INTERVAL = int(cfg["zabbix_poll_interval"])
             except (ValueError, TypeError):
                 pass
+        if "allow_edge_editing" in cfg and cfg["allow_edge_editing"] is not None:
+            settings.ALLOW_EDGE_EDITING = str(cfg["allow_edge_editing"]).strip().lower() in ("true", "1", "yes")
         logger.info("Configuraciones dinámicas del sistema cargadas desde SQLite a memoria.")
     except Exception as e:
         logger.warning(f"No se pudieron cargar configuraciones dinámicas desde SQLite: {e}")

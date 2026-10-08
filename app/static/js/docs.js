@@ -481,6 +481,11 @@
               <td>Creación y edición de mapas, acomodo de topologías, trazado de enlaces, notas y brazos FTTH.</td>
             </tr>
             <tr>
+              <td><span class="docs-badge blue">soporte</span></td>
+              <td>Nivel Soporte</td>
+              <td>Control de operaciones y soporte técnico. Cuenta con acceso exclusivo en la sección de <strong>Configuración NetBox</strong> para <strong>activar o desactivar generalmente la capacidad de crear, editar o eliminar aristas</strong> en toda la topología.</td>
+            </tr>
+            <tr>
               <td><span class="docs-badge amber">viewer</span></td>
               <td>Visualizador (Solo Lectura)</td>
               <td>Navegación interactiva por mapas, inspección de telemetría y consulta de diagnósticos sin permisos de modificación.</td>

@@ -270,7 +270,8 @@ print('Respaldo SQL completado con éxito.')
 ### Versión 2.1.0 (Release NEXUSDUDE.2.0 - Telemetry & Visual Streamlining) — 2026-10-08
 - **Gobernanza de Iluminación por ICMP Ping:** Contorno del nodo, indicador circular interno y enlaces asociados al estado Ping del nodo destino.
 - **Optimización de Telemetría en Panel de Propiedades:** Depuración de interfaces/puertos, alertas SNMP y tráfico LAN superfluo; conservación de ICMP Ping y Parámetros RF.
-- **Depuración de Tooltip de Aristas:** Eliminación de gráficos de tráfico y badges innecesarios en el hover de enlaces.
+- **Depuración de Tooltip y Modal de Aristas:** Eliminación de gráficos de tráfico en tooltip y remoción de la sección de telemetría en vivo Zabbix en el modal de aristas.
+- **Control Global de Aristas Exclusivo para Nivel Soporte:** Switch en configuración NetBox para habilitar/deshabilitar la creación, edición y eliminación de aristas.
 - **Intervalo de Actualización Configurable:** Opciones de `12s`, `20s`, `30s` y `1m` para Zabbix y refresco periódico del Espectro RF.
 
 ### Versión 2.0.0 (Release NEXUSDUDE.2.0) — 2026-10-07

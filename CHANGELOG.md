@@ -31,8 +31,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Monitoreo Continuo de Espectro RF (`tab-spectrum`):**
   - El analizador de espectro de radiofrecuencias actualiza la telemetría periódicamente según el intervalo configurado de Zabbix (`startSpectrumPolling`), sincronizando frecuencias, anchos de canal y equipos automáticamente.
 
-- **Documentación Técnica Integrada (`docs.js`):**
-  - Actualizado el manual de operaciones in-app (`F1`) detallando las nuevas reglas de iluminación, la gobernanza por Ping, la asociación del enlace al nodo destino y la gestión del intervalo de muestreo.
+- **Depuración de Modal de Propiedades de Arista de Servicio (`#modal-link-properties`):**
+  - **Eliminado:** Sección completa de "Telemetría en Vivo & Fuente de Datos (Zabbix)" (`select-link-zbx-src-iface`, `select-link-zbx-tgt-iface`, preview de tráfico y badge Zabbix) manteniendo el modal enfocado en puertos físicos NetBox, tipo/estado de cable y sentido del servicio.
+
+- **Control Global de Edición de Aristas Exclusivo para Nivel Soporte:**
+  - En la pestaña de configuración de NetBox (`#panel-settings-netbox`), se implementó un switch exclusivo para usuarios con **nivel Soporte** (`soporte` o `admin`) para activar o desactivar globalmente la creación, edición y eliminación de aristas.
+  - Bloqueo preventivo en frontend (interfaz y lienzo) y en backend FastAPI (`POST/PUT/DELETE /api/maps/links`).
+  - Persistencia de `allow_edge_editing` en base de datos SQLite `system_config` y sincronización con `.env`.
 
 ---
 

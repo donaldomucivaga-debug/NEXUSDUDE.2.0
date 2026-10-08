@@ -3,6 +3,7 @@ import uuid
 from typing import List, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from app.auth import get_current_user
+from app.config import settings
 from app.database import get_db_connection
 from app.models import (
     MapOut, MapDetailOut, MapCreate, MapUpdate,
@@ -1489,6 +1490,11 @@ async def bulk_delete_nodes(req: BulkDeleteNodesRequest, user: Dict[str, Any] = 
 @router.post("/links", response_model=LinkOut, status_code=status.HTTP_201_CREATED)
 async def create_link(link_data: LinkCreate, user: Dict[str, Any] = Depends(get_current_user)):
     """Crea un enlace entre dos nodos y sincroniza el cable físico correspondiente en NetBox si ambos nodos son dispositivos."""
+    if not getattr(settings, "ALLOW_EDGE_EDITING", True):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="La creación y edición de aristas está deshabilitada globalmente por el nivel de Soporte en NetBox."
+        )
     link_id = f"link-{uuid.uuid4().hex[:8]}"
     extra_data = link_data.extra_data or {}
 
@@ -1580,6 +1586,11 @@ async def create_link(link_data: LinkCreate, user: Dict[str, Any] = Depends(get_
 @router.put("/links/{link_id}", response_model=LinkOut)
 async def update_link(link_id: str, link_data: LinkUpdate, user: Dict[str, Any] = Depends(get_current_user)):
     """Actualiza propiedades de un enlace (interfaces, telemetría Zabbix, dirección de servicio, extra_data)."""
+    if not getattr(settings, "ALLOW_EDGE_EDITING", True):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="La creación y edición de aristas está deshabilitada globalmente por el nivel de Soporte en NetBox."
+        )
     async with get_db_connection() as db:
         cursor = await db.execute("SELECT * FROM links WHERE id = ?", (link_id,))
         r = await cursor.fetchone()
@@ -1651,6 +1662,11 @@ async def update_link(link_id: str, link_data: LinkUpdate, user: Dict[str, Any] 
 @router.delete("/links/{link_id}")
 async def delete_link(link_id: str, user: Dict[str, Any] = Depends(get_current_user)):
     """Elimina un enlace entre nodos y desconecta el cable correspondiente en NetBox si existía."""
+    if not getattr(settings, "ALLOW_EDGE_EDITING", True):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="La creación y edición de aristas está deshabilitada globalmente por el nivel de Soporte en NetBox."
+        )
     async with get_db_connection() as db:
         cursor = await db.execute("SELECT netbox_cable_id FROM links WHERE id = ?", (link_id,))
         r = await cursor.fetchone()
