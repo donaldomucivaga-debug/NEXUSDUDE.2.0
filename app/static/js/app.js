@@ -688,11 +688,41 @@ function computeNodeDimensions(node) {
   const subNeeded = 14 + subW + 16;
   const pinNeeded = maxPinW > 0 ? (28 + maxPinW + 16) : 0;
 
-  const minWidth = isParentShortcut ? 170 : (isSubmap ? 150 : 136);
-  const maxWidth = isParentShortcut ? 320 : (isSubmap ? 300 : 250);
+  // Detección de dispositivos de infraestructura (Switch, Router, OLT, Core, Gateway, etc.)
+  const devType = (node.device_type || '').toLowerCase();
+  const roleName = (node.extra_data?.role || '').toLowerCase();
+  const modelName = (node.extra_data?.model || '').toLowerCase();
+  const combinedType = `${devType} ${roleName} ${modelName}`;
+  const isInfra = combinedType.includes('switch') || 
+                  combinedType.includes('router') || 
+                  combinedType.includes('olt') || 
+                  combinedType.includes('core') || 
+                  combinedType.includes('gateway') || 
+                  combinedType.includes('borde') || 
+                  combinedType.includes('distribucion') ||
+                  combinedType.includes('firewall');
+
+  let minWidth = 140;
+  let maxWidth = 260;
+  let baseHeight = 52;
+
+  if (isParentShortcut) {
+    minWidth = 170;
+    maxWidth = 320;
+    baseHeight = 56;
+  } else if (isSubmap) {
+    minWidth = 150;
+    maxWidth = 300;
+    baseHeight = 56;
+  } else if (isInfra) {
+    // Formato alargado tipo Rack/Switch/Router/OLT: mayor perímetro horizontal para alojar aristas y etiquetas sin colisiones
+    minWidth = 210;
+    maxWidth = 350;
+    baseHeight = 50;
+  }
+
   const nodeWidth = Math.min(Math.max(minWidth, Math.ceil(Math.max(titleNeeded, subNeeded, pinNeeded))), maxWidth);
   
-  const baseHeight = isSubmap ? 56 : 52;
   const pinsHeight = pins.length * 20;
   const nodeHeight = baseHeight + pinsHeight;
 
@@ -1838,8 +1868,8 @@ function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
   // Distribuir pines uniformemente a lo largo de la cara: CADA ENLACE TIENE SU PROPIO PIN EXCLUSIVO
   let srcPinOffset = 0;
   if (srcN > 1) {
-    const maxSpan = isSVert ? ((srcHalf.halfW - 8) * 2) : ((srcHalf.halfH - 8) * 2);
-    const step = Math.min(14, maxSpan / srcN);
+    const maxSpan = isSVert ? ((srcHalf.halfW - 10) * 2) : ((srcHalf.halfH - 8) * 2);
+    const step = Math.min(18, maxSpan / srcN);
     srcPinOffset = (-(srcN - 1) / 2.0 + srcIdx) * step;
   }
 
@@ -1898,8 +1928,8 @@ function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
 
   let tgtPinOffset = 0;
   if (tgtN > 1) {
-    const maxSpan = isTVert ? ((tgtHalf.halfW - 8) * 2) : ((tgtHalf.halfH - 8) * 2);
-    const step = Math.min(14, maxSpan / tgtN);
+    const maxSpan = isTVert ? ((tgtHalf.halfW - 10) * 2) : ((tgtHalf.halfH - 8) * 2);
+    const step = Math.min(18, maxSpan / tgtN);
     tgtPinOffset = (-(tgtN - 1) / 2.0 + tgtIdx) * step;
   }
 
@@ -2107,12 +2137,12 @@ function createLinkPortBadge(text, color = '#38bdf8') {
     listening: false,
     perfectDrawEnabled: false
   });
-  const padX = 3.5;
-  const padY = 1.5;
+  const padX = 4;
+  const padY = 2;
   const txt = new Konva.Text({
     text: text,
-    fontSize: 7.5,
-    fontFamily: 'monospace',
+    fontSize: 8,
+    fontFamily: 'system-ui, -apple-system, monospace',
     fontStyle: 'bold',
     fill: '#f8fafc',
     padding: 0,
@@ -2123,10 +2153,14 @@ function createLinkPortBadge(text, color = '#38bdf8') {
   const bg = new Konva.Rect({
     width: w,
     height: h,
-    fill: 'rgba(15, 23, 42, 0.95)',
+    fill: 'rgba(15, 23, 42, 0.94)',
     stroke: color,
-    strokeWidth: 1,
-    cornerRadius: 2.5,
+    strokeWidth: 1.2,
+    cornerRadius: 3,
+    shadowColor: 'rgba(0, 0, 0, 0.6)',
+    shadowBlur: 3,
+    shadowOffset: { x: 0, y: 1 },
+    shadowOpacity: 0.5,
     perfectDrawEnabled: false
   });
   txt.x(padX);
@@ -2172,6 +2206,10 @@ function renderLink(link, nodesDict) {
   const updateBadgesPos = (ptsVec) => {
     if (!ptsVec || ptsVec.length < 4) return;
 
+    // Cálculo de desfase anticolisión basado en hash del enlace
+    const linkHash = Math.abs(parseInt(link.id, 10) || 0);
+    const staggerOffset = (linkHash % 2 === 1) ? 14 : 0;
+
     // --- 1. UBICACIÓN Y ROTACIÓN DE ETIQUETA ORIGEN (SRC BADGE) ---
     if (srcBadge) {
       const p0x = ptsVec[0], p0y = ptsVec[1];
@@ -2181,8 +2219,9 @@ function renderLink(link, nodesDict) {
       const segLen0 = Math.hypot(dx0, dy0);
 
       if (segLen0 > 14) {
-        // Separación suficiente para no invadir el rectángulo del nodo origen
-        const offsetDist = segLen0 > 75 ? 38 : Math.max(20, segLen0 * 0.42);
+        // Separación suficiente con escalonamiento dinámico para no encimar etiquetas contiguas
+        const baseOffset = segLen0 > 85 ? (38 + staggerOffset) : Math.max(20, segLen0 * 0.40);
+        const offsetDist = Math.min(baseOffset, Math.max(16, segLen0 - 16));
         const bx = p0x + (dx0 / segLen0) * offsetDist;
         const by = p0y + (dy0 / segLen0) * offsetDist;
 
@@ -2208,8 +2247,9 @@ function renderLink(link, nodesDict) {
       const segLen1 = Math.hypot(dx1, dy1);
 
       if (segLen1 > 14) {
-        // Separación suficiente para no tocar la punta de flecha ni el nodo destino
-        const offsetDist = segLen1 > 80 ? 42 : Math.max(22, segLen1 * 0.45);
+        // Separación suficiente con escalonamiento dinámico para no encimar etiquetas contiguas
+        const baseOffset = segLen1 > 90 ? (42 + staggerOffset) : Math.max(22, segLen1 * 0.44);
+        const offsetDist = Math.min(baseOffset, Math.max(18, segLen1 - 18));
         const bx = pLast2x - (dx1 / segLen1) * offsetDist;
         const by = pLast2y - (dy1 / segLen1) * offsetDist;
 
