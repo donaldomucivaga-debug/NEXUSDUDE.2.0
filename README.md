@@ -1,68 +1,71 @@
-# 📡 NexusDude v1.0.0 — (Release NEXUSDUDE.1.0)
-> **The Modern Network Dude for Nexus, Zabbix, NetBox & i-WISP**
+# 📡 NexusDude v2.0.0 — (Release NEXUSDUDE.2.0)
+> **The Modern Network Dude for Nexus Orchestrator, Zabbix 7.0, NetBox & i-WISP**
 
 Plataforma de mapeo, análisis y monitoreo visual de topologías de red en tiempo real estilo *The Dude*, integrada bidireccionalmente con **NetBox (DCIM/IPAM)**, **Zabbix 7.0 (Telemetría, LLD & BSM)**, **i-WISP Manager API** y **OLTs GPON/FTTH (Huawei SmartAX/EA5800 y V-SOL)**.
 
-![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)
-![Release](https://img.shields.io/badge/release-NEXUSDUDE.1.0-green.svg)
+![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)
+![Release](https://img.shields.io/badge/release-NEXUSDUDE.2.0-green.svg)
 ![Backend](https://img.shields.io/badge/backend-FastAPI%20%7C%20Python%203.11-009688.svg)
 ![Frontend](https://img.shields.io/badge/frontend-HTML5%20%7C%20Konva.js%209.3-f59e0b.svg)
 ![Database](https://img.shields.io/badge/database-SQLite%20WAL-003B57.svg)
+![Docker](https://img.shields.io/badge/deployment-Docker%20Compose-2496ED.svg)
 ![Status](https://img.shields.io/badge/status-production--ready-success.svg)
 
 ---
 
-## 🚀 Características Principales
+## 🚀 Novedades y Características Principales de NexusDude 2.0
 
-### 1. 🗺️ Lienzo Topológico Interactivo (Estilo The Dude Moderno)
-- **HTML5 Canvas de Alto Rendimiento:** Basado en **Konva.js** con soporte para miles de elementos, zoom infinito, paneo suave y cuadrícula magnética (*Snap to Grid* de 20px).
-- **Jerarquía Multinivel y Submapas:** Navegación fluida entre mapas raíz, submapas locales, accesos directos (*parent shortcuts*) y bornes virtuales de interconexión con cálculo automático de coordenadas y enrutamiento ortogonal sin colisiones.
-- **Iconografía y Estados Dinámicos:** Detección de tipos de dispositivos (Switches, Routers, APs Cambium ePMP, CPEs, OLTs Huawei/V-SOL, Servidores) con indicadores visuales de estado operativo en vivo (PING ICMP y SNMP).
-- **Toolbar Limpia con Menú Desplegable:** Reorganización ergonómica que agrupa sincronizaciones en el menú `[🔄 Sincronización ▼]` (NetBox, Zabbix BSM, i-WISP) liberando espacio visual.
+### 1. 🌳 Jerarquía Avanzada y Multi-Acceso a Mapas (`map_hierarchy`)
+- **Arquitectura N-a-N de Mapas:** Un mismo mapa o diagrama de infraestructura puede pertenecer y ser accesible desde múltiples mapas padre simultáneamente, permitiendo navegación matricial (ej. acceso por Región y por Anillo de Fibra).
+- **Alias Contextuales:** Posibilidad de nombrar un acceso secundario con un alias específico para su contexto (`alias` en la jerarquía) sin alterar el nombre oficial del mapa.
+- **Fusión Inteligente de Duplicados (`/api/maps/merge-duplicates`):** Motor automatizado que detecta submapas duplicados con el mismo nombre en diferentes ramas, consolida sus nodos y enlaces en un único mapa canónico y convierte las copias redundantes en accesos múltiples (`map_hierarchy`). Incluye modo simulación (*dry-run*).
+- **Reordenamiento Drag & Drop Persistente:** Reorganización manual e intuitiva de mapas y submapas directamente desde el panel lateral, guardando el orden numérico (`position`) en la base de datos en tiempo real.
+- **Navegación Dinámica por Breadcrumbs:** Migajas de pan contextuales (`GET /api/maps/{map_id}/breadcrumb`) que reflejan la ruta jerárquica exacta desde el mapa raíz hasta el submapa activo.
+- **Retrofitting de Nodos de Navegación:** Creación y actualización automática de nodos interactivos de tipo `submap` en el lienzo del mapa padre (`/api/maps/{map_id}/ensure-parent-node`) para garantizar acceso visual directo con doble clic.
 
-### 2. ⚡ Centro de Diagnóstico Profundo OLT & Clientes FTTH (NOC Suite)
-- **Acceso Rápido:** Botón destacado `[⚡ Diagnóstico OLT]` en la barra superior o contextual desde cualquier nodo de Brazo FTTH en el lienzo.
-- **Descubrimiento Multi-OLT:** Detecta automáticamente las **24 OLTs** registradas en Zabbix (`/api/zabbix/olt/diagnostic-summary`).
-- **Carrusel Interactivo de Puertos GPON:** Selector horizontal de tarjetas con conteo de ONTs por puerto (`GPON 0/1/0` a `GPON 0/1/15`).
-- **Lectura SNMP Secuencial en Vivo:** Ejecuta walks optimizados (`snmpbulkwalk -Cr10 -t 3 -r 2`, evitando saturación de la controladora Huawei):
-  - Serial de la ONT (`.43.1.3` / `hwGponOntSerialNumber`).
-  - Descripción y Nombre (`.43.1.9` / `hwGponOntDescr`).
-  - Potencia Óptica Rx en dBm (`.51.1.4` / `hwGponOntOpticalInfoRxPower`).
-  - Causa Raíz de Desconexión (`.46.1.15` / `hwGponOntLastDownCause`).
-- **Diagnóstico Inteligente de Fallas:**
-  - ⚡ **Dying-Gasp (Código 1):** Identifica corte de energía eléctrica en el domicilio del cliente (fibra óptica íntegra).
-  - ✂️ **Corte de Fibra / LOSi (Código 2):** Identifica corte físico de cable, fibra doblada o caída de caja NAP.
-  - 🟡 **Atenuación Óptica:** Identifica ONUs con señal crítica ($\le -27.0\text{ dBm}$) y óptima ($> -24.0\text{ dBm}$).
-- **Enriquecimiento con i-WISP:** Muestra N° de Cliente (`#10089`), Nombre Completo y Plan Contratado con Costo (`RESIDENCIAL 50M ($450)`).
-- **7 Tarjetas de KPIs en Vivo:** Total ONTs, En Línea, Óptimas, Atenuadas, Sin Luz (Dying-Gasp), Cortes Fibra (LOSi), Enlace i-WISP.
-- **Buscador Reactivo y Filtros Rápidos:** Filtrado instantáneo por texto, N° de ID, serial o causas con contadores numéricos.
+### 2. 🏢 Integración Integral de Sitios NetBox (DCIM como SSOT)
+- **Subpestaña de Sitios en Inventario:** Visualizador de todos los sitios registrados en NetBox con filtro de búsqueda instantáneo y semáforo de estatus:
+  - 🟢 **Mapeado:** El sitio ya cuenta con un mapa o diagrama vinculado en NexusDude.
+  - ⚪ **Sin diagrama:** Sitios pendientes de graficar.
+- **Creación de Mapas 1-Clic desde Sitios:**
+  - `Crear Mapa desde Sitio`: Asocia automáticamente el `netbox_site_id` y `site_name`.
+  - `Crear Mapas Masivos`: Selección múltiple de sitios de NetBox para generar automáticamente su árbol de diagramas.
+  - `Poblar / Sincronizar desde Sitio`: Importa al lienzo todos los dispositivos físicos del sitio con sus roles (Router, Switch, OLT, AP), modelos, interfaces y direcciones IP primarias con posicionamiento geométrico inteligente.
+- **Sincronización Bidireccional de Cables (`dcim_cable`):**
+  - Mapeo automático de conexiones físicas existentes en NetBox hacia enlaces visuales en el lienzo.
+  - Flexibilidad operativa: Permite documentar enlaces visuales entre dispositivos sin exigir la selección rígida de interfaces de inmediato, facilitando el diseño rápido y actualización asíncrona.
+- **Sincronización Global de Nodos NetBox:** Endpoint `/api/maps/sync-all-netbox-nodes` para refrescar metadatos, IPs y estados de todos los dispositivos del lienzo contra NetBox.
 
-### 3. 🔑 Seguridad y Gestión Multi-Comunidad SNMP para OLTs
-- **Problemática Resuelta:** En entornos reales de ISP, las OLTs no comparten una sola comunidad SNMP por políticas de seguridad de cada celda.
-- **Tabla de Credenciales Dedicada (`olt_snmp_credentials`):** Guarda la comunidad real verificada por IP de OLT independiente de Zabbix.
-- **Smart Fallback Automático:** Si una comunidad no responde, prueba en cascada el diccionario de candidatos (`Muci!6508_rd`, `Mucivaga6508_rd`, `admin6508`, `public`) y auto-aprende la que responda.
-- **Edición en Caliente en UI:** Campo editable `[ 🔑 SNMP: | ... | ] [ Aplicar ]` en el modal de diagnóstico para probar y guardar nuevas comunidades en tiempo real.
+### 3. 🔐 Estandarización de Zabbix 7.0 a API Tokens & SSO Delegado
+- **Autenticación Zabbix por API Token:** Estandarización completa de la conexión con Zabbix 7.0 mediante `ZABBIX_TOKEN`, eliminando dependencias obsoletas de usuario y contraseña (`ZABBIX_USER`/`ZABBIX_PASS`) y elevando la seguridad perimetral.
+- **SSO Delegado con Nexus Orchestrator:** Autenticación compartida transparente mediante tokens JWT firmados (`NEXUS_JWT_SECRET`), validando permisos centralizados contra `https://10.9.1.6:5001`.
 
-### 4. 🛰️ Integración con i-WISP Manager API
-- **Almacenamiento Seguro (`system_config`):** Persistencia de `iwisp_api_key` y `iwisp_api_url` en base de datos local sin reiniciar contenedores.
-- **Modal de Configuración (`#modal-settings`):** Entrada de API Key con visualizador de contraseña, prueba de conexión en vivo (`/getLocalities`) y contador de registros sincronizados.
-- **Caché Local de Alta Velocidad (`iwisp_clients_cache`):** Indexación optimizada sobre `onu_serial`, `client_id` y `client_name` con búsquedas sub-milisegundo (<0.5ms).
-- **Normalizador de Seriales:** Convierte automáticamente entre formatos Hex-STRING (`48 57 54 43...`) y ASCII (`HWTC...`).
+### 4. ⚡ Centro de Diagnóstico Profundo OLT & Clientes FTTH (NOC Suite)
+- **Descubrimiento de OLTs:** Detección y auditoría de **24 OLTs** registradas en Zabbix (`/api/zabbix/olt/diagnostic-summary`).
+- **Carrusel Interactivo de Puertos GPON:** Selector de tarjetas con conteo de ONTs por puerto (`GPON 0/1/0` a `GPON 0/1/15`).
+- **Lectura SNMP Secuencial en Vivo:** Consultas `snmpbulkwalk` optimizadas sin saturación de CPU de controladoras:
+  - Serial ONT (`hwGponOntSerialNumber`).
+  - Potencia Óptica Rx en dBm (`hwGponOntOpticalInfoRxPower`).
+  - Causa Raíz de Desconexión (`hwGponOntLastDownCause`).
+- **Detección de Causa Raíz:**
+  - ⚡ **Dying-Gasp (Código 1):** Corte de energía en domicilio (fibra íntegra).
+  - ✂️ **Corte de Fibra / LOSi (Código 2):** Rotura de cable o caída de caja NAP.
+  - 🟡 **Atenuación Óptica Crítica:** Detección de ONUs degradadas ($\le -27.0\text{ dBm}$).
+- **Enriquecimiento i-WISP en Tiempo Real:** Cruce instantáneo de serial con N° de Cliente, Nombre y Plan Contratado (`RESIDENCIAL 50M`).
+- **Gestión Multi-Comunidad SNMP:** Almacenamiento seguro en `olt_snmp_credentials`, cascada de auto-aprendizaje y edición en caliente `[ 🔑 SNMP ]` desde la interfaz.
 
-### 5. 🌐 Brazos FTTH en el Lienzo (`ftth_branch`)
-- **Objeto Especializado de Ramal GPON:** Representa puertos GPON vinculados a OLTs en el mapa.
-- **Semáforo Inteligente:** Verde (Óptimo), Amarillo (Alerta Óptica), Rojo (Puerto Caído).
-- **Telemetría en Vivo:** Tráfico instantáneo (`Mbps In / Out`), volumen mensual (`GB / TB`), conteo de ONUs típicas y atípicas.
-- **Enlace Contextual:** Botón directo `[⚡ Abrir Diagnóstico OLT]` desde las propiedades del nodo para abrir la OLT y puerto correspondiente.
+### 5. 📖 Centro de Documentación & Manual Operativo Integrado (F1)
+- **Visor Técnico In-App:** Acceso instantáneo con la tecla `F1` o mediante el botón `? Manual & Docs` en la barra superior.
+- **Contenido Modular Interactivo (`docs.js` & `docs.css`):**
+  - Conexión e integración con NetBox, Zabbix e i-WISP.
+  - Jerarquía, submapas y fusión de accesos múltiples.
+  - Convención de cableado y documentación física vs lógica.
+  - Diagnóstico GPON y análisis de causas raíz en NOC.
+  - Preguntas frecuentes y atajos de teclado.
 
-### 6. 🔌 Cableado Físico Bidireccional con NetBox (`dcim_cable`)
-- **Matriz de Puertos Reales:** Renderizado de puertos por modelo de equipo (`GE1-GE24`, `SFP25-SFP28`, `eth0`).
-- **Aprovisionamiento Automático:** Creación automática de interfaces en NetBox si no están declaradas.
-- **Sincronización de Cables:** Alta y baja de cables físicos en NetBox al conectar o eliminar aristas en el lienzo.
-
-### 7. 📊 Analizador de Espectro RF (4850 - 7250 MHz)
-- **Regla Gráfica de Frecuencias:** Visualización interactiva con anchos de canal (20, 40, 80, 160 MHz) para bandas 5 GHz, UNII-4 y Wi-Fi 6E (6 GHz).
-- **Métricas Inalámbricas:** Integración de RSSI (dBm), SNR (dB) y modulación MCS en radioenlaces Cambium ePMP.
+### 6. 🎨 Lienzo Konva.js de Alto Desempeño
+- **Optimización de Renderizado Reactivo:** Indexación en memoria de enlaces (`_getOrBuildNodeMap`, `registerAttachedLink`) que elimina el lag al arrastrar nodos conectados a múltiples aristas.
+- **Soporte para Nodos Especiales:** Dispositivos de red, submapas, notas adhesivas, nubes WAN y brazos FTTH (`ftth_branch`) con semáforo óptico en vivo.
 
 ---
 
@@ -70,57 +73,70 @@ Plataforma de mapeo, análisis y monitoreo visual de topologías de red en tiemp
 
 ```mermaid
 graph TD
-    subgraph UI ["Frontend (NexusDude UI v1.0)"]
-        Canvas["Lienzo Konva.js (Topología, Nodos, Submapas, Brazos FTTH)"]
-        DiagModal["NOC Suite: Diagnóstico OLT & ONTs en Pantalla Completa"]
-        SettingsModal["Panel de Configuración e Integración i-WISP"]
-        SpectrumTool["Analizador Espectral RF (4.8 - 7.2 GHz)"]
+    subgraph UI ["Frontend NexusDude 2.0 (HTML5 / Konva.js / ES6)"]
+        Canvas["Lienzo Konva.js (Topología, Snap-Grid, Nodos, Cables)"]
+        SidebarMaps["Gestor Jerárquico de Mapas (Drag & Drop, Fusión N:M)"]
+        SidebarSites["Inventario de Sitios NetBox (Mapeado / Sin Diagrama)"]
+        DiagModal["NOC Suite: Diagnóstico OLT & ONTs (Huawei / V-SOL)"]
+        DocsModal["Manual Técnico & Guía Operativa Integrada (F1)"]
+        ToolbarSync["Menú Sincronización (NetBox, Zabbix BSM, i-WISP)"]
     end
 
-    subgraph Backend ["Backend API (FastAPI :8085)"]
-        MapsAPI["/api/maps (CRUD Nodos, Enlaces, Submapas)"]
-        ZabbixAPI["/api/zabbix (Telemetría, GPON, Diagnóstico OLT)"]
-        ConfigAPI["/api/config (i-WISP API Key, Comunidades SNMP)"]
-        InventoryAPI["/api/inventory (NetBox Cables & Interfaces)"]
+    subgraph Backend ["Backend API (FastAPI / Uvicorn :8085 / :8000)"]
+        MapsAPI["/api/maps (CRUD, Jerarquía N:M, Sitios, Breadcrumbs, Fusión)"]
+        ZabbixAPI["/api/zabbix (Telemetría, OLT SNMP Bulkwalk, BSM)"]
+        InventoryAPI["/api/inventory (NetBox Sitios, Dispositivos, Interfaces, Cables)"]
+        ConfigAPI["/api/config (i-WISP API Key, SNMP Communities)"]
+        AuthMiddleware["Auth Middleware (SSO Delegado JWT Nexus)"]
         
-        ZabbixSvc["zabbix_service.py (SNMP Bulkwalk, DDM, BSM)"]
+        ZabbixSvc["zabbix_service.py (Zabbix Token, SNMP Walks)"]
+        NetBoxSvc["inventory_service.py (NetBox DCIM REST)"]
         IWispSvc["iwisp_service.py (Caché Clientes, Serial Matcher)"]
-        NetBoxSvc["inventory_service.py (DCIM Sync)"]
     end
 
-    subgraph Database ["Persistencia Local (SQLite WAL)"]
+    subgraph Database ["Persistencia Local (SQLite WAL Mode)"]
         DB[("nexusdude.db")]
-        T_Maps[("maps & nodes & links")]
+        T_Maps[("maps (id, site_id, position)")]
+        T_Hier[("map_hierarchy (parent, child, alias, pos, is_primary)")]
+        T_Nodes[("nodes (x, y, ip, role, netbox_id)")]
+        T_Links[("links (source, target, cable_id)")]
+        T_SNMP[("olt_snmp_credentials (ip, community)")]
+        T_IWisp[("iwisp_clients_cache (serial, client_id)")]
         T_Config[("system_config")]
-        T_Cache[("iwisp_clients_cache")]
-        T_SNMP[("olt_snmp_credentials")]
     end
 
-    subgraph Ecosystem ["Ecosistema de Red"]
-        NetBox["NetBox DCIM v4.7 (:8443)"]
-        Zabbix["Zabbix Server 7.0 (:8082)"]
-        IWispCloud["i-WISP Manager Cloud API"]
-        HuaweiOLTs["OLTs Huawei EA5800 / SmartAX (SNMP v2c)"]
-        VsolOLTs["OLTs V-SOL GPON (SNMP v2c)"]
+    subgraph Ecosystem ["Ecosistema de Red Externo"]
+        NexusOrch["Nexus Orchestrator (:5001 - SSO Central)"]
+        NetBox["NetBox DCIM v4.7 (:8443 - SSOT)"]
+        Zabbix["Zabbix Server 7.0 (:8082 - API Token)"]
+        IWispCloud["i-WISP Cloud Manager API"]
+        OLTs["OLTs Huawei SmartAX / EA5800 & V-SOL (SNMP v2c)"]
     end
 
     Canvas <--> MapsAPI
+    SidebarMaps <--> MapsAPI
+    SidebarSites <--> MapsAPI
+    SidebarSites <--> InventoryAPI
     DiagModal <--> ZabbixAPI
-    SettingsModal <--> ConfigAPI
-    Canvas <--> InventoryAPI
+    ToolbarSync <--> ConfigAPI
 
     MapsAPI <--> T_Maps
+    MapsAPI <--> T_Hier
+    MapsAPI <--> T_Nodes
+    MapsAPI <--> T_Links
+    ZabbixAPI <--> T_SNMP
     ConfigAPI <--> T_Config
-    IWispSvc <--> T_Cache
-    ZabbixSvc <--> T_SNMP
+    ConfigAPI <--> T_IWisp
 
+    MapsAPI --> NetBoxSvc
+    InventoryAPI --> NetBoxSvc
     ZabbixAPI --> ZabbixSvc
     ConfigAPI --> IWispSvc
-    InventoryAPI --> NetBoxSvc
 
+    AuthMiddleware -.-> NexusOrch
     NetBoxSvc <--> NetBox
     ZabbixSvc <--> Zabbix
-    ZabbixSvc <--> HuaweiOLTs & VsolOLTs
+    ZabbixSvc <--> OLTs
     IWispSvc <--> IWispCloud
 ```
 
@@ -130,76 +146,136 @@ graph TD
 
 | Tabla | Propósito | Índices / Claves |
 |---|---|---|
-| `maps` | Lienzos y mapas raíz / submapas | `PRIMARY KEY (id)` |
-| `nodes` | Dispositivos, APs, switches, notas y brazos FTTH | `PRIMARY KEY (id)`, `FK (map_id)` |
-| `links` | Aristas y conexiones lógicas/físicas | `PRIMARY KEY (id)`, `FK (map_id)` |
-| `roles` / `user_roles` | RBAC granular (Admin, ServerAdmin, Operator, Viewer) | `PRIMARY KEY (id / username)` |
-| `system_config` | Almacenamiento seguro de llaves de API y configuraciones | `PRIMARY KEY (key)` |
-| `iwisp_clients_cache` | Caché local de clientes, ONTs y planes de i-WISP | `idx_iwisp_onu_serial`, `idx_iwisp_client_id`, `idx_iwisp_client_name` |
-| `olt_snmp_credentials` | Comunidades SNMP por OLT y estado de verificación | `PRIMARY KEY (olt_ip)` |
+| `maps` | Lienzos y mapas raíz / submapas con metadatos de sitio NetBox | `PRIMARY KEY (id)`, `idx_maps_position`, `idx_maps_netbox_site`, `idx_maps_site_name` |
+| `map_hierarchy` | Relaciones jerárquicas N-a-N, accesos múltiples, alias y orden | `PRIMARY KEY (id)`, `FK (child_map_id)`, `FK (parent_map_id)`, `idx_hierarchy_pos` |
+| `nodes` | Elementos del lienzo (Dispositivos, Submapas, APs, Notas, Brazos FTTH) | `PRIMARY KEY (id)`, `FK (map_id)` |
+| `links` | Aristas lógicas y físicas con vinculación a cables NetBox | `PRIMARY KEY (id)`, `FK (map_id)` |
+| `system_config` | Llaves de API (i-WISP, URLs, configuraciones dinámicas) | `PRIMARY KEY (key)` |
+| `iwisp_clients_cache` | Caché local indexada de clientes, ONTs y planes | `idx_iwisp_onu_serial`, `idx_iwisp_client_id`, `idx_iwisp_client_name` |
+| `olt_snmp_credentials` | Credenciales y comunidades SNMP por IP de OLT | `PRIMARY KEY (olt_ip)` |
+| `roles` / `user_roles` | Perfiles de acceso granular (Admin, ServerAdmin, Operator, Viewer) | `PRIMARY KEY (id / username)` |
 
 ---
 
 ## 📡 Referencia de API Endpoints
 
-### Diagnóstico OLT & GPON (`/api/zabbix/olt`)
-* `GET /api/zabbix/olt/diagnostic-summary`: Resumen global de OLTs, estado y credencial SNMP.
-* `GET /api/zabbix/olt/{olt_ip}/gpon-ports`: Lista de puertos GPON de la OLT con métricas.
-* `GET /api/zabbix/olt/{olt_ip}/port/{port_index}/onts-detailed`: Telemetría SNMP en vivo de ONTs con cruce de clientes i-WISP y análisis de fallas (Dying-Gasp / LOSi).
-* `POST /api/zabbix/olt/{olt_ip}/community`: Prueba y guarda la comunidad SNMP de una OLT en caliente.
+### 🗺️ Mapas y Jerarquía (`/api/maps`)
+| Método | Endpoint | Descripción |
+|---|---|---|
+| `GET` | `/api/maps` | Listado de mapas con contador de nodos, enlaces y accesos jerárquicos. |
+| `GET` | `/api/maps/hierarchy` | Estructura jerárquica plana completa con padres, hijos, alias y orden. |
+| `POST` | `/api/maps/hierarchy` | Crea un nuevo acceso jerárquico secundario (nodo de navegación en mapa padre). |
+| `DELETE` | `/api/maps/hierarchy/{id}` | Elimina un acceso jerárquico específico sin borrar el mapa hijo canónico. |
+| `POST` | `/api/maps/merge-duplicates` | Detecta y fusiona submapas duplicados (admite `dry_run: true`). |
+| `POST` | `/api/maps/reorder` | Actualiza en lote el orden de mapas y submapas (`position`). |
+| `GET` | `/api/maps/sites-status` | Reporte del estado de vinculación de sitios NetBox vs diagramas. |
+| `POST` | `/api/maps/from-site` | Crea un nuevo mapa vinculado directamente a un sitio de NetBox. |
+| `POST` | `/api/maps/bulk-from-sites` | Creación masiva de diagramas a partir de sitios seleccionados. |
+| `POST` | `/api/maps/{id}/populate-from-site` | Puebla o refresca nodos y cables desde los dispositivos de NetBox del sitio. |
+| `POST` | `/api/maps/{id}/sync-netbox-cables` | Sincroniza aristas del mapa con los cables físicos declarados en NetBox. |
+| `POST` | `/api/maps/sync-all-netbox-nodes` | Actualiza metadatos de todos los nodos mapeados con NetBox. |
+| `GET` | `/api/maps/{id}/breadcrumb` | Retorna la ruta de navegación jerárquica hasta el mapa. |
+| `POST` | `/api/maps/{id}/ensure-parent-node` | Garantiza que exista un nodo de acceso visual en el mapa padre. |
 
-### Configuración i-WISP (`/api/config/iwisp`)
-* `GET /api/config/iwisp`: Configuración actual con API Key enmascarada y estado.
-* `POST /api/config/iwisp`: Guarda o actualiza la API Key y URL base.
-* `POST /api/config/iwisp/test`: Valida en vivo la conexión con la API de i-WISP.
-* `POST /api/config/iwisp/sync`: Sincroniza el catálogo de clientes y ONTs hacia la base local.
-* `GET /api/config/iwisp/cache-status`: Retorna conteo de clientes, ONTs y última sincronización.
+### ⚡ Diagnóstico OLT & GPON (`/api/zabbix/olt`)
+| Método | Endpoint | Descripción |
+|---|---|---|
+| `GET` | `/api/zabbix/olt/diagnostic-summary` | Resumen global de OLTs descubiertas, estado y credencial SNMP. |
+| `GET` | `/api/zabbix/olt/{olt_ip}/gpon-ports` | Puertos GPON de la OLT con métricas y conteo de ONTs. |
+| `GET` | `/api/zabbix/olt/{olt_ip}/port/{port}/onts-detailed` | Telemetría SNMP en vivo de ONTs con cruce i-WISP y análisis de causa raíz. |
+| `POST` | `/api/zabbix/olt/{olt_ip}/community` | Prueba y guarda la comunidad SNMP de una OLT en caliente. |
 
-### Mapas, Nodos y Enlaces (`/api/maps`)
-* `GET /api/maps`: Lista de mapas jerárquicos.
-* `POST /api/maps`: Crear nuevo mapa o submapa.
-* `GET /api/maps/{map_id}`: Carga completa de nodos, aristas y geometría.
-* `POST /api/maps/nodes`: Crear dispositivo, nota adhesiva o brazo FTTH.
-* `PUT /api/maps/nodes/{node_id}`: Actualizar posición, propiedades o telemetría.
-* `POST /api/maps/links`: Conectar dos nodos con cableado físico NetBox.
+### 🛰️ Configuración i-WISP (`/api/config/iwisp`)
+| Método | Endpoint | Descripción |
+|---|---|---|
+| `GET` | `/api/config/iwisp` | Configuración actual con API Key enmascarada y estatus. |
+| `POST` | `/api/config/iwisp` | Guarda o actualiza la API Key y URL base de i-WISP. |
+| `POST` | `/api/config/iwisp/test` | Valida en vivo la comunicación con la API de i-WISP. |
+| `POST` | `/api/config/iwisp/sync` | Sincroniza el catálogo de clientes y ONTs hacia la base local SQLite. |
+| `GET` | `/api/config/iwisp/cache-status` | Métricas de clientes sincronizados y fecha de última actualización. |
+
+---
+
+## ⚙️ Variables de Entorno (`.env`)
+
+```ini
+# Entorno y Servidor
+ENVIRONMENT=production
+PORT=8000
+CORS_ORIGINS=*
+
+# Base de datos SQLite local
+DATABASE_PATH=/app/data/nexusdude.db
+
+# Autenticación compartida con Nexus Orchestrator (SSO Delegado)
+NEXUS_JWT_SECRET=nexus_orchestrator_secure_jwt_secret_key_2026_prod
+NEXUS_ORCHESTRATOR_URL=https://10.9.1.6:5001
+
+# NetBox Integration (DCIM / SSOT)
+NETBOX_URL=http://netbox:8080
+NETBOX_EXTERNAL_URL=https://10.9.1.6:8443
+NETBOX_TOKEN=your_netbox_api_token_here
+
+# Zabbix Integration (API Token Estandarizado)
+ZABBIX_URL=https://10.9.1.7:8082
+ZABBIX_TOKEN=your_zabbix_api_token_here
+```
 
 ---
 
 ## 🛠️ Comandos de Operación
 
-### Iniciar el Servicio
+### Iniciar o Actualizar el Servicio en Docker
 ```bash
 docker compose up -d
 ```
 
-### Reconstruir Contenedor con Nuevas Dependencias
+### Reconstruir Contenedor con Nuevos Cambios
 ```bash
 docker compose up -d --build
 ```
 
-### Consultar Logs en Vivo
+### Consultar Logs en Tiempo Real
 ```bash
 docker compose logs -f nexusdude-web
 ```
 
-### Verificación de Salud
+### Verificación de Salud de la API
 ```bash
 curl http://localhost:8085/api/health
 ```
 
+### Respaldar Base de Datos a Script SQL
+```bash
+python3 -c "
+import sqlite3
+con = sqlite3.connect('data/nexusdude.db')
+with open('data/nexusdude_dump.sql', 'w', encoding='utf-8') as f:
+    for line in con.iterdump():
+        f.write(f'{line}\n')
+print('Respaldo SQL completado con éxito.')
+"
+```
+
 ---
 
-## 📋 Historial de Versiones (Changelog)
+## 📋 Historial de Versiones
 
-### Version 1.0.0 (Release NEXUSDUDE.1.0) — 2026-09-24
-- **Centro de Diagnóstico Profundo OLT:** Suite NOC completa de pantalla completa con selector de 24 OLTs, carrusel de puertos GPON y tabla de telemetría SNMP en tiempo real.
-- **Detección de Causa Raíz FTTH:** Identificación automática de fallas por corte eléctrico domiciliario (⚡ *Dying-Gasp*) vs corte físico de fibra óptica (✂️ *LOSi*).
-- **Integración i-WISP Manager:** Base de datos local indexada para cruce automático de Serial de ONT con N° de Cliente, Nombre y Plan contratado.
-- **Sistema Multi-Comunidad SNMP:** Gestión de credenciales por OLT, cascada inteligente de auto-aprendizaje y edición en caliente desde la interfaz.
-- **Limpieza de Toolbar:** Menú desplegable interactivo `[🔄 Sincronización ▼]` para optimización del espacio de trabajo visual.
-- **Batería de Pruebas Automatizadas:** Suite de validación doble ejecutada con 0 errores y 100% de casos de uso verificados.
+### Versión 2.0.0 (Release NEXUSDUDE.2.0) — 2026-10-07
+- **Jerarquía Matricial N-a-N (`map_hierarchy`):** Soporte de accesos múltiples a mapas, alias contextuales y fusión de mapas duplicados (`/api/maps/merge-duplicates`).
+- **Integración Nativa de Sitios NetBox:** Pestaña de Sitios con estatus de mapeo, creación 1-clic y masiva de diagramas, y población automática de equipos y cables NetBox.
+- **Estandarización de Seguridad Zabbix:** Autenticación migrada a Zabbix API Token (`ZABBIX_TOKEN`) y validación de sesiones mediante SSO Delegado de Nexus Orchestrator.
+- **Centro de Documentación Interactivo Integrado:** Módulo in-app (`docs.js` & `docs.css`) accesible con la tecla `F1` para soporte operativo del NOC.
+- **Optimización del Lienzo Konva.js:** Manejador reactivo de enlaces y nodos con supresión de latencia en topologías de gran densidad.
+- **Reordenamiento Drag & Drop:** Arrastre persistente de mapas y submapas en el árbol lateral.
+
+### Versión 1.0.0 (Release NEXUSDUDE.1.0) — 2026-09-24
+- **Centro de Diagnóstico Profundo OLT:** Suite NOC para 24 OLTs Huawei EA5800 y V-SOL con carrusel GPON.
+- **Detección de Causa Raíz FTTH:** Identificación automática de *Dying-Gasp* vs *LOSi*.
+- **Integración i-WISP Manager:** Cruce automático de seriales de ONT con datos del cliente y plan comercial.
+- **Gestión Multi-Comunidad SNMP:** Almacenamiento seguro por OLT y edición en caliente en UI.
 
 ---
 
-**Desarrollado para:** Operaciones de Red, NOC e Ingeniería de Planta Externa.  
+**Desarrollado para:** Operaciones de Red, NOC e Ingeniería de Infraestructura.  
 **Servidor Host:** `10.9.1.6:8085` | **Nexus Orchestrator:** `https://10.9.1.6:5001`

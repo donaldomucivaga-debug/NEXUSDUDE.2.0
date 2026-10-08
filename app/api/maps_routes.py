@@ -10,7 +10,8 @@ from app.models import (
     LinkOut, LinkCreate, LinkUpdate,
     CreateMapFromSiteRequest, PopulateMapFromSiteRequest,
     BulkCreateMapsFromSitesRequest, BulkDeleteNodesRequest,
-    MapReorderRequest, MapOrderItem
+    MapReorderRequest, MapOrderItem,
+    HierarchyItem, HierarchyCreate, HierarchyUpdate, MergeDuplicatesRequest
 )
 from app.services.inventory_service import inventory_service
 from app.services.zabbix_service import zabbix_service
@@ -18,15 +19,25 @@ from app.services.zabbix_service import zabbix_service
 router = APIRouter(prefix="/maps", tags=["Maps & Topology"])
 
 @router.get("", response_model=List[MapOut])
-async def list_maps(user: Dict[str, Any] = Depends(get_current_user)):
-    """Lista todos los mapas disponibles ordenados por su posición asignada."""
+async def list_maps(
+    sort: str = "custom",
+    user: Dict[str, Any] = Depends(get_current_user)
+):
+    """Lista todos los mapas disponibles ordenados por su posición asignada o alfabéticamente (asc/desc)."""
+    order_clause = "COALESCE(m.position, 0) ASC, m.created_at ASC"
+    if sort == "asc":
+        order_clause = "m.name COLLATE NOCASE ASC"
+    elif sort == "desc":
+        order_clause = "m.name COLLATE NOCASE DESC"
+
     async with get_db_connection() as db:
-        cursor = await db.execute("""
+        cursor = await db.execute(f"""
             SELECT m.*,
                    (SELECT COUNT(*) FROM nodes n WHERE n.map_id = m.id) as nodes_count,
-                   (SELECT COUNT(*) FROM links l WHERE l.map_id = m.id) as links_count
+                   (SELECT COUNT(*) FROM links l WHERE l.map_id = m.id) as links_count,
+                   (SELECT COUNT(*) FROM map_hierarchy h WHERE h.child_map_id = m.id) as access_count
             FROM maps m
-            ORDER BY COALESCE(m.position, 0) ASC, m.created_at ASC
+            ORDER BY {order_clause}
         """)
         rows = await cursor.fetchall()
         return [
@@ -37,13 +48,271 @@ async def list_maps(user: Dict[str, Any] = Depends(get_current_user)):
                 parent_map_id=r["parent_map_id"],
                 grid_size=r["grid_size"],
                 position=r["position"] if "position" in r.keys() and r["position"] is not None else 0,
+                netbox_site_id=r["netbox_site_id"] if "netbox_site_id" in r.keys() else None,
+                site_name=r["site_name"] if "site_name" in r.keys() else None,
                 created_at=str(r["created_at"]),
                 updated_at=str(r["updated_at"]),
                 nodes_count=r["nodes_count"],
-                links_count=r["links_count"]
+                links_count=r["links_count"],
+                access_count=max(1, r["access_count"]) if "access_count" in r.keys() and r["access_count"] is not None else 1
             )
             for r in rows
         ]
+
+@router.get("/hierarchy", response_model=List[HierarchyItem])
+async def get_map_hierarchy(user: Dict[str, Any] = Depends(get_current_user)):
+    """Retorna todos los accesos en el árbol de jerarquía (N-a-N)."""
+    async with get_db_connection() as db:
+        cursor = await db.execute("""
+            SELECT h.id, h.parent_map_id, h.child_map_id, h.alias, h.position, h.is_primary,
+                   m.name as map_name, m.site_name, m.netbox_site_id,
+                   (SELECT COUNT(*) FROM nodes n WHERE n.map_id = m.id) as nodes_count,
+                   (SELECT COUNT(*) FROM links l WHERE l.map_id = m.id) as links_count,
+                   (SELECT COUNT(*) FROM map_hierarchy h2 WHERE h2.child_map_id = m.id) as access_count
+            FROM map_hierarchy h
+            JOIN maps m ON m.id = h.child_map_id
+            ORDER BY COALESCE(h.position, 0) ASC, h.created_at ASC
+        """)
+        rows = await cursor.fetchall()
+        return [
+            HierarchyItem(
+                id=r["id"],
+                parent_map_id=r["parent_map_id"],
+                child_map_id=r["child_map_id"],
+                map_name=r["map_name"],
+                alias=r["alias"],
+                effective_name=r["alias"] if r["alias"] and r["alias"].strip() else r["map_name"],
+                position=r["position"] if r["position"] is not None else 0,
+                is_primary=bool(r["is_primary"]),
+                site_name=r["site_name"],
+                netbox_site_id=r["netbox_site_id"],
+                nodes_count=r["nodes_count"] or 0,
+                links_count=r["links_count"] or 0,
+                access_count=r["access_count"] or 1
+            )
+            for r in rows
+        ]
+
+@router.post("/hierarchy")
+async def create_hierarchy_access(
+    payload: HierarchyCreate,
+    user: Dict[str, Any] = Depends(get_current_user)
+):
+    """Crea un nuevo acceso (enlace/atajo) de un mapa dentro de una carpeta padre."""
+    p_id = payload.parent_map_id if payload.parent_map_id and payload.parent_map_id != 'root' else None
+    c_id = payload.child_map_id
+
+    # Validar anti-ciclo: un mapa no puede ser hijo de sí mismo
+    if p_id == c_id:
+        raise HTTPException(status_code=400, detail="Un mapa no puede ser agregado dentro de sí mismo.")
+
+    async with get_db_connection() as db:
+        # Verificar existencia
+        c_child = await db.execute("SELECT id, name, site_name FROM maps WHERE id = ?", (c_id,))
+        child_row = await c_child.fetchone()
+        if not child_row:
+            raise HTTPException(status_code=404, detail="El mapa a vincular no existe.")
+
+        # Verificar si ya existe este acceso exacto en el mismo padre
+        c_exist = await db.execute("""
+            SELECT id FROM map_hierarchy WHERE child_map_id = ? AND (parent_map_id = ? OR (parent_map_id IS NULL AND ? IS NULL))
+        """, (c_id, p_id, p_id))
+        if await c_exist.fetchone():
+            raise HTTPException(status_code=400, detail="Este mapa ya tiene un acceso en esta misma carpeta.")
+
+        # Obtener máxima posición en el padre
+        c_pos = await db.execute("""
+            SELECT COALESCE(MAX(position), -1) + 1 as next_pos FROM map_hierarchy
+            WHERE (parent_map_id = ? OR (parent_map_id IS NULL AND ? IS NULL))
+        """, (p_id, p_id))
+        r_pos = await c_pos.fetchone()
+        next_pos = payload.position if payload.position is not None else (r_pos["next_pos"] if r_pos else 0)
+
+        new_h_id = f"hier-{uuid.uuid4().hex[:8]}"
+        await db.execute("""
+            INSERT INTO map_hierarchy (id, parent_map_id, child_map_id, alias, position, is_primary)
+            VALUES (?, ?, ?, ?, ?, 0)
+        """, (new_h_id, p_id, c_id, payload.alias, next_pos))
+
+        # Si hay padre y se solicitó insertar submap node en su lienzo
+        if p_id and payload.insert_submap_node:
+            subnode_id = f"node-{uuid.uuid4().hex[:8]}"
+            extra = json.dumps({
+                "target_map_id": c_id,
+                "role": "Submapa",
+                "site_name": child_row["site_name"] or child_row["name"]
+            })
+            display_name = payload.alias or child_row["name"]
+            await db.execute("""
+                INSERT INTO nodes (id, map_id, name, ip, device_type, site_name, x, y, status, extra_data)
+                VALUES (?, ?, ?, '', 'submap', ?, 120.0, 120.0, 'ok', ?)
+            """, (subnode_id, p_id, f"📁 {display_name}", child_row["name"], extra))
+
+        await db.commit()
+        await ensure_map_navigation_nodes(db, c_id)
+        if p_id:
+            await ensure_map_navigation_nodes(db, p_id)
+
+    return {"success": True, "id": new_h_id, "message": "Acceso creado correctamente en la jerarquía."}
+
+@router.delete("/hierarchy/{hierarchy_id}")
+async def remove_hierarchy_access(
+    hierarchy_id: str,
+    user: Dict[str, Any] = Depends(get_current_user)
+):
+    """Elimina un acceso específico del árbol sin eliminar el mapa físico fuente."""
+    async with get_db_connection() as db:
+        c_h = await db.execute("SELECT * FROM map_hierarchy WHERE id = ?", (hierarchy_id,))
+        h_row = await c_h.fetchone()
+        if not h_row:
+            raise HTTPException(status_code=404, detail="Acceso de jerarquía no encontrado.")
+
+        c_id = h_row["child_map_id"]
+        p_id = h_row["parent_map_id"]
+
+        # Contar cuántos accesos le quedan a este mapa
+        c_cnt = await db.execute("SELECT COUNT(*) as count FROM map_hierarchy WHERE child_map_id = ?", (c_id,))
+        cnt_row = await c_cnt.fetchone()
+        remaining = (cnt_row["count"] or 0) - 1
+
+        await db.execute("DELETE FROM map_hierarchy WHERE id = ?", (hierarchy_id,))
+
+        # Si era el último acceso, conservar el mapa fuente moviéndolo a nivel raíz
+        if remaining <= 0:
+            new_root_h_id = f"hier-{uuid.uuid4().hex[:8]}"
+            await db.execute("""
+                INSERT INTO map_hierarchy (id, parent_map_id, child_map_id, position, is_primary)
+                VALUES (?, NULL, ?, 0, 1)
+            """, (new_root_h_id, c_id))
+            await db.execute("UPDATE maps SET parent_map_id = NULL WHERE id = ?", (c_id,))
+        elif h_row["is_primary"]:
+            # Si era el primario, designar el siguiente como primario
+            await db.execute("""
+                UPDATE map_hierarchy SET is_primary = 1
+                WHERE id = (SELECT id FROM map_hierarchy WHERE child_map_id = ? LIMIT 1)
+            """, (c_id,))
+
+        await db.commit()
+        if p_id:
+            await ensure_map_navigation_nodes(db, p_id)
+        await ensure_map_navigation_nodes(db, c_id)
+
+    return {"success": True, "message": "Acceso retirado de la jerarquía."}
+
+@router.post("/merge-duplicates")
+async def merge_duplicate_netbox_maps(
+    payload: MergeDuplicatesRequest,
+    user: Dict[str, Any] = Depends(get_current_user)
+):
+    """
+    Detecta y fusiona mapas duplicados de NetBox:
+    - Conserva como mapa maestro la copia con más enlaces y submapas.
+    - Traspasa equipos y aristas faltantes al maestro.
+    - Convierte la ubicación de la copia descartada en un acceso adicional en map_hierarchy.
+    - Redirige todos los accesos directos de submapa hacia el maestro.
+    """
+    dry_run = payload.dry_run
+    async with get_db_connection() as db:
+        # Buscar sitios duplicados
+        c_dups = await db.execute("""
+            SELECT LOWER(site_name) as lower_site, COUNT(*) as c
+            FROM maps WHERE site_name IS NOT NULL AND site_name != ''
+            GROUP BY LOWER(site_name) HAVING c > 1
+        """)
+        dup_sites = [r["lower_site"] for r in await c_dups.fetchall()]
+
+        merge_report = []
+
+        for site in dup_sites:
+            c_maps = await db.execute("""
+                SELECT m.id, m.name, m.site_name, m.netbox_site_id, m.parent_map_id, m.created_at,
+                       (SELECT COUNT(*) FROM nodes n WHERE n.map_id = m.id AND n.device_type NOT IN ('submap', 'parent_map')) as dev_nodes,
+                       (SELECT COUNT(*) FROM links l WHERE l.map_id = m.id) as link_count
+                FROM maps m WHERE LOWER(m.site_name) = ?
+                ORDER BY link_count DESC, dev_nodes DESC, m.created_at ASC
+            """, (site,))
+            candidates = [dict(r) for r in await c_maps.fetchall()]
+            if len(candidates) < 2:
+                continue
+
+            master = candidates[0]
+            to_merge = candidates[1:]
+
+            site_detail = {
+                "site_name": master["site_name"],
+                "master_id": master["id"],
+                "master_name": master["name"],
+                "merged_maps": []
+            }
+
+            for disc in to_merge:
+                disc_id = disc["id"]
+                site_detail["merged_maps"].append({
+                    "discarded_id": disc_id,
+                    "discarded_name": disc["name"],
+                    "parent_map_id": disc["parent_map_id"]
+                })
+
+                if not dry_run:
+                    # 1. Traspasar equipos de disc que no existan en master (por device_id o IP)
+                    c_m_nodes = await db.execute("SELECT device_id, ip FROM nodes WHERE map_id = ?", (master["id"],))
+                    m_dev_ids = {r["device_id"] for r in await c_m_nodes.fetchall() if r["device_id"]}
+                    m_ips = {r["ip"] for r in await c_m_nodes.fetchall() if r["ip"]}
+
+                    c_d_nodes = await db.execute("""
+                        SELECT * FROM nodes WHERE map_id = ? AND device_type NOT IN ('submap', 'parent_map')
+                    """, (disc_id,))
+                    for dn in await c_d_nodes.fetchall():
+                        if (dn["device_id"] and dn["device_id"] in m_dev_ids) or (dn["ip"] and dn["ip"] in m_ips):
+                            continue
+                        new_nid = f"node-{uuid.uuid4().hex[:8]}"
+                        await db.execute("""
+                            INSERT INTO nodes (id, map_id, device_id, name, ip, device_type, site_name, x, y, status, extra_data)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (new_nid, master["id"], dn["device_id"], dn["name"], dn["ip"], dn["device_type"], dn["site_name"], dn["x"], dn["y"], dn["status"], dn["extra_data"]))
+
+                    # 2. Convertir la ubicación del mapa descartado en un acceso a master en map_hierarchy
+                    if disc["parent_map_id"] and disc["parent_map_id"] != master["parent_map_id"]:
+                        c_chk = await db.execute("""
+                            SELECT id FROM map_hierarchy WHERE child_map_id = ? AND parent_map_id = ?
+                        """, (master["id"], disc["parent_map_id"]))
+                        if not await c_chk.fetchone():
+                            h_id = f"hier-{uuid.uuid4().hex[:8]}"
+                            await db.execute("""
+                                INSERT INTO map_hierarchy (id, parent_map_id, child_map_id, position, is_primary)
+                                VALUES (?, ?, ?, 0, 0)
+                            """, (h_id, disc["parent_map_id"], master["id"]))
+
+                    # 3. Redirigir nodos de submapas que apuntaban al mapa descartado hacia el master
+                    c_refs = await db.execute("""
+                        SELECT id, extra_data FROM nodes WHERE device_type = 'submap' AND extra_data LIKE ?
+                    """, (f'%"{disc_id}"%',))
+                    for ref in await c_refs.fetchall():
+                        try:
+                            ex = json.loads(ref["extra_data"])
+                            if ex.get("target_map_id") == disc_id:
+                                ex["target_map_id"] = master["id"]
+                                await db.execute("UPDATE nodes SET extra_data = ? WHERE id = ?", (json.dumps(ex), ref["id"]))
+                        except Exception:
+                            pass
+
+                    # 4. Eliminar el mapa descartado
+                    await db.execute("DELETE FROM map_hierarchy WHERE child_map_id = ?", (disc_id,))
+                    await db.execute("DELETE FROM links WHERE map_id = ?", (disc_id,))
+                    await db.execute("DELETE FROM nodes WHERE map_id = ?", (disc_id,))
+                    await db.execute("DELETE FROM maps WHERE id = ?", (disc_id,))
+
+            merge_report.append(site_detail)
+
+        if not dry_run:
+            await db.commit()
+
+        return {
+            "success": True,
+            "dry_run": dry_run,
+            "merged_count": len(merge_report),
+            "report": merge_report
+        }
 
 @router.post("/reorder")
 async def reorder_maps(
@@ -59,11 +328,20 @@ async def reorder_maps(
                     "UPDATE maps SET position = ?, parent_map_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                     (item.position, p_id, item.id)
                 )
+                # Actualizar también acceso primario en map_hierarchy
+                await db.execute("""
+                    UPDATE map_hierarchy SET position = ?, parent_map_id = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE child_map_id = ? AND is_primary = 1
+                """, (item.position, p_id, item.id))
             else:
                 await db.execute(
                     "UPDATE maps SET position = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                     (item.position, item.id)
                 )
+                await db.execute("""
+                    UPDATE map_hierarchy SET position = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE child_map_id = ? AND is_primary = 1
+                """, (item.position, item.id))
         await db.commit()
     return {"success": True, "message": f"{len(payload.items)} mapas reordenados correctamente."}
 
@@ -79,8 +357,10 @@ async def get_sites_mapping_status(user: Dict[str, Any] = Depends(get_current_us
     sites_summary = await inventory_service.get_sites_summary()
 
     async with get_db_connection() as db:
-        c_maps = await db.execute("SELECT id, name FROM maps")
+        c_maps = await db.execute("SELECT id, name, site_name, netbox_site_id FROM maps")
         existing_maps_rows = await c_maps.fetchall()
+        existing_by_site_id = {r["netbox_site_id"]: r["id"] for r in existing_maps_rows if "netbox_site_id" in r.keys() and r["netbox_site_id"]}
+        existing_by_site_name = {r["site_name"].strip().lower(): r["id"] for r in existing_maps_rows if "site_name" in r.keys() and r["site_name"]}
         existing_map_names = {r["name"].strip().lower(): r["id"] for r in existing_maps_rows}
 
     status_list = []
@@ -88,17 +368,18 @@ async def get_sites_mapping_status(user: Dict[str, Any] = Depends(get_current_us
     unmapped_count = 0
 
     for s in sites_summary:
+        s_id = s.get("id")
         s_name = (s.get("name") or "").strip()
         s_lower = s_name.lower()
-        has_map = s_lower in existing_map_names
-        map_id = existing_map_names.get(s_lower)
+        map_id = existing_by_site_id.get(s_id) or existing_by_site_name.get(s_lower) or existing_map_names.get(s_lower)
+        has_map = bool(map_id)
         if has_map:
             mapped_count += 1
         else:
             unmapped_count += 1
 
         status_list.append({
-            "site_id": s.get("id"),
+            "site_id": s_id,
             "site_name": s_name,
             "device_count": s.get("device_count", 0),
             "has_map": has_map,
@@ -181,7 +462,15 @@ async def ensure_map_navigation_nodes(db, map_id: str):
             await db.execute("DELETE FROM nodes WHERE id = ?", (d["id"],))
 
     # --- 2. Sincronizar Nodos de Submapas Hijos ---
-    c_children = await db.execute("SELECT id, name, description FROM maps WHERE parent_map_id = ?", (map_id,))
+    # Considera tanto mapas con parent_map_id como accesos explícitos en map_hierarchy
+    c_children = await db.execute("""
+        SELECT DISTINCT m.id,
+               COALESCE(h.alias, m.name) as name,
+               m.description
+        FROM maps m
+        LEFT JOIN map_hierarchy h ON h.child_map_id = m.id AND h.parent_map_id = ?
+        WHERE m.parent_map_id = ? OR h.parent_map_id = ?
+    """, (map_id, map_id, map_id))
     child_maps = await c_children.fetchall()
     child_map_dict = {cm["id"]: cm for cm in child_maps}
 
@@ -315,12 +604,16 @@ async def get_map_detail(map_id: str, user: Dict[str, Any] = Depends(get_current
                 updated_at=str(r["updated_at"])
             ))
 
+        keys = m.keys()
         return MapDetailOut(
             id=m["id"],
             name=m["name"],
             description=m["description"],
             parent_map_id=m["parent_map_id"],
             grid_size=m["grid_size"],
+            position=m["position"] if "position" in keys and m["position"] is not None else 0,
+            netbox_site_id=m["netbox_site_id"] if "netbox_site_id" in keys else None,
+            site_name=m["site_name"] if "site_name" in keys else None,
             created_at=str(m["created_at"]),
             updated_at=str(m["updated_at"]),
             nodes_count=len(nodes),
@@ -334,12 +627,72 @@ async def create_map(map_data: MapCreate, user: Dict[str, Any] = Depends(get_cur
     """Crea un nuevo mapa de topología y sincroniza la navegación jerárquica."""
     new_id = map_data.id or f"map-{uuid.uuid4().hex[:8]}"
     parent_id = map_data.parent_map_id.strip() if map_data.parent_map_id and map_data.parent_map_id.strip() else None
+
+    # Relación con Sitio NetBox (Ninguna por defecto)
+    site_name = map_data.site_name.strip() if map_data.site_name and map_data.site_name.strip() else None
+    netbox_site_id = map_data.netbox_site_id
+
+    if site_name and not netbox_site_id:
+        sites = await inventory_service.get_sites()
+        for s in sites:
+            if s["name"].lower() == site_name.lower():
+                netbox_site_id = s["id"]
+                site_name = s["name"]
+                break
+
     async with get_db_connection() as db:
         await db.execute("""
-            INSERT INTO maps (id, name, description, parent_map_id, grid_size)
-            VALUES (?, ?, ?, ?, ?)
-        """, (new_id, map_data.name, map_data.description, parent_id, map_data.grid_size or 20))
+            INSERT INTO maps (id, name, description, parent_map_id, grid_size, netbox_site_id, site_name)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (new_id, map_data.name, map_data.description, parent_id, map_data.grid_size or 20, netbox_site_id, site_name))
+
+        # Registrar acceso primario en map_hierarchy
+        h_id = f"hier-{uuid.uuid4().hex[:8]}"
+        await db.execute("""
+            INSERT INTO map_hierarchy (id, parent_map_id, child_map_id, position, is_primary)
+            VALUES (?, ?, ?, 0, 1)
+        """, (h_id, parent_id, new_id))
         await db.commit()
+
+        # Si se solicitó insertar submap node en el padre
+        if map_data.insert_submap_node and parent_id:
+            subnode_id = f"node-{uuid.uuid4().hex[:8]}"
+            sub_extra = json.dumps({
+                "target_map_id": new_id,
+                "role": "Submapa",
+                "site_name": site_name or map_data.name
+            })
+            await db.execute("""
+                INSERT INTO nodes (id, map_id, name, ip, device_type, site_name, x, y, status, extra_data)
+                VALUES (?, ?, ?, '', 'submap', ?, 100.0, 100.0, 'ok', ?)
+            """, (subnode_id, parent_id, f"📁 {map_data.name}", map_data.description or map_data.name, sub_extra))
+            await db.commit()
+
+        # Si se solicitó auto_populate y se especificó un sitio
+        if map_data.auto_populate and site_name:
+            devices = await inventory_service.get_devices_by_site(site_name)
+            if devices:
+                devices_start_y = 170.0 if parent_id else 80.0
+                arranged = arrange_site_nodes(devices, start_x=80.0, start_y=devices_start_y)
+                for item in arranged:
+                    d = item["device"]
+                    nid = f"node-{uuid.uuid4().hex[:8]}"
+                    d_extra = json.dumps({
+                        "manufacturer": d.get("manufacturer") or "Genérico",
+                        "model": d.get("model") or "",
+                        "serial": d.get("serial") or "",
+                        "role": d.get("role") or d.get("device_type") or "Dispositivo",
+                        "role_color": d.get("role_color") or "",
+                        "status": d.get("status") or "active"
+                    })
+                    await db.execute("""
+                        INSERT INTO nodes (id, map_id, device_id, name, ip, device_type, site_name, x, y, status, extra_data)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        nid, new_id, d.get("id"), d.get("name"), d.get("ip") or "",
+                        d.get("role") or "generic", site_name, item["x"], item["y"], "ok", d_extra
+                    ))
+                await db.commit()
 
         # Sincronizar automáticamente navegación en el nuevo mapa y en el padre
         await ensure_map_navigation_nodes(db, new_id)
@@ -347,16 +700,21 @@ async def create_map(map_data: MapCreate, user: Dict[str, Any] = Depends(get_cur
             await ensure_map_navigation_nodes(db, parent_id)
 
         cursor = await db.execute("""
-            SELECT m.*, (SELECT COUNT(*) FROM nodes n WHERE n.map_id = m.id) as nodes_count
+            SELECT m.*, (SELECT COUNT(*) FROM nodes n WHERE n.map_id = m.id) as nodes_count,
+                   (SELECT COUNT(*) FROM links l WHERE l.map_id = m.id) as links_count
             FROM maps m WHERE m.id = ?
         """, (new_id,))
         m = await cursor.fetchone()
+        keys = m.keys()
         return MapOut(
             id=m["id"],
             name=m["name"],
             description=m["description"],
             parent_map_id=m["parent_map_id"],
             grid_size=m["grid_size"],
+            position=m["position"] if "position" in keys and m["position"] is not None else 0,
+            netbox_site_id=m["netbox_site_id"] if "netbox_site_id" in keys else None,
+            site_name=m["site_name"] if "site_name" in keys else None,
             created_at=str(m["created_at"]),
             updated_at=str(m["updated_at"]),
             nodes_count=m["nodes_count"] or 0,
@@ -807,7 +1165,7 @@ async def populate_map_from_site(map_id: str, req: PopulateMapFromSiteRequest, u
 
 @router.put("/{map_id}", response_model=MapOut)
 async def update_map(map_id: str, map_data: MapUpdate, user: Dict[str, Any] = Depends(get_current_user)):
-    """Actualiza propiedades de un mapa (nombre, descripción, cuadrícula, mapa padre) y sincroniza jerarquía."""
+    """Actualiza propiedades de un mapa (nombre, descripción, cuadrícula, mapa padre, sitio NetBox) y sincroniza jerarquía."""
     async with get_db_connection() as db:
         cursor = await db.execute("SELECT * FROM maps WHERE id = ?", (map_id,))
         m = await cursor.fetchone()
@@ -824,12 +1182,68 @@ async def update_map(map_id: str, map_data: MapUpdate, user: Dict[str, Any] = De
             raw_p = map_data.parent_map_id.strip() if map_data.parent_map_id else ""
             new_parent_id = raw_p if raw_p and raw_p != map_id else None
 
+        # Actualización de relación con Sitio NetBox
+        new_site_id = m["netbox_site_id"] if "netbox_site_id" in m.keys() else None
+        new_site_name = m["site_name"] if "site_name" in m.keys() else None
+
+        fields_set = getattr(map_data, "model_fields_set", getattr(map_data, "__fields_set__", set()))
+        if "site_name" in fields_set:
+            raw_s = map_data.site_name.strip() if map_data.site_name else None
+            new_site_name = raw_s if raw_s else None
+            if not new_site_name:
+                new_site_id = None
+        if "netbox_site_id" in fields_set:
+            new_site_id = map_data.netbox_site_id
+            if new_site_id is None and "site_name" not in fields_set:
+                new_site_name = None
+
+        if new_site_name and not new_site_id:
+            sites = await inventory_service.get_sites()
+            for s in sites:
+                if s["name"].lower() == new_site_name.lower():
+                    new_site_id = s["id"]
+                    new_site_name = s["name"]
+                    break
+
         await db.execute("""
             UPDATE maps
-            SET name = ?, description = ?, grid_size = ?, parent_map_id = ?, updated_at = CURRENT_TIMESTAMP
+            SET name = ?, description = ?, grid_size = ?, parent_map_id = ?,
+                netbox_site_id = ?, site_name = ?, updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
-        """, (new_name, new_desc, new_grid, new_parent_id, map_id))
+        """, (new_name, new_desc, new_grid, new_parent_id, new_site_id, new_site_name, map_id))
         await db.commit()
+
+        # Si se solicitó auto_populate y se especificó un sitio
+        if map_data.auto_populate and new_site_name:
+            devices = await inventory_service.get_devices_by_site(new_site_name)
+            if devices:
+                c_ex = await db.execute("SELECT device_id, name FROM nodes WHERE map_id = ?", (map_id,))
+                ex_nodes = await c_ex.fetchall()
+                ex_dev_ids = {r["device_id"] for r in ex_nodes if r["device_id"]}
+                ex_names = {r["name"].lower() for r in ex_nodes if r["name"]}
+                to_insert = [d for d in devices if d.get("id") not in ex_dev_ids and d.get("name", "").lower() not in ex_names]
+                if to_insert:
+                    start_y = 170.0 if new_parent_id else 80.0
+                    arranged = arrange_site_nodes(to_insert, start_x=80.0, start_y=start_y)
+                    for item in arranged:
+                        d = item["device"]
+                        nid = f"node-{uuid.uuid4().hex[:8]}"
+                        d_extra = json.dumps({
+                            "manufacturer": d.get("manufacturer") or "Genérico",
+                            "model": d.get("model") or "",
+                            "serial": d.get("serial") or "",
+                            "role": d.get("role") or d.get("device_type") or "Dispositivo",
+                            "role_color": d.get("role_color") or "",
+                            "status": d.get("status") or "active"
+                        })
+                        await db.execute("""
+                            INSERT INTO nodes (id, map_id, device_id, name, ip, device_type, site_name, x, y, status, extra_data)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (
+                            nid, map_id, d.get("id"), d.get("name"), d.get("ip") or "",
+                            d.get("role") or "generic", new_site_name, item["x"], item["y"], "ok", d_extra
+                        ))
+                    await db.commit()
 
         # Sincronizar automáticamente los nodos de navegación en los mapas afectados
         await ensure_map_navigation_nodes(db, map_id)
@@ -844,12 +1258,16 @@ async def update_map(map_id: str, map_data: MapUpdate, user: Dict[str, Any] = De
             FROM maps m WHERE m.id = ?
         """, (map_id,))
         u = await c_updated.fetchone()
+        keys = u.keys()
         return MapOut(
             id=u["id"],
             name=u["name"],
             description=u["description"],
             parent_map_id=u["parent_map_id"],
             grid_size=u["grid_size"],
+            position=u["position"] if "position" in keys and u["position"] is not None else 0,
+            netbox_site_id=u["netbox_site_id"] if "netbox_site_id" in keys else None,
+            site_name=u["site_name"] if "site_name" in keys else None,
             created_at=str(u["created_at"]),
             updated_at=str(u["updated_at"]),
             nodes_count=u["nodes_count"] or 0,
@@ -1108,6 +1526,9 @@ async def create_link(link_data: LinkCreate, user: Dict[str, Any] = Depends(get_
             except Exception as e:
                 # Si NetBox falla (ej. puerto ya cableado), registramos el warning pero permitimos guardar el enlace lógico con aviso
                 extra_data["netbox_sync_warning"] = str(e)
+        elif not (link_data.source_interface and link_data.target_interface):
+            # Notificación de importancia de documentación de puertos físicos
+            extra_data["port_doc_notice"] = "Es importante documentar el puerto físico exacto en NetBox para un inventario completo."
 
         extra_str = json.dumps(extra_data) if extra_data else None
 
@@ -1245,7 +1666,7 @@ async def delete_link(link_id: str, user: Dict[str, Any] = Depends(get_current_u
 async def sync_map_netbox_cables(map_id: str, user: Dict[str, Any] = Depends(get_current_user)):
     """
     Escanea todos los nodos de este mapa que tengan device_id de NetBox y sincroniza
-    automáticamente los cables físicos existentes en NetBox hacia enlaces de NexusDude.
+    automáticamente los cables físicos y conexiones de pares existentes en NetBox hacia enlaces de NexusDude.
     """
     async with get_db_connection() as db:
         c_nodes = await db.execute("SELECT id, device_id, name FROM nodes WHERE map_id = ? AND device_id IS NOT NULL", (map_id,))
@@ -1260,12 +1681,15 @@ async def sync_map_netbox_cables(map_id: str, user: Dict[str, Any] = Depends(get
         c_links = await db.execute("SELECT netbox_cable_id, source_node_id, target_node_id, source_interface, target_interface FROM links WHERE map_id = ?", (map_id,))
         existing_links = await c_links.fetchall()
         existing_cable_ids = {l["netbox_cable_id"] for l in existing_links if "netbox_cable_id" in l.keys() and l["netbox_cable_id"]}
+        existing_pairs = {f"{min(l['source_node_id'], l['target_node_id'])}_{max(l['source_node_id'], l['target_node_id'])}" for l in existing_links}
 
         synced_count = 0
         for dev_id in device_ids:
             ifaces = await inventory_service.get_device_interfaces(dev_id)
             for iface in ifaces:
                 cable_id = iface.get("cable_id")
+                peer_dev_id = iface.get("connected_device_id")
+
                 if cable_id and cable_id not in existing_cable_ids:
                     # Verificar si la otra punta está en este mismo mapa
                     # Consultar el cable en NetBox para obtener endpoints
@@ -1290,6 +1714,7 @@ async def sync_map_netbox_cables(map_id: str, user: Dict[str, Any] = Depends(get
                                     if dev_a_id in dev_to_node and dev_b_id in dev_to_node:
                                         node_a_id = dev_to_node[dev_a_id]
                                         node_b_id = dev_to_node[dev_b_id]
+                                        pair_key = f"{min(node_a_id, node_b_id)}_{max(node_a_id, node_b_id)}"
                                         new_link_id = f"link-{uuid.uuid4().hex[:8]}"
                                         await db.execute("""
                                             INSERT INTO links (
@@ -1308,12 +1733,38 @@ async def sync_map_netbox_cables(map_id: str, user: Dict[str, Any] = Depends(get
                                             "ok"
                                         ))
                                         existing_cable_ids.add(cable_id)
+                                        existing_pairs.add(pair_key)
                                         synced_count += 1
                     except Exception as e:
                         pass
+                elif peer_dev_id and peer_dev_id in dev_to_node:
+                    # Enlace unidireccional / par directo conectado en NetBox
+                    node_a_id = dev_to_node[dev_id]
+                    node_b_id = dev_to_node[peer_dev_id]
+                    pair_key = f"{min(node_a_id, node_b_id)}_{max(node_a_id, node_b_id)}"
+                    if pair_key not in existing_pairs:
+                        new_link_id = f"link-{uuid.uuid4().hex[:8]}"
+                        extra_data = {"port_doc_notice": "Conexión de punto final detectada desde NetBox."}
+                        await db.execute("""
+                            INSERT INTO links (
+                                id, map_id, source_node_id, target_node_id,
+                                source_interface, target_interface,
+                                source_interface_id, target_interface_id,
+                                netbox_cable_id, cable_type, cable_status, status, extra_data
+                            )
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (
+                            new_link_id, map_id, node_a_id, node_b_id,
+                            iface.get("name") or "", iface.get("connected_interface") or "",
+                            iface.get("id"), iface.get("connected_interface_id"),
+                            None, iface.get("cable_type") or "cat6",
+                            "connected", "ok", json.dumps(extra_data)
+                        ))
+                        existing_pairs.add(pair_key)
+                        synced_count += 1
 
         await db.commit()
-        return {"status": "success", "synced_cables_count": synced_count, "message": f"Se sincronizaron {synced_count} cables desde NetBox"}
+        return {"status": "success", "synced_cables_count": synced_count, "message": f"Se sincronizaron {synced_count} cables y conexiones desde NetBox"}
 
 
 # --- Sincronización Masiva de Nodos con NetBox ---

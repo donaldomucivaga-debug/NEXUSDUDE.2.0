@@ -140,9 +140,14 @@ class MapBase(BaseModel):
     parent_map_id: Optional[str] = None
     grid_size: Optional[int] = 20
     position: Optional[int] = 0
+    netbox_site_id: Optional[int] = None
+    site_name: Optional[str] = None
+    access_count: Optional[int] = 1
 
 class MapCreate(MapBase):
     id: Optional[str] = None
+    insert_submap_node: Optional[bool] = False
+    auto_populate: Optional[bool] = False
 
 class MapUpdate(BaseModel):
     name: Optional[str] = None
@@ -150,6 +155,9 @@ class MapUpdate(BaseModel):
     parent_map_id: Optional[str] = None
     grid_size: Optional[int] = None
     position: Optional[int] = None
+    netbox_site_id: Optional[int] = None
+    site_name: Optional[str] = None
+    auto_populate: Optional[bool] = False
 
 class MapOrderItem(BaseModel):
     id: str
@@ -158,6 +166,36 @@ class MapOrderItem(BaseModel):
 
 class MapReorderRequest(BaseModel):
     items: List[MapOrderItem]
+
+class HierarchyItem(BaseModel):
+    id: str
+    parent_map_id: Optional[str] = None
+    child_map_id: str
+    map_name: str
+    alias: Optional[str] = None
+    effective_name: str
+    position: int = 0
+    is_primary: bool = True
+    site_name: Optional[str] = None
+    netbox_site_id: Optional[int] = None
+    nodes_count: int = 0
+    links_count: int = 0
+    access_count: int = 1
+
+class HierarchyCreate(BaseModel):
+    parent_map_id: Optional[str] = None
+    child_map_id: str
+    alias: Optional[str] = None
+    position: Optional[int] = None
+    insert_submap_node: bool = True
+
+class HierarchyUpdate(BaseModel):
+    alias: Optional[str] = None
+    position: Optional[int] = None
+    parent_map_id: Optional[str] = None
+
+class MergeDuplicatesRequest(BaseModel):
+    dry_run: bool = False
 
 class MapOut(MapBase):
     id: str

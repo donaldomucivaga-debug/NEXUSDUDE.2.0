@@ -30,6 +30,8 @@ async def init_db():
                 parent_map_id TEXT,
                 grid_size INTEGER DEFAULT 20,
                 position INTEGER DEFAULT 0,
+                netbox_site_id INTEGER,
+                site_name TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
@@ -38,7 +40,51 @@ async def init_db():
             await db.execute("ALTER TABLE maps ADD COLUMN position INTEGER DEFAULT 0;")
         except Exception:
             pass
+        try:
+            await db.execute("ALTER TABLE maps ADD COLUMN netbox_site_id INTEGER;")
+        except Exception:
+            pass
+        try:
+            await db.execute("ALTER TABLE maps ADD COLUMN site_name TEXT;")
+        except Exception:
+            pass
         await db.execute("CREATE INDEX IF NOT EXISTS idx_maps_position ON maps(position);")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_maps_netbox_site ON maps(netbox_site_id);")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_maps_site_name ON maps(site_name);")
+
+        # Tabla de Jerarquía y Accesos Múltiples a Mapas (N-a-N: un mapa fuente puede tener múltiples accesos/rutas)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS map_hierarchy (
+                id TEXT PRIMARY KEY,
+                parent_map_id TEXT,
+                child_map_id TEXT NOT NULL,
+                alias TEXT,
+                position INTEGER DEFAULT 0,
+                is_primary BOOLEAN DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (child_map_id) REFERENCES maps(id) ON DELETE CASCADE,
+                FOREIGN KEY (parent_map_id) REFERENCES maps(id) ON DELETE CASCADE
+            );
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_hierarchy_parent ON map_hierarchy(parent_map_id);")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_hierarchy_child ON map_hierarchy(child_map_id);")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_hierarchy_pos ON map_hierarchy(parent_map_id, position);")
+
+        # Población inicial de map_hierarchy si está vacía, tomando como base parent_map_id existente en maps
+        c_hier = await db.execute("SELECT COUNT(*) as count FROM map_hierarchy")
+        r_hier = await c_hier.fetchone()
+        if r_hier and r_hier["count"] == 0:
+            import uuid
+            c_all_maps = await db.execute("SELECT id, parent_map_id, position FROM maps")
+            for m_row in await c_all_maps.fetchall():
+                h_id = f"hier-{uuid.uuid4().hex[:8]}"
+                p_id = m_row["parent_map_id"] if m_row["parent_map_id"] and m_row["parent_map_id"].strip() else None
+                pos = m_row["position"] if m_row["position"] is not None else 0
+                await db.execute("""
+                    INSERT INTO map_hierarchy (id, parent_map_id, child_map_id, position, is_primary)
+                    VALUES (?, ?, ?, ?, 1)
+                """, (h_id, p_id, m_row["id"], pos))
 
         # Tabla de Nodos (Dispositivos / Elementos en el lienzo)
         await db.execute("""

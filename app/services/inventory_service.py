@@ -109,6 +109,8 @@ class InventoryService:
                         type_obj = d.get("device_type") or {}
                         mfr_obj = type_obj.get("manufacturer") or {}
 
+                        cf = d.get("custom_fields") or {}
+
                         all_devices.append({
                             "id": d["id"],
                             "name": d.get("name") or f"Device-{d['id']}",
@@ -123,7 +125,11 @@ class InventoryService:
                             "model": type_obj.get("model", ""),
                             "device_type_id": type_obj.get("id"),
                             "status": d.get("status", {}).get("value", "active") if isinstance(d.get("status"), dict) else str(d.get("status", "active")),
-                            "serial": d.get("serial") or ""
+                            "serial": d.get("serial") or "",
+                            "custom_fields": cf,
+                            "azimuth": cf.get("azimuth"),
+                            "tilt": cf.get("tilt"),
+                            "height": cf.get("height")
                         })
 
                     if not data.get("next"):
@@ -310,13 +316,17 @@ class InventoryService:
                     cable_type = cable.get("type", {}).get("value") if isinstance(cable, dict) and isinstance(cable.get("type"), dict) else "cat6"
 
                     # Si está conectada, obtener la otra punta (link_peers / connected_endpoints)
+                    conn_dev_id = None
+                    conn_if_id = None
                     link_peers = i.get("link_peers", []) or i.get("connected_endpoints", [])
                     if link_peers and len(link_peers) > 0:
                         peer = link_peers[0]
                         if isinstance(peer, dict):
                             conn_if = peer.get("name")
+                            conn_if_id = peer.get("id")
                             if isinstance(peer.get("device"), dict):
                                 conn_dev = peer.get("device", {}).get("name")
+                                conn_dev_id = peer.get("device", {}).get("id")
 
                     interfaces_list.append({
                         "id": i.get("id"),
@@ -324,9 +334,11 @@ class InventoryService:
                         "type": i.get("type", {}).get("value") if isinstance(i.get("type"), dict) else (i.get("type") or "1000base-t"),
                         "enabled": i.get("enabled", True),
                         "mgmt_only": i.get("mgmt_only", False),
-                        "is_connected": is_conn,
+                        "is_connected": is_conn or bool(conn_dev),
                         "connected_device": conn_dev,
+                        "connected_device_id": conn_dev_id,
                         "connected_interface": conn_if,
+                        "connected_interface_id": conn_if_id,
                         "cable_id": cable_id,
                         "cable_status": cable_status,
                         "cable_type": cable_type

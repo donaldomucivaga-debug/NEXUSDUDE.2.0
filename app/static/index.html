@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>NexusDude - The Modern Network Dude</title>
   <link rel="stylesheet" href="/static/css/style.css?v=4.0">
+  <link rel="stylesheet" href="/static/css/docs.css?v=2.5">
   <!-- FontAwesome Icons -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <!-- Konva Canvas Library -->
@@ -68,6 +69,11 @@
 
     <!-- Canvas Actions Toolbar -->
     <div class="toolbar">
+      <button class="btn btn-purple" id="btn-new-submap" title="Crear un nuevo submapa dependiente">
+        <i class="fas fa-folder-plus"></i>
+        <span>Nuevo Submapa</span>
+      </button>
+
       <button class="btn" id="btn-toggle-link-mode" title="Activar modo para trazar enlaces entre nodos">
         <i class="fas fa-link"></i>
         <span>Conectar Enlace</span>
@@ -128,8 +134,12 @@
     </div>
 
 
-    <!-- User Badge -->
+    <!-- User Badge & Documentation -->
     <div class="user-section">
+      <button type="button" class="btn-docs-help" id="btn-open-docs" onclick="if(window.openDocs){window.openDocs();}else{console.warn('Docs initializing...');}" title="Manual de Operaciones, Jerarquía y Guía Zabbix (F1)">
+        <i class="fas fa-book-open"></i>
+        <span>Ayuda</span>
+      </button>
       <div class="user-badge" id="user-badge">
         <span class="status-dot"></span>
         <span>Validando SSO...</span>
@@ -147,7 +157,10 @@
           <i class="fas fa-search"></i> Inventario
         </div>
         <div class="sidebar-tab active" data-tab="tab-maps">
-          <i class="fas fa-project-diagram"></i> Mapas
+          <i class="fas fa-project-diagram"></i> Jerarquía
+        </div>
+        <div class="sidebar-tab" data-tab="tab-all-maps" id="tab-btn-all-maps" title="Lista de la totalidad de mapas con orden alfabético A-Z / Z-A">
+          <i class="fas fa-list-ul"></i> Lista Mapas
         </div>
         <div class="sidebar-tab" data-tab="tab-properties">
           <i class="fas fa-sliders-h"></i> Propiedades
@@ -159,26 +172,58 @@
 
       <!-- Tab 1: Inventario NetBox / Zabbix -->
       <div class="sidebar-body" id="tab-inventory" style="display: none;">
-        <div class="search-box">
-          <input type="text" class="input-text" id="input-search-devices" placeholder="Buscar por nombre, IP, modelo...">
-          <div class="filter-grid">
-            <select class="select-filter" id="select-site">
-              <option value="">🏢 Todos los Sitios</option>
-            </select>
-            <select class="select-filter" id="select-role">
-              <option value="">🏷️ Todos los Roles</option>
-            </select>
+        <!-- Selector de Sub-vista de Inventario: Equipos vs Sitios/Mapas Fuente -->
+        <div style="display: flex; gap: 4px; background: rgba(15, 23, 42, 0.7); padding: 3px; border-radius: 6px; border: 1px solid var(--border-color); margin-bottom: 2px;">
+          <button type="button" class="btn" id="btn-inv-subtab-devices" style="flex: 1; font-size: 0.72rem; padding: 4px 6px; justify-content: center; background: var(--accent); color: #ffffff;" title="Ver dispositivos individuales de NetBox">
+            <i class="fas fa-server"></i> Equipos
+          </button>
+          <button type="button" class="btn" id="btn-inv-subtab-sites" style="flex: 1; font-size: 0.72rem; padding: 4px 6px; justify-content: center; background: transparent; color: var(--text-secondary);" title="Ver catálogo de Sitios de NetBox (Mapas Fuente alimentados con sus dispositivos)">
+            <i class="fas fa-building"></i> Sitios (Mapas Fuente)
+          </button>
+        </div>
+
+        <!-- Sub-vista 1: Dispositivos Individuales -->
+        <div id="inv-view-devices" style="display: flex; flex-direction: column; gap: 8px;">
+          <div class="search-box">
+            <input type="text" class="input-text" id="input-search-devices" placeholder="Buscar por nombre, IP, modelo...">
+            <div class="filter-grid">
+              <select class="select-filter" id="select-site">
+                <option value="">🏢 Todos los Sitios</option>
+              </select>
+              <select class="select-filter" id="select-role">
+                <option value="">🏷️ Todos los Roles</option>
+              </select>
+            </div>
+            <div class="results-meta">
+              <span id="results-count">Cargando inventario...</span>
+              <button class="device-btn-add" id="btn-refresh-inventory" title="Recargar inventario de NetBox">
+                <i class="fas fa-sync-alt"></i>
+              </button>
+            </div>
           </div>
-          <div class="results-meta">
-            <span id="results-count">Cargando inventario...</span>
-            <button class="device-btn-add" id="btn-refresh-inventory" title="Recargar inventario de NetBox">
-              <i class="fas fa-sync-alt"></i>
-            </button>
+
+          <div class="device-list" id="device-list">
+            <!-- Items generados dinámicamente -->
           </div>
         </div>
 
-        <div class="device-list" id="device-list">
-          <!-- Items generados dinámicamente -->
+        <!-- Sub-vista 2: Sitios NetBox (Catálogo de Mapas Fuente) -->
+        <div id="inv-view-sites" style="display: none; flex-direction: column; gap: 8px;">
+          <div class="search-box">
+            <div style="position: relative;">
+              <input type="text" class="input-text" id="input-search-inv-sites" placeholder="🔍 Filtrar sitios de NetBox (ej: Rucio, Huizache...)" style="padding-right: 24px;">
+              <button id="btn-clear-search-inv-sites" style="display: none; position: absolute; right: 8px; top: 50%; transform: translateY(-50%); background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 0.82rem;">&times;</button>
+            </div>
+            <div class="results-meta" style="margin-top: 4px;">
+              <span id="results-count-inv-sites" style="color: #38bdf8; font-weight: 600;">0 sitios NetBox</span>
+              <button class="device-btn-add" id="btn-refresh-inv-sites" title="Refrescar catálogo de sitios NetBox">
+                <i class="fas fa-sync-alt"></i>
+              </button>
+            </div>
+          </div>
+          <div id="inv-sites-list" style="display: flex; flex-direction: column; gap: 6px; overflow-y: auto; max-height: calc(100vh - 280px); padding-right: 2px;">
+            <!-- Sitios generados dinámicamente -->
+          </div>
         </div>
       </div>
 
@@ -190,28 +235,99 @@
             <button id="btn-clear-search-maps" style="display: none; position: absolute; right: 8px; top: 50%; transform: translateY(-50%); background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 0.85rem;" title="Limpiar búsqueda">&times;</button>
           </div>
           <div class="maps-actions-row">
-            <button class="btn btn-primary" id="btn-new-root-map" style="flex: 1; justify-content: center; font-size: 0.72rem; padding: 5px 3px;" title="Crear un nuevo mapa raíz">
+            <button class="btn btn-primary" id="btn-new-root-map" style="flex: 1; justify-content: center; font-size: 0.72rem; padding: 5px 3px;" title="Crear un nuevo mapa raíz (sin relación a NetBox por defecto)">
               <i class="fas fa-plus"></i> Raíz
             </button>
-            <button class="btn btn-purple" id="btn-new-submap-tab" style="flex: 1.1; justify-content: center; font-size: 0.72rem; padding: 5px 3px;" title="Crear submapa en el mapa actual">
+            <button class="btn btn-purple" id="btn-new-submap-tab" style="flex: 1.1; justify-content: center; font-size: 0.72rem; padding: 5px 3px;" title="Crear submapa en el mapa actual (sin relación a NetBox por defecto)">
               <i class="fas fa-folder-plus"></i> + Submapa
             </button>
-            <button class="btn" id="btn-collapse-all-maps" style="padding: 5px 7px; font-size: 0.72rem;" title="Contraer todas las carpetas">
+            <!-- Selector de 3 Modos: A-Z (Azul), Z-A (Ámbar), Libre (Púrpura) -->
+            <button class="btn" id="btn-tree-sort-az" style="padding: 5px 6px; font-size: 0.68rem; font-weight: 700;" title="Modo Alfabético: A ➔ Z">
+              <i class="fas fa-sort-alpha-down"></i> A-Z
+            </button>
+            <button class="btn" id="btn-tree-sort-za" style="padding: 5px 6px; font-size: 0.68rem; font-weight: 700;" title="Modo Alfabético: Z ➔ A">
+              <i class="fas fa-sort-alpha-up-alt"></i> Z-A
+            </button>
+            <button class="btn" id="btn-tree-sort-free" style="padding: 5px 6px; font-size: 0.68rem; font-weight: 700;" title="Modo Libre: Arrastre manual guardado (Ficheros de escritorio)">
+              <i class="fas fa-arrows-alt"></i> Libre
+            </button>
+            <button class="btn" id="btn-collapse-all-maps" style="padding: 5px 6px; font-size: 0.68rem;" title="Contraer todas las carpetas">
               <i class="fas fa-compress-alt"></i>
             </button>
-            <button class="btn" id="btn-expand-all-maps" style="padding: 5px 7px; font-size: 0.72rem;" title="Expandir todas las carpetas">
+            <button class="btn" id="btn-expand-all-maps" style="padding: 5px 6px; font-size: 0.68rem;" title="Expandir todas las carpetas">
               <i class="fas fa-expand-alt"></i>
             </button>
-            <button class="btn" id="btn-refresh-maps-tab" title="Refrescar árbol de mapas" style="padding: 5px 7px; font-size: 0.72rem;">
+            <button class="btn" id="btn-refresh-maps-tab" title="Refrescar árbol de mapas" style="padding: 5px 6px; font-size: 0.68rem;">
               <i class="fas fa-sync-alt"></i>
             </button>
           </div>
-          <button class="btn btn-purple" id="btn-open-bulk-sites-modal" style="width: 100%; justify-content: center; font-size: 0.73rem; padding: 5px 8px; background: rgba(168, 85, 247, 0.12); border: 1px dashed #a855f7; color: #c084fc; font-weight: 600;" title="Generar automáticamente mapas para todos los sitios de NetBox">
-            <i class="fas fa-layer-group"></i> ⚡ Auto-generar Sitios NetBox
-          </button>
+          <div style="display: flex; gap: 6px; margin-top: 4px;">
+            <button class="btn btn-purple" id="btn-open-bulk-sites-modal" style="flex: 1; justify-content: center; font-size: 0.72rem; padding: 4px 6px; background: rgba(168, 85, 247, 0.12); border: 1px dashed #a855f7; color: #c084fc; font-weight: 600;" title="Generar automáticamente mapas para todos los sitios de NetBox">
+              <i class="fas fa-layer-group"></i> ⚡ Auto-generar Sitios
+            </button>
+            <button class="btn" id="btn-go-to-all-maps-tab" style="justify-content: center; font-size: 0.72rem; padding: 4px 8px; color: #38bdf8;" title="Ver la lista completa de todos los mapas ordenables alfabéticamente">
+              <i class="fas fa-list-ul"></i> Lista Total
+            </button>
+          </div>
+          <!-- Filtro por vinculación a NetBox en Jerarquía -->
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 4px; font-size: 0.70rem;">
+            <select class="select-filter" id="select-filter-tree-site" style="font-size: 0.72rem; padding: 4px 6px; flex: 1;">
+              <option value="all">🌐 Todos los Mapas</option>
+              <option value="linked">🏢 Vinculados a Sitio NetBox</option>
+              <option value="unlinked">⚡ Sin vincular a NetBox</option>
+            </select>
+            <span id="tree-maps-counter-badge" style="color: #38bdf8; font-weight: 700; margin-left: 8px; white-space: nowrap;">0 mapas</span>
+          </div>
         </div>
         <div class="maps-tree-container" id="maps-tree">
           <!-- Árbol de navegación estilo gestor de archivos -->
+        </div>
+      </div>
+
+      <!-- Tab 2.5: Lista de la Totalidad de Mapas (Orden Alfabético Ascendente / Descendente) -->
+      <div class="sidebar-body" id="tab-all-maps" style="display: none;">
+        <div class="maps-toolbar">
+          <div style="position: relative;">
+            <input type="text" class="input-text" id="input-search-all-maps" placeholder="🔍 Buscar entre todos los mapas..." style="padding-right: 26px;">
+            <button id="btn-clear-search-all-maps" style="display: none; position: absolute; right: 8px; top: 50%; transform: translateY(-50%); background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 0.85rem;" title="Limpiar búsqueda">&times;</button>
+          </div>
+          
+          <!-- Barra de Ordenamiento Alfabético -->
+          <div style="display: flex; gap: 6px; align-items: center; margin-top: 4px;">
+            <span style="font-size: 0.68rem; color: var(--text-muted); font-weight: 700; text-transform: uppercase;">Orden:</span>
+            <button class="btn btn-primary" id="btn-sort-maps-asc" style="flex: 1; justify-content: center; font-size: 0.72rem; padding: 4px 6px;" title="Ordenar mapas de la A a la Z (Ascendente)">
+              <i class="fas fa-sort-alpha-down"></i> A ➔ Z
+            </button>
+            <button class="btn" id="btn-sort-maps-desc" style="flex: 1; justify-content: center; font-size: 0.72rem; padding: 4px 6px;" title="Ordenar mapas de la Z a la A (Descendente)">
+              <i class="fas fa-sort-alpha-up-alt"></i> Z ➔ A
+            </button>
+            <button class="btn" id="btn-refresh-all-maps" title="Recargar lista completa de mapas" style="padding: 4px 7px; font-size: 0.72rem;">
+              <i class="fas fa-sync-alt"></i>
+            </button>
+          </div>
+
+          <!-- Filtro rápido por estado de relación con NetBox -->
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 4px; font-size: 0.70rem;">
+            <select class="select-filter" id="select-filter-all-maps-site" style="font-size: 0.72rem; padding: 4px 6px; flex: 1;">
+              <option value="all">🌐 Todos los Mapas</option>
+              <option value="linked">🏢 Vinculados a Sitio NetBox</option>
+              <option value="unlinked">⚡ Sin vincular a NetBox</option>
+            </select>
+            <span id="all-maps-counter-badge" style="color: #38bdf8; font-weight: 700; margin-left: 8px; white-space: nowrap;">0 mapas</span>
+          </div>
+
+          <div style="display: flex; gap: 6px; margin-top: 4px;">
+            <button class="btn btn-primary" id="btn-create-map-from-list" style="flex: 1; justify-content: center; font-size: 0.72rem; padding: 4px 6px;" title="Crear un nuevo mapa (sin relación con NetBox por defecto)">
+              <i class="fas fa-plus"></i> Nuevo Mapa
+            </button>
+            <button class="btn" id="btn-switch-to-tree-view" style="font-size: 0.72rem; padding: 4px 8px;" title="Ver Árbol Jerárquico">
+              <i class="fas fa-sitemap"></i> Ver Árbol
+            </button>
+          </div>
+        </div>
+
+        <div class="all-maps-scroll-container" id="all-maps-list" style="overflow-y: auto; flex: 1; padding: 6px 10px; display: flex; flex-direction: column; gap: 6px;">
+          <!-- Listado plano completo generado dinámicamente -->
         </div>
       </div>
 
@@ -277,6 +393,28 @@
               <div class="device-info-row">
                 <span class="device-info-label"><i class="fas fa-crosshairs"></i> Posición</span>
                 <span class="device-info-value" id="prop-node-coords" style="font-family: monospace; font-size: 0.75rem;">X: 0, Y: 0</span>
+              </div>
+            </div>
+
+            <!-- Parámetros RF & Orientación de Antena (NetBox Custom Fields) -->
+            <div id="prop-node-rf-box" style="display: none; margin-top: 6px; background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(56, 189, 248, 0.3); border-radius: 8px; padding: 8px;">
+              <div style="font-size: 0.70rem; font-weight: 700; color: #38bdf8; margin-bottom: 6px; display: flex; align-items: center; justify-content: space-between;">
+                <span><i class="fas fa-satellite-dish"></i> Parámetros RF / Antena</span>
+                <span style="font-size: 0.62rem; color: #94a3b8; background: rgba(56, 189, 248, 0.1); padding: 1px 4px; border-radius: 3px;">NetBox CF</span>
+              </div>
+              <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px; text-align: center;">
+                <div style="background: var(--bg-card); border-radius: 5px; padding: 4px 2px; border: 1px solid var(--border-color);">
+                  <span style="color: var(--text-muted); font-size: 0.58rem; display: block;">🧭 Azimuth</span>
+                  <strong id="prop-node-azimuth" style="color: #38bdf8; font-family: monospace; font-size: 0.74rem;">—</strong>
+                </div>
+                <div style="background: var(--bg-card); border-radius: 5px; padding: 4px 2px; border: 1px solid var(--border-color);">
+                  <span style="color: var(--text-muted); font-size: 0.58rem; display: block;">📐 Tilt</span>
+                  <strong id="prop-node-tilt" style="color: #c084fc; font-family: monospace; font-size: 0.74rem;">—</strong>
+                </div>
+                <div style="background: var(--bg-card); border-radius: 5px; padding: 4px 2px; border: 1px solid var(--border-color);">
+                  <span style="color: var(--text-muted); font-size: 0.58rem; display: block;">📏 Altura</span>
+                  <strong id="prop-node-height" style="color: #10b981; font-family: monospace; font-size: 0.74rem;">—</strong>
+                </div>
               </div>
             </div>
 
@@ -681,41 +819,8 @@
       <div class="modal-form">
         <input type="hidden" id="input-edit-map-id" value="">
 
-        <!-- Selector de Modo de Creación de Submapa -->
-        <div class="modal-mode-tabs" id="row-modal-mode-tabs" style="display: none; margin-bottom: 4px;">
-          <button type="button" class="mode-tab-btn active" id="btn-mode-site">
-            <i class="fas fa-building"></i> Desde Sitio NetBox
-          </button>
-          <button type="button" class="mode-tab-btn" id="btn-mode-manual">
-            <i class="fas fa-pencil-alt"></i> Manual (En blanco)
-          </button>
-        </div>
-
-        <!-- Selector de Sitio NetBox con Buscador en Tiempo Real -->
-        <div class="prop-row" id="row-site-picker" style="display: none;">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-            <label class="prop-label" style="margin: 0;"><i class="fas fa-map-marker-alt"></i> Seleccionar Sitio NetBox</label>
-            <span id="site-submap-count-badge" style="font-size: 0.7rem; color: #38bdf8; font-weight: 600;">Cargando...</span>
-          </div>
-          <div style="position: relative; margin-bottom: 6px;">
-            <i class="fas fa-search" style="position: absolute; left: 10px; top: 50%; transform: translateY(-50%); font-size: 0.75rem; color: var(--text-muted);"></i>
-            <input type="text" class="input-text" id="input-filter-site-submap" placeholder="🔍 Escribe para buscar sitio (ej: San Ignacio, Rucio...)" style="padding-left: 28px; font-size: 0.8rem; background: rgba(15,23,42,0.6);">
-          </div>
-          <select class="select-filter" id="select-site-for-submap" size="5" style="height: auto; max-height: 140px; overflow-y: auto; font-family: inherit;">
-            <option value="">-- Elige un Sitio de NetBox --</option>
-          </select>
-        </div>
-
-        <!-- Opción auto-poblar equipos del sitio -->
-        <div class="prop-row" id="row-auto-populate" style="display: none;">
-          <label style="display: flex; align-items: center; gap: 8px; font-size: 0.8rem; color: #38bdf8; cursor: pointer; background: rgba(56, 189, 248, 0.08); padding: 8px 10px; border-radius: 6px; border: 1px solid rgba(56, 189, 248, 0.25);">
-            <input type="checkbox" id="check-auto-populate-devices" checked>
-            <span><strong>Poblar automáticamente</strong> los equipos del sitio con layout jerárquico</span>
-          </label>
-        </div>
-
         <div class="prop-row">
-          <label class="prop-label">Nombre del Mapa</label>
+          <label class="prop-label">Nombre del Mapa <span style="color:#ef4444;">*</span></label>
           <input type="text" class="input-text" id="input-new-map-name" placeholder="Ej: ENTRONQUE HUIZACHE, POP Sur, Torre 1">
         </div>
 
@@ -724,6 +829,34 @@
           <select class="select-filter" id="select-map-parent">
             <option value="">🌐 Ninguno (Mapa Raíz Principal)</option>
           </select>
+        </div>
+
+        <!-- Relación con Sitio NetBox (Opcional - Sin relación por default) -->
+        <div class="prop-row" id="row-netbox-site-section" style="background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 8px; padding: 10px; margin-bottom: 8px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+            <label class="prop-label" style="margin: 0; color: #38bdf8; font-weight: 700;">
+              <i class="fas fa-building"></i> Sitio NetBox Vinculado (Opcional)
+            </label>
+            <span id="site-map-badge" style="font-size: 0.68rem; color: #94a3b8; font-weight: 600;">Sin relación por default</span>
+          </div>
+          <p style="font-size: 0.70rem; color: var(--text-muted); margin: 0 0 6px 0;">
+            Por defecto este mapa <strong>no tiene relación con NetBox</strong>. Puedes seleccionarlo aquí si deseas vincularlo con un sitio de NetBox.
+          </p>
+          <div style="position: relative; margin-bottom: 5px;">
+            <i class="fas fa-search" style="position: absolute; left: 10px; top: 50%; transform: translateY(-50%); font-size: 0.75rem; color: var(--text-muted);"></i>
+            <input type="text" class="input-text" id="input-filter-site-map" placeholder="🔍 Filtrar sitios de NetBox..." style="padding-left: 28px; font-size: 0.78rem; background: rgba(15,23,42,0.8);">
+          </div>
+          <select class="select-filter" id="select-site-for-map" style="width: 100%; font-size: 0.78rem; font-family: inherit;">
+            <option value="">-- Ninguno (Sin vincular a NetBox) --</option>
+          </select>
+
+          <!-- Checkbox para auto-poblar equipos (aparece cuando se selecciona un sitio) -->
+          <div id="row-auto-populate" style="display: none; margin-top: 8px;">
+            <label style="display: flex; align-items: center; gap: 8px; font-size: 0.76rem; color: #38bdf8; cursor: pointer; background: rgba(56, 189, 248, 0.08); padding: 6px 8px; border-radius: 6px; border: 1px solid rgba(56, 189, 248, 0.25);">
+              <input type="checkbox" id="check-auto-populate-devices">
+              <span><strong>Poblar automáticamente</strong> los equipos de este sitio al guardar</span>
+            </label>
+          </div>
         </div>
 
         <div class="prop-row">
@@ -1189,12 +1322,19 @@
             </select>
           </div>
           <div>
-            <label style="font-size: 0.7rem; color: var(--text-muted); font-weight: 600; display: block; margin-bottom: 3px;">Flujo de Servicio:</label>
+            <label style="font-size: 0.7rem; color: var(--text-muted); font-weight: 600; display: block; margin-bottom: 3px;">Flujo de Servicio / Dirección:</label>
             <select class="input-text" id="port-connect-direction" style="width: 100%; font-size: 0.76rem; padding: 5px 8px; background: #0f172a; color: #f8fafc;">
               <option value="source_to_target">Origen ➔ Destino (Padre ➔ Hijo)</option>
               <option value="target_to_source">Destino ➔ Origen (Padre ➔ Hijo)</option>
+              <option value="bidirectional">Bidireccional (Ambos sentidos)</option>
             </select>
           </div>
+        </div>
+
+        <!-- Notificación informativa de documentación de puerto -->
+        <div style="background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 6px; padding: 8px 10px; font-size: 0.72rem; color: #93c5fd; display: flex; align-items: center; gap: 8px;">
+          <i class="fas fa-info-circle" style="font-size: 1rem; color: #38bdf8; flex-shrink: 0;"></i>
+          <span><strong>Documentación:</strong> No es obligatorio indicar el puerto exacto para reflejar la arista en el mapa, pero es importante documentarlo en NetBox para mantener el inventario físico actualizado.</span>
         </div>
 
         <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px;">
@@ -1887,8 +2027,9 @@
   </div>
 
   <!-- Scripts -->
-  <script src="/static/js/api.js?v=4.0"></script>
-  <script src="/static/js/app.js?v=4.0"></script>
+  <script src="/static/js/api.js?v=4.5"></script>
+  <script src="/static/js/app.js?v=4.5"></script>
+  <script src="/static/js/docs.js?v=2.5"></script>
 </body>
 </html>
 

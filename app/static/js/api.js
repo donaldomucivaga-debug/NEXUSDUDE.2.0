@@ -57,10 +57,43 @@ const API = {
   },
 
   // --- Mapas & Jerarquía ---
-  async getMaps() {
-    const res = await this.fetch('/api/maps');
+  async getMaps(sort = null) {
+    const url = sort ? `/api/maps?sort=${encodeURIComponent(sort)}` : '/api/maps';
+    const res = await this.fetch(url);
     if (res.ok) return await res.json();
     return [];
+  },
+
+  async getMapHierarchy() {
+    const res = await this.fetch('/api/maps/hierarchy');
+    if (res.ok) return await res.json();
+    return [];
+  },
+
+  async createHierarchyAccess(payload) {
+    const res = await this.fetch('/api/maps/hierarchy', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+    if (res.ok) return await res.json();
+    throw new Error(await res.text());
+  },
+
+  async removeHierarchyAccess(hierarchyId) {
+    const res = await this.fetch(`/api/maps/hierarchy/${hierarchyId}`, {
+      method: 'DELETE'
+    });
+    if (res.ok) return await res.json();
+    throw new Error(await res.text());
+  },
+
+  async mergeDuplicateMaps(dryRun = false) {
+    const res = await this.fetch('/api/maps/merge-duplicates', {
+      method: 'POST',
+      body: JSON.stringify({ dry_run: dryRun })
+    });
+    if (res.ok) return await res.json();
+    throw new Error(await res.text());
   },
 
   async getMapDetail(mapId) {
