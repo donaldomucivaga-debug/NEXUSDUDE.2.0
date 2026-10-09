@@ -531,18 +531,51 @@ class InventoryService:
                     parent_loc_id = parent_loc.get("id")
                     parent_map_id = loc_to_map_id.get(parent_loc_id)
                     if not parent_map_id:
-                        # Si el padre es un sitio
                         site_data = loc.get("site") or {}
                         if site_data.get("id") in map_by_site_id:
                             parent_map_id = map_by_site_id[site_data["id"]]["id"]
 
                     if parent_map_id and child_map_id and parent_map_id != child_map_id:
                         await db.execute("UPDATE maps SET parent_map_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (parent_map_id, child_map_id))
-                        # Registrar en map_hierarchy
                         c_h = await db.execute("SELECT id FROM map_hierarchy WHERE child_map_id = ? AND parent_map_id = ?", (child_map_id, parent_map_id))
                         if not await c_h.fetchone():
                             h_id = f"h-{uuid.uuid4().hex[:8]}"
                             await db.execute("INSERT INTO map_hierarchy (id, parent_map_id, child_map_id, is_primary) VALUES (?, ?, ?, 1)", (h_id, parent_map_id, child_map_id))
+
+            # 2.1. Establecer jerarquía basada en Site Groups de NetBox (site.group.parent)
+            headers = await self.get_headers()
+            try:
+                async with httpx.AsyncClient(verify=False, timeout=15.0) as client:
+                    res_raw_sites = await client.get(f"{settings.NETBOX_URL}/api/dcim/sites/?limit=1000", headers=headers)
+                    raw_sites = res_raw_sites.json().get("results", []) if res_raw_sites.status_code == 200 else []
+
+                    # Mapear group_id -> site_id
+                    group_to_site_id = {}
+                    for s in raw_sites:
+                        grp = s.get("group")
+                        if grp and isinstance(grp, dict):
+                            group_to_site_id[grp.get("id")] = s.get("id")
+
+                    for s in raw_sites:
+                        site_id = s.get("id")
+                        grp = s.get("group")
+                        if site_id in map_by_site_id and grp and isinstance(grp, dict):
+                            child_map_id = map_by_site_id[site_id]["id"]
+                            # Consultar el grupo para ver si tiene parent
+                            parent_grp = grp.get("parent")
+                            if parent_grp and isinstance(parent_grp, dict):
+                                parent_grp_id = parent_grp.get("id")
+                                parent_site_id = group_to_site_id.get(parent_grp_id)
+                                if parent_site_id and parent_site_id in map_by_site_id:
+                                    parent_map_id = map_by_site_id[parent_site_id]["id"]
+                                    if parent_map_id and child_map_id and parent_map_id != child_map_id:
+                                        await db.execute("UPDATE maps SET parent_map_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (parent_map_id, child_map_id))
+                                        c_h = await db.execute("SELECT id FROM map_hierarchy WHERE child_map_id = ? AND parent_map_id = ?", (child_map_id, parent_map_id))
+                                        if not await c_h.fetchone():
+                                            h_id = f"h-{uuid.uuid4().hex[:8]}"
+                                            await db.execute("INSERT INTO map_hierarchy (id, parent_map_id, child_map_id, is_primary) VALUES (?, ?, ?, 1)", (h_id, parent_map_id, child_map_id))
+            except Exception as e:
+                logger.warning(f"Error procesando jerarquía de Site Groups: {e}")
 
             # 3. Generar portales de navegación automáticamente para todos los mapas padre-hijo
             c_all_maps = await db.execute("SELECT id, name, parent_map_id FROM maps WHERE parent_map_id IS NOT NULL")
