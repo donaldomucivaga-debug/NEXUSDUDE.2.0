@@ -6285,24 +6285,6 @@ async function refreshMapsTabList(filterText = '') {
           <span><i class="fas fa-server"></i> ${mapObj.nodes_count || 0} nodos</span>
           <span><i class="fas fa-project-diagram"></i> ${mapObj.links_count || 0} enlaces</span>
         </div>
-        <div class="map-actions">
-          <button type="button" class="map-action-btn open-btn" title="Cargar este mapa en el lienzo">
-            <i class="fas fa-eye"></i>
-          </button>
-          <button type="button" class="map-action-btn add-sub-btn" title="Crear submapa hijo de este mapa">
-            <i class="fas fa-folder-plus"></i>
-          </button>
-          <button type="button" class="map-action-btn populate-btn" title="Poblar o sincronizar equipos desde NetBox">
-            <i class="fas fa-magic"></i>
-          </button>
-          <button type="button" class="map-action-btn edit-btn" title="Editar propiedades del mapa">
-            <i class="fas fa-pen"></i>
-          </button>
-          ${!isDefault ? `
-          <button type="button" class="map-action-btn delete-btn" title="Eliminar mapa">
-            <i class="fas fa-trash-alt"></i>
-          </button>` : ''}
-        </div>
       </div>
     `;
 
@@ -6357,69 +6339,21 @@ async function refreshMapsTabList(filterText = '') {
       caretBtn.addEventListener('click', toggleExpand);
     }
 
-    // Clic en el título para abrir mapa en el lienzo (excluyendo caret y drag handle)
-    card.querySelector('.map-card-title-group').addEventListener('click', (e) => {
+    // Clic en la tarjeta para abrir mapa en el lienzo (excluyendo caret y drag handle)
+    card.addEventListener('click', (e) => {
       if (e.target.closest('.map-toggle-caret') || e.target.closest('.map-drag-handle')) return;
       loadMap(mapObj.id);
     });
 
     // Doble clic en el título para desplegar/contraer
-    card.querySelector('.map-card-title-group').addEventListener('dblclick', (e) => {
+    card.querySelector('.map-card-title-group')?.addEventListener('dblclick', (e) => {
       if (e.target.closest('.map-toggle-caret') || e.target.closest('.map-drag-handle')) return;
       if (hasChildren) toggleExpand(e);
     });
 
-    // Botón abrir
-    card.querySelector('.open-btn').addEventListener('click', (e) => {
-      e.stopPropagation();
-      loadMap(mapObj.id);
-    });
-
-    // Botón crear submapa
-    card.querySelector('.add-sub-btn').addEventListener('click', (e) => {
-      e.stopPropagation();
-      openCreateMapModal(true, mapObj.id);
-    });
-
-    // Botón poblar desde NetBox
-    const popBtn = card.querySelector('.populate-btn');
-    if (popBtn) {
-      popBtn.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        const targetSite = mapObj.site_name || mapObj.name;
-        if (!confirm(`¿Deseas poblar o sincronizar los equipos de NetBox para el mapa "${mapObj.name}" (Sitio: ${targetSite})?`)) return;
-        try {
-          const res = await API.populateMapFromSite(mapObj.id, targetSite);
-          alert(res.message);
-          if (currentMap && currentMap.id === mapObj.id) {
-            await loadMap(mapObj.id);
-          } else {
-            await refreshMapsTabList();
-          }
-        } catch (err) {
-          alert('Error sincronizando: ' + err.message);
-        }
-      });
-    }
-
-    // Botón editar mapa
-    card.querySelector('.edit-btn').addEventListener('click', (e) => {
-      e.stopPropagation();
-      openEditMapModal(mapObj);
-    });
-
-    // Botón eliminar mapa
-    const delBtn = card.querySelector('.delete-btn');
-    if (delBtn) {
-      delBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        handleDeleteMap(mapObj.id, mapObj.name);
-      });
-    }
-
     // ─── Drag & Drop Eventos para reordenar ───
     wrapper.addEventListener('dragstart', (e) => {
-      if (e.target.closest('.map-actions') || e.target.closest('.map-toggle-caret')) {
+      if (e.target.closest('.map-toggle-caret')) {
         e.preventDefault();
         return;
       }
@@ -7005,77 +6939,13 @@ async function renderAllMapsList() {
           <span><i class="fas fa-server"></i> ${mapObj.nodes_count || 0} nodos</span>
           <span><i class="fas fa-project-diagram"></i> ${mapObj.links_count || 0} enlaces</span>
         </div>
-        <div class="map-actions">
-          <button type="button" class="map-action-btn open-btn" title="Cargar este mapa en el lienzo">
-            <i class="fas fa-eye"></i>
-          </button>
-          <button type="button" class="map-action-btn add-sub-btn" title="Crear submapa hijo de este mapa">
-            <i class="fas fa-folder-plus"></i>
-          </button>
-          ${mapObj.site_name ? `
-          <button type="button" class="map-action-btn populate-btn" title="Poblar o sincronizar equipos desde NetBox (${mapObj.site_name})">
-            <i class="fas fa-magic"></i>
-          </button>` : ''}
-          <button type="button" class="map-action-btn edit-btn" title="Editar propiedades y relación con NetBox">
-            <i class="fas fa-pen"></i>
-          </button>
-          ${!isDefault ? `
-          <button type="button" class="map-action-btn delete-btn" title="Eliminar mapa">
-            <i class="fas fa-trash-alt"></i>
-          </button>` : ''}
-        </div>
       </div>
     `;
 
-    card.addEventListener('click', async (e) => {
-      if (e.target.closest('.map-actions')) return;
+    card.addEventListener('click', async () => {
       await loadMap(mapObj.id);
       renderAllMapsList();
     });
-
-    card.querySelector('.open-btn').addEventListener('click', async (e) => {
-      e.stopPropagation();
-      await loadMap(mapObj.id);
-      renderAllMapsList();
-    });
-
-    card.querySelector('.add-sub-btn').addEventListener('click', (e) => {
-      e.stopPropagation();
-      openCreateMapModal(true, mapObj.id);
-    });
-
-    const popBtn = card.querySelector('.populate-btn');
-    if (popBtn) {
-      popBtn.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        const siteToPopulate = mapObj.site_name || mapObj.name;
-        if (!confirm(`¿Deseas poblar o sincronizar los equipos de NetBox para el mapa "${mapObj.name}" (Sitio: ${siteToPopulate})?`)) return;
-        try {
-          const res = await API.populateMapFromSite(mapObj.id, siteToPopulate);
-          alert(res.message);
-          if (currentMap && currentMap.id === mapObj.id) {
-            await loadMap(mapObj.id);
-          } else {
-            await refreshMapsTabList();
-          }
-        } catch (err) {
-          alert('Error sincronizando: ' + err.message);
-        }
-      });
-    }
-
-    card.querySelector('.edit-btn').addEventListener('click', (e) => {
-      e.stopPropagation();
-      openEditMapModal(mapObj);
-    });
-
-    const delBtn = card.querySelector('.delete-btn');
-    if (delBtn) {
-      delBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        handleDeleteMap(mapObj.id, mapObj.name);
-      });
-    }
 
     container.appendChild(card);
   });
