@@ -1802,6 +1802,19 @@ async def import_link_from_netbox(link_id: str, user: Dict[str, Any] = Depends(g
                     }
                     break
 
+        if not found_cable and tgt_dev_id:
+            ifaces_tgt = await inventory_service.get_device_interfaces(int(tgt_dev_id))
+            for iface in ifaces_tgt:
+                if str(iface.get("connected_device_id")) == str(src_dev_id):
+                    found_cable = {
+                        "id": iface.get("cable_id"),
+                        "type": {"value": iface.get("cable_type") or "cat6"},
+                        "status": {"value": iface.get("cable_status") or "connected"},
+                        "src_iface": iface.get("connected_interface"),
+                        "tgt_iface": iface.get("name")
+                    }
+                    break
+
         if not found_cable:
             raise HTTPException(
                 status_code=404,
@@ -1971,10 +1984,18 @@ async def sync_map_netbox_cables(map_id: str, user: Dict[str, Any] = Depends(get
         device_ids = list(dev_to_node.keys())
 
         # Enlaces existentes en este mapa
-        c_links = await db.execute("SELECT netbox_cable_id, source_node_id, target_node_id, source_interface, target_interface FROM links WHERE map_id = ?", (map_id,))
+        c_links = await db.execute("SELECT id, netbox_cable_id, source_node_id, target_node_id, source_interface, target_interface FROM links WHERE map_id = ?", (map_id,))
         existing_links = await c_links.fetchall()
         existing_cable_ids = {l["netbox_cable_id"] for l in existing_links if "netbox_cable_id" in l.keys() and l["netbox_cable_id"]}
-        existing_pairs = {f"{min(l['source_node_id'], l['target_node_id'])}_{max(l['source_node_id'], l['target_node_id'])}" for l in existing_links}
+        
+        # Mapear pares existentes a sus IDs de enlace
+        # pair_to_link: { (node_min, node_max): [link_row, ...] }
+        pair_to_links = {}
+        for l in existing_links:
+            pkey = (min(l["source_node_id"], l["target_node_id"]), max(l["source_node_id"], l["target_node_id"]))
+            if pkey not in pair_to_links:
+                pair_to_links[pkey] = []
+            pair_to_links[pkey].append(l)
 
         synced_count = 0
         for dev_id in device_ids:
@@ -1985,7 +2006,6 @@ async def sync_map_netbox_cables(map_id: str, user: Dict[str, Any] = Depends(get
 
                 if cable_id and cable_id not in existing_cable_ids:
                     # Verificar si la otra punta está en este mismo mapa
-                    # Consultar el cable en NetBox para obtener endpoints
                     headers = await inventory_service.get_headers()
                     try:
                         import httpx
@@ -2007,35 +2027,66 @@ async def sync_map_netbox_cables(map_id: str, user: Dict[str, Any] = Depends(get
                                     if dev_a_id in dev_to_node and dev_b_id in dev_to_node:
                                         node_a_id = dev_to_node[dev_a_id]
                                         node_b_id = dev_to_node[dev_b_id]
-                                        pair_key = f"{min(node_a_id, node_b_id)}_{max(node_a_id, node_b_id)}"
-                                        new_link_id = f"link-{uuid.uuid4().hex[:8]}"
-                                        await db.execute("""
-                                            INSERT INTO links (
-                                                id, map_id, source_node_id, target_node_id,
-                                                source_interface, target_interface,
-                                                source_interface_id, target_interface_id,
-                                                netbox_cable_id, cable_type, cable_status, status
-                                            )
-                                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                                        """, (
-                                            new_link_id, map_id, node_a_id, node_b_id,
-                                            if_a_name, if_b_name,
-                                            if_a_id, if_b_id,
-                                            cable_id, cdata.get("type", {}).get("value") if isinstance(cdata.get("type"), dict) else "cat6",
-                                            cdata.get("status", {}).get("value") if isinstance(cdata.get("status"), dict) else "connected",
-                                            "ok"
-                                        ))
+                                        pkey = (min(node_a_id, node_b_id), max(node_a_id, node_b_id))
+                                        c_type = cdata.get("type", {}).get("value") if isinstance(cdata.get("type"), dict) else (cdata.get("type") or "cat6")
+                                        c_status = cdata.get("status", {}).get("value") if isinstance(cdata.get("status"), dict) else (cdata.get("status") or "connected")
+
+                                        # Si existe un enlace borrador (sin cable_id) entre estos dos nodos, actualizarlo
+                                        target_draft = None
+                                        if pkey in pair_to_links:
+                                            for candidate in pair_to_links[pkey]:
+                                                if not candidate.get("netbox_cable_id"):
+                                                    target_draft = candidate
+                                                    break
+
+                                        if target_draft:
+                                            await db.execute("""
+                                                UPDATE links
+                                                SET source_node_id = ?, target_node_id = ?,
+                                                    source_interface = ?, target_interface = ?,
+                                                    source_interface_id = ?, target_interface_id = ?,
+                                                    netbox_cable_id = ?, cable_type = ?, cable_status = ?,
+                                                    status = 'ok', updated_at = CURRENT_TIMESTAMP
+                                                WHERE id = ?
+                                            """, (
+                                                node_a_id, node_b_id,
+                                                if_a_name, if_b_name,
+                                                if_a_id, if_b_id,
+                                                cable_id, c_type, c_status,
+                                                target_draft["id"]
+                                            ))
+                                            target_draft["netbox_cable_id"] = cable_id
+                                        else:
+                                            new_link_id = f"link-{uuid.uuid4().hex[:8]}"
+                                            await db.execute("""
+                                                INSERT INTO links (
+                                                    id, map_id, source_node_id, target_node_id,
+                                                    source_interface, target_interface,
+                                                    source_interface_id, target_interface_id,
+                                                    netbox_cable_id, cable_type, cable_status, status
+                                                )
+                                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                            """, (
+                                                new_link_id, map_id, node_a_id, node_b_id,
+                                                if_a_name, if_b_name,
+                                                if_a_id, if_b_id,
+                                                cable_id, c_type, c_status,
+                                                "ok"
+                                            ))
+                                            if pkey not in pair_to_links:
+                                                pair_to_links[pkey] = []
+                                            pair_to_links[pkey].append({"id": new_link_id, "netbox_cable_id": cable_id})
+
                                         existing_cable_ids.add(cable_id)
-                                        existing_pairs.add(pair_key)
                                         synced_count += 1
                     except Exception as e:
-                        pass
+                        logger.error(f"Error sincronizando cable {cable_id} en mapa {map_id}: {e}")
                 elif peer_dev_id and peer_dev_id in dev_to_node:
-                    # Enlace unidireccional / par directo conectado en NetBox
+                    # Enlace directo conectado en NetBox sin ID de cable
                     node_a_id = dev_to_node[dev_id]
                     node_b_id = dev_to_node[peer_dev_id]
-                    pair_key = f"{min(node_a_id, node_b_id)}_{max(node_a_id, node_b_id)}"
-                    if pair_key not in existing_pairs:
+                    pkey = (min(node_a_id, node_b_id), max(node_a_id, node_b_id))
+                    if pkey not in pair_to_links:
                         new_link_id = f"link-{uuid.uuid4().hex[:8]}"
                         extra_data = {"port_doc_notice": "Conexión de punto final detectada desde NetBox."}
                         await db.execute("""
@@ -2053,7 +2104,7 @@ async def sync_map_netbox_cables(map_id: str, user: Dict[str, Any] = Depends(get
                             None, iface.get("cable_type") or "cat6",
                             "connected", "ok", json.dumps(extra_data)
                         ))
-                        existing_pairs.add(pair_key)
+                        pair_to_links[pkey] = [{"id": new_link_id, "netbox_cable_id": None}]
                         synced_count += 1
 
         await db.commit()

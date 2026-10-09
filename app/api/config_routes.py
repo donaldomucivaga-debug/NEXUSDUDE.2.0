@@ -81,6 +81,7 @@ async def get_integrations_config(user: Dict[str, Any] = Depends(get_current_use
         return {
             "netbox": {
                 "url": settings.NETBOX_URL,
+                "external_url": getattr(settings, "NETBOX_EXTERNAL_URL", settings.NETBOX_URL),
                 "token": settings.NETBOX_TOKEN,
                 "allow_edge_editing": getattr(settings, "ALLOW_EDGE_EDITING", True)
             },

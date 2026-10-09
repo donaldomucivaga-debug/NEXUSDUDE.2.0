@@ -33,5 +33,7 @@ async def get_auth_config():
     """Retorna configuración pública para redirecciones de autenticación."""
     return {
         "nexus_orchestrator_url": settings.NEXUS_ORCHESTRATOR_URL,
-        "login_url": f"{settings.NEXUS_ORCHESTRATOR_URL}/#/login"
+        "login_url": f"{settings.NEXUS_ORCHESTRATOR_URL}/#/login",
+        "netbox_external_url": getattr(settings, "NETBOX_EXTERNAL_URL", settings.NETBOX_URL),
+        "netbox_url": settings.NETBOX_URL
     }

@@ -75,3 +75,4 @@ async def refresh_inventory_cache(user: Dict[str, Any] = Depends(get_current_use
     """Fuerza la recarga de inventario desde NetBox."""
     await inventory_service.refresh_cache(force=True)
     return {"status": "success", "message": "Inventario recargado exitosamente"}
+

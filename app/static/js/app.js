@@ -692,7 +692,8 @@ function computeNodeDimensions(node) {
   const devType = (node.device_type || '').toLowerCase();
   const roleName = (node.extra_data?.role || '').toLowerCase();
   const modelName = (node.extra_data?.model || '').toLowerCase();
-  const combinedType = `${devType} ${roleName} ${modelName}`;
+  const nodeName = (node.name || '').toLowerCase();
+  const combinedType = `${devType} ${roleName} ${modelName} ${nodeName}`;
   const isInfra = combinedType.includes('switch') || 
                   combinedType.includes('router') || 
                   combinedType.includes('olt') || 
@@ -700,7 +701,8 @@ function computeNodeDimensions(node) {
                   combinedType.includes('gateway') || 
                   combinedType.includes('borde') || 
                   combinedType.includes('distribucion') ||
-                  combinedType.includes('firewall');
+                  combinedType.includes('firewall') ||
+                  /\b(sw|rt|gw|olt)\b/i.test(combinedType);
 
   let minWidth = 140;
   let maxWidth = 260;
@@ -715,10 +717,14 @@ function computeNodeDimensions(node) {
     maxWidth = 300;
     baseHeight = 56;
   } else if (isInfra) {
-    // Formato alargado tipo Rack/Switch/Router/OLT: mayor perímetro horizontal para alojar aristas y etiquetas sin colisiones
-    minWidth = 210;
-    maxWidth = 350;
-    baseHeight = 50;
+    // Formato alargado tipo Rack/Switch/Router/OLT: aumentado en ancho
+    // para brindar amplio perímetro horizontal y permitir que 24+ aristas y etiquetas conecten sin colisionar
+    const attachedCount = (typeof nodeAttachedLinksMap !== 'undefined' && nodeAttachedLinksMap?.get(node.id)?.size) || 
+                          (currentMap?.links?.filter(l => l.source_node_id === node.id || l.target_node_id === node.id)?.length) || 0;
+    const dynamicW = Math.max(680, (Math.max(attachedCount, 18) * 20) + 80);
+    minWidth = Math.min(dynamicW, 1100);
+    maxWidth = Math.max(minWidth, 1300);
+    baseHeight = 52;
   }
 
   const nodeWidth = Math.min(Math.max(minWidth, Math.ceil(Math.max(titleNeeded, subNeeded, pinNeeded))), maxWidth);
@@ -1796,6 +1802,41 @@ function avoidObstaclesOrthogonal(waypoints, obstacles) {
   return current;
 }
 
+// ─── Utilidades de Extracción y Ordenamiento de Puertos en Sentido Antihorario ───
+function extractInterfacePortKey(ifName) {
+  if (!ifName) return { hasPort: false, numbers: [], portNum: 999999, raw: '' };
+  const str = String(ifName).trim();
+  const nums = str.match(/\d+/g);
+  if (nums && nums.length > 0) {
+    const numArr = nums.map(n => parseInt(n, 10));
+    return {
+      hasPort: true,
+      numbers: numArr,
+      portNum: numArr[numArr.length - 1],
+      raw: str
+    };
+  }
+  return { hasPort: false, numbers: [], portNum: 999999, raw: str };
+}
+
+function comparePortsAscending(aKey, bKey) {
+  if (aKey.hasPort && bKey.hasPort) {
+    const minLen = Math.min(aKey.numbers.length, bKey.numbers.length);
+    for (let i = 0; i < minLen; i++) {
+      if (aKey.numbers[i] !== bKey.numbers[i]) {
+        return aKey.numbers[i] - bKey.numbers[i];
+      }
+    }
+    if (aKey.numbers.length !== bKey.numbers.length) {
+      return aKey.numbers.length - bKey.numbers.length;
+    }
+    return aKey.raw.localeCompare(bKey.raw, undefined, { numeric: true, sensitivity: 'base' });
+  }
+  if (aKey.hasPort) return -1;
+  if (bKey.hasPort) return 1;
+  return (aKey.raw || '').localeCompare(bKey.raw || '', undefined, { numeric: true, sensitivity: 'base' });
+}
+
 function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
   if (!sourceNode || !targetNode) return [0, 0, 0, 0];
 
@@ -1843,34 +1884,62 @@ function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
 
         const oFace = determineNodeFace(srcCx, srcCy, oCx, oCy, srcHalf.halfW, srcHalf.halfH);
         if (oFace === sFace) {
+          const ifName = (l.source_node_id === sourceNode.id) ?
+            (l.source_interface || l.extra_data?.source_interface || l.extra_data?.gpon_port || '') :
+            (l.target_interface || l.extra_data?.target_interface || '');
+          const portKey = extractInterfacePortKey(ifName);
           allSrcSiblings.push({
             linkId: l.id,
             id: other.id,
             cx: oCx,
-            cy: oCy
+            cy: oCy,
+            portKey: portKey,
+            ifName: ifName
           });
         }
       }
     }
   }
 
-  // Ordenar TODOS los enlaces de la cara de origen de izquierda a derecha (o de arriba a abajo)
-  if (isSVert) {
-    allSrcSiblings.sort((a, b) => a.cx !== b.cx ? (a.cx - b.cx) : String(a.linkId).localeCompare(String(b.linkId)));
-  } else {
-    allSrcSiblings.sort((a, b) => a.cy !== b.cy ? (a.cy - b.cy) : String(a.linkId).localeCompare(String(b.linkId)));
-  }
+  // Ordenar TODOS los enlaces de la cara de origen en sentido antihorario de menor a mayor según puerto
+  allSrcSiblings.sort((a, b) => {
+    const portCmp = comparePortsAscending(a.portKey, b.portKey);
+    if (portCmp !== 0) return portCmp;
+    if (sFace === 'bottom') {
+      return a.cx !== b.cx ? (a.cx - b.cx) : String(a.linkId).localeCompare(String(b.linkId));
+    } else if (sFace === 'top') {
+      return a.cx !== b.cx ? (b.cx - a.cx) : String(a.linkId).localeCompare(String(b.linkId));
+    } else if (sFace === 'right') {
+      return a.cy !== b.cy ? (b.cy - a.cy) : String(a.linkId).localeCompare(String(b.linkId));
+    } else { // left
+      return a.cy !== b.cy ? (a.cy - b.cy) : String(a.linkId).localeCompare(String(b.linkId));
+    }
+  });
 
   const srcN = allSrcSiblings.length;
-  let srcIdx = allSrcSiblings.findIndex(s => (link && s.linkId === link.id) || s.id === targetNode.id);
+  let srcIdx = allSrcSiblings.findIndex(s => (link && String(s.linkId) === String(link.id)) || String(s.id) === String(targetNode.id));
   if (srcIdx === -1) srcIdx = 0;
 
-  // Distribuir pines uniformemente a lo largo de la cara: CADA ENLACE TIENE SU PROPIO PIN EXCLUSIVO
+  // Distribuir pines uniformemente a lo largo de la cara: CADA ENLACE TIENE SU PROPIO PUERTO/PIN ÚNICO
   let srcPinOffset = 0;
   if (srcN > 1) {
-    const maxSpan = isSVert ? ((srcHalf.halfW - 10) * 2) : ((srcHalf.halfH - 8) * 2);
-    const step = Math.min(18, maxSpan / srcN);
-    srcPinOffset = (-(srcN - 1) / 2.0 + srcIdx) * step;
+    const margin = isSVert ? 20 : 10;
+    const maxSpan = isSVert ? Math.max(30, (srcHalf.halfW - margin) * 2) : Math.max(16, (srcHalf.halfH - margin) * 2);
+    const minStep = isSVert ? 14 : 9;
+    const desiredStep = isSVert ? 20 : 11;
+    const availableStep = maxSpan / (srcN - 1);
+    const step = Math.max(minStep, Math.min(desiredStep, availableStep));
+    const totalSpan = step * (srcN - 1);
+
+    if (sFace === 'bottom') {
+      srcPinOffset = -totalSpan / 2.0 + srcIdx * step;
+    } else if (sFace === 'top') {
+      srcPinOffset = totalSpan / 2.0 - srcIdx * step;
+    } else if (sFace === 'right') {
+      srcPinOffset = totalSpan / 2.0 - srcIdx * step;
+    } else if (sFace === 'left') {
+      srcPinOffset = -totalSpan / 2.0 + srcIdx * step;
+    }
   }
 
   let srcPt = { x: srcCx, y: srcCy };
@@ -1905,32 +1974,69 @@ function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
 
         const oFace = determineNodeFace(tgtCx, tgtCy, oCx, oCy, tgtHalf.halfW, tgtHalf.halfH);
         if (oFace === tFace) {
+          const ifName = (l.target_node_id === targetNode.id) ?
+            (l.target_interface || l.extra_data?.target_interface || '') :
+            (l.source_interface || l.extra_data?.source_interface || l.extra_data?.gpon_port || '');
+          const portKey = extractInterfacePortKey(ifName);
           allTgtSiblings.push({
             linkId: l.id,
             id: other.id,
             cx: oCx,
-            cy: oCy
+            cy: oCy,
+            portKey: portKey,
+            ifName: ifName
           });
         }
       }
     }
   }
 
-  if (isTVert) {
-    allTgtSiblings.sort((a, b) => a.cx !== b.cx ? (a.cx - b.cx) : String(a.linkId).localeCompare(String(b.linkId)));
-  } else {
-    allTgtSiblings.sort((a, b) => a.cy !== b.cy ? (a.cy - b.cy) : String(a.linkId).localeCompare(String(b.linkId)));
-  }
+  // Ordenar enlaces de la cara de destino en sentido antihorario de menor a mayor según puerto
+  allTgtSiblings.sort((a, b) => {
+    const portCmp = comparePortsAscending(a.portKey, b.portKey);
+    if (portCmp !== 0) return portCmp;
+    if (tFace === 'bottom') {
+      return a.cx !== b.cx ? (a.cx - b.cx) : String(a.linkId).localeCompare(String(b.linkId));
+    } else if (tFace === 'top') {
+      return a.cx !== b.cx ? (b.cx - a.cx) : String(a.linkId).localeCompare(String(b.linkId));
+    } else if (tFace === 'right') {
+      return a.cy !== b.cy ? (b.cy - a.cy) : String(a.linkId).localeCompare(String(b.linkId));
+    } else { // left
+      return a.cy !== b.cy ? (a.cy - b.cy) : String(a.linkId).localeCompare(String(b.linkId));
+    }
+  });
 
   const tgtN = allTgtSiblings.length;
-  let tgtIdx = allTgtSiblings.findIndex(s => (link && s.linkId === link.id) || s.id === sourceNode.id);
+  let tgtIdx = allTgtSiblings.findIndex(s => (link && String(s.linkId) === String(link.id)) || String(s.id) === String(sourceNode.id));
   if (tgtIdx === -1) tgtIdx = 0;
 
   let tgtPinOffset = 0;
   if (tgtN > 1) {
-    const maxSpan = isTVert ? ((tgtHalf.halfW - 10) * 2) : ((tgtHalf.halfH - 8) * 2);
-    const step = Math.min(18, maxSpan / tgtN);
-    tgtPinOffset = (-(tgtN - 1) / 2.0 + tgtIdx) * step;
+    const margin = isTVert ? 20 : 10;
+    const maxSpan = isTVert ? Math.max(30, (tgtHalf.halfW - margin) * 2) : Math.max(16, (tgtHalf.halfH - margin) * 2);
+    const minStep = isTVert ? 14 : 9;
+    const desiredStep = isTVert ? 20 : 11;
+    const availableStep = maxSpan / (tgtN - 1);
+    const step = Math.max(minStep, Math.min(desiredStep, availableStep));
+    const totalSpan = step * (tgtN - 1);
+
+    if (tFace === 'bottom') {
+      tgtPinOffset = -totalSpan / 2.0 + tgtIdx * step;
+    } else if (tFace === 'top') {
+      tgtPinOffset = totalSpan / 2.0 - tgtIdx * step;
+    } else if (tFace === 'right') {
+      tgtPinOffset = totalSpan / 2.0 - tgtIdx * step;
+    } else if (tFace === 'left') {
+      tgtPinOffset = -totalSpan / 2.0 + tgtIdx * step;
+    }
+  }
+
+  // Guardar índices de puerto en el objeto link para anticolisión determinista de etiquetas
+  if (link && typeof link === 'object') {
+    link._srcIdx = srcIdx;
+    link._tgtIdx = tgtIdx;
+    link._srcN = srcN;
+    link._tgtN = tgtN;
   }
 
   let tgtPt = { x: tgtCx, y: tgtCy };
@@ -1944,132 +2050,46 @@ function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
     tgtPt = { x: tgtNx + tgtHalf.halfW * 2, y: tgtCy + tgtPinOffset };
   }
 
-  // 3. Enrutamiento del corredor con Abanico Bilateral Adaptativo (sin cruces y pistas paralelas)
-  let rawPath = [];
+  // 3. Vértices de conexión fija y línea recta / dirección libre estilo The Dude
+  // STUB_DIST de 72px para alojar la etiqueta con separación respecto al nodo y ubicar el vértice tras ella
+  const STUB_DIST = 72;
 
-  if (isSVert) {
-    const gapY = Math.abs(tgtPt.y - srcPt.y);
-    const stub = Math.min(22, Math.max(14, gapY * 0.18));
-    const usableY = Math.max(0, gapY - 2 * stub);
+  let srcVertex = { x: srcPt.x, y: srcPt.y };
+  if (sFace === 'bottom') {
+    srcVertex = { x: srcPt.x, y: srcPt.y + STUB_DIST };
+  } else if (sFace === 'top') {
+    srcVertex = { x: srcPt.x, y: srcPt.y - STUB_DIST };
+  } else if (sFace === 'right') {
+    srcVertex = { x: srcPt.x + STUB_DIST, y: srcPt.y };
+  } else { // left
+    srcVertex = { x: srcPt.x - STUB_DIST, y: srcPt.y };
+  }
 
-    // Separar hermanos en grupo Izquierdo (< srcCx) y grupo Derecho (>= srcCx)
-    const leftGroup = allSrcSiblings.filter(s => s.cx < srcCx);
-    const rightGroup = allSrcSiblings.filter(s => s.cx >= srcCx);
+  let tgtVertex = { x: tgtPt.x, y: tgtPt.y };
+  if (tFace === 'top') {
+    tgtVertex = { x: tgtPt.x, y: tgtPt.y - STUB_DIST };
+  } else if (tFace === 'bottom') {
+    tgtVertex = { x: tgtPt.x, y: tgtPt.y + STUB_DIST };
+  } else if (tFace === 'left') {
+    tgtVertex = { x: tgtPt.x - STUB_DIST, y: tgtPt.y };
+  } else { // right
+    tgtVertex = { x: tgtPt.x + STUB_DIST, y: tgtPt.y };
+  }
 
-    const isGoingLeft = tgtCx < srcCx;
-    let trackFraction = 0.5;
-
-    if (isGoingLeft && leftGroup.length > 1) {
-      // En grupo izquierdo: ordenado por cx ascendente (0 = más a la izquierda / exterior, n-1 = más cercano al centro / interior)
-      // El exterior gira más arriba (cerca del origen), el interior gira más abajo (lejos del origen)
-      const idxInLeft = leftGroup.findIndex(s => (link && s.linkId === link.id) || s.id === targetNode.id);
-      if (idxInLeft !== -1) {
-        trackFraction = idxInLeft / (leftGroup.length - 1);
-      }
-    } else if (!isGoingLeft && rightGroup.length > 1) {
-      // En grupo derecho: ordenado por cx ascendente (0 = más cercano al centro / interior, n-1 = más a la derecha / exterior)
-      // El exterior gira más arriba (cerca del origen), el interior gira más abajo (lejos del origen)
-      const idxInRight = rightGroup.findIndex(s => (link && s.linkId === link.id) || s.id === targetNode.id);
-      if (idxInRight !== -1) {
-        trackFraction = 1.0 - (idxInRight / (rightGroup.length - 1));
-      }
-    }
-
-    let midY = (srcPt.y + tgtPt.y) / 2.0;
-    if (sFace === 'bottom') {
-      midY = (srcPt.y + stub) + trackFraction * usableY;
-    } else {
-      midY = (srcPt.y - stub) - trackFraction * usableY;
-    }
-
-    if (isTVert) {
-      rawPath = [
-        srcPt,
-        { x: srcPt.x, y: midY },
-        { x: tgtPt.x, y: midY },
-        tgtPt
-      ];
-    } else {
-      rawPath = [
-        srcPt,
-        { x: srcPt.x, y: tgtPt.y },
-        tgtPt
-      ];
-    }
-  } else {
-    const gapX = Math.abs(tgtPt.x - srcPt.x);
-    const stubX = Math.min(22, Math.max(14, gapX * 0.18));
-    const usableX = Math.max(0, gapX - 2 * stubX);
-
-    // Separar hermanos en grupo Superior (< srcCy) y grupo Inferior (>= srcCy)
-    const topGroup = allSrcSiblings.filter(s => s.cy < srcCy);
-    const bottomGroup = allSrcSiblings.filter(s => s.cy >= srcCy);
-
-    const isGoingTop = tgtCy < srcCy;
-    let trackFraction = 0.5;
-
-    if (isGoingTop && topGroup.length > 1) {
-      // topGroup ordenado por cy ascendente (0 = más arriba / exterior, n-1 = más cerca del centro / interior)
-      const idxInTop = topGroup.findIndex(s => (link && s.linkId === link.id) || s.id === targetNode.id);
-      if (idxInTop !== -1) {
-        trackFraction = idxInTop / (topGroup.length - 1);
-      }
-    } else if (!isGoingTop && bottomGroup.length > 1) {
-      // bottomGroup ordenado por cy ascendente (0 = más cerca del centro / interior, n-1 = más abajo / exterior)
-      const idxInBottom = bottomGroup.findIndex(s => (link && s.linkId === link.id) || s.id === targetNode.id);
-      if (idxInBottom !== -1) {
-        trackFraction = 1.0 - (idxInBottom / (bottomGroup.length - 1));
-      }
-    }
-
-    let midX = (srcPt.x + tgtPt.x) / 2.0;
-    if (sFace === 'right') {
-      midX = (srcPt.x + stubX) + trackFraction * usableX;
-    } else {
-      midX = (srcPt.x - stubX) - trackFraction * usableX;
-    }
-
-    if (!isTVert) {
-      rawPath = [
-        srcPt,
-        { x: midX, y: srcPt.y },
-        { x: midX, y: tgtPt.y },
-        tgtPt
-      ];
-    } else {
-      rawPath = [
-        srcPt,
-        { x: tgtPt.x, y: srcPt.y },
-        tgtPt
-      ];
+  // Soporte para polígonos de vértices / waypoints personalizados intermedios
+  let customWaypoints = [];
+  if (link && link.extra_data) {
+    if (Array.isArray(link.extra_data.vertices)) {
+      customWaypoints = link.extra_data.vertices;
+    } else if (Array.isArray(link.extra_data.waypoints)) {
+      customWaypoints = link.extra_data.waypoints;
     }
   }
 
-  // 4. Esquivar obstáculos de nodos intermedios (Evita tocar el contorno de otros nodos)
-  const obstacles = getObstaclesForLink(sourceNode.id, targetNode.id);
-  const clearedPath = avoidObstaclesOrthogonal(rawPath, obstacles);
+  const rawPath = [srcPt, srcVertex, ...customWaypoints, tgtVertex, tgtPt];
 
-  // 5. Simplificar puntos colineales / redundantes
-  const simplified = [clearedPath[0]];
-  for (let i = 1; i < clearedPath.length; i++) {
-    const pt = clearedPath[i];
-    const prev = simplified[simplified.length - 1];
-    if (Math.hypot(pt.x - prev.x, pt.y - prev.y) > 0.5) {
-      if (simplified.length >= 2) {
-        const pPrev = simplified[simplified.length - 2];
-        const isCollinearX = Math.abs(pPrev.x - prev.x) < 0.5 && Math.abs(prev.x - pt.x) < 0.5;
-        const isCollinearY = Math.abs(pPrev.y - prev.y) < 0.5 && Math.abs(prev.y - pt.y) < 0.5;
-        if (isCollinearX || isCollinearY) {
-          simplified[simplified.length - 1] = pt;
-          continue;
-        }
-      }
-      simplified.push(pt);
-    }
-  }
-
-  // 6. Suavizar esquinas con curvas de 8px
-  const rounded = roundCorners(simplified, 8);
+  // 4. Suavizar esquinas con curvas de 6px
+  const rounded = roundCorners(rawPath, 6);
 
   const pts = [];
   for (let i = 0; i < rounded.length; i++) {
@@ -2120,13 +2140,28 @@ function updateAllLinkColors() {
     const srcNode = nodeMap.get(sourceId);
     const tgtNode = nodeMap.get(targetId);
     if (line && line.getStage()) {
+      const isNetboxDocumented = !!link?.netbox_cable_id;
+      const isVisualNote = !!(link?.extra_data && (link.extra_data.is_note_bridge || link.extra_data.is_visual_only));
+      const isDraftOrUndocumented = !isNetboxDocumented && !isVisualNote;
       const isIntermap = !!(link && link.extra_data && (link.extra_data.is_intermap || link.extra_data.remote_node_id));
-      const color = getLinkColor(link, srcNode, tgtNode);
-      line.stroke(color);
-      line.fill(color);
-      line.strokeWidth(isIntermap ? 2.5 : 2);
-      line.shadowBlur(0);
-      line.shadowOpacity(0);
+
+      if (isDraftOrUndocumented) {
+        line.stroke('#22c55e');
+        line.fill('#22c55e');
+        line.strokeWidth(2.8);
+        line.dash([12, 8]);
+        line.shadowColor('#ffffff');
+        line.shadowBlur(4);
+        line.shadowOpacity(0.95);
+      } else {
+        const color = getLinkColor(link, srcNode, tgtNode);
+        line.stroke(color);
+        line.fill(color);
+        line.strokeWidth(isIntermap ? 2.5 : 2);
+        line.dash(isIntermap ? [6, 4] : undefined);
+        line.shadowBlur(0);
+        line.shadowOpacity(0);
+      }
     }
   });
   linksLayer.batchDraw();
@@ -2171,6 +2206,14 @@ function createLinkPortBadge(text, color = '#38bdf8') {
   return group;
 }
 
+function getNetBoxDeviceUrl(deviceId, subpath = '') {
+  if (!deviceId) return '#';
+  const base = window.netboxExternalUrl || `https://${window.location.hostname || '10.9.1.6'}:8443`;
+  const cleanBase = base.replace(/\/+$/, '');
+  const cleanSub = subpath ? (subpath.startsWith('/') ? subpath : `/${subpath}`) : '';
+  return `${cleanBase}/dcim/devices/${deviceId}${cleanSub}`;
+}
+
 function renderLink(link, nodesDict) {
   const source = nodesDict.get(link.source_node_id);
   const target = nodesDict.get(link.target_node_id);
@@ -2181,7 +2224,18 @@ function renderLink(link, nodesDict) {
   const direction = link.extra_data?.direction || 'source_to_target';
   const arrowPts = getArrowPointsForDirection(pts, direction);
 
-  const color = getLinkColor(link, source, target);
+  const isNetboxDocumented = !!link.netbox_cable_id;
+  const isVisualNote = !!(link.extra_data && (link.extra_data.is_note_bridge || link.extra_data.is_visual_only));
+  const isDraftOrUndocumented = !isNetboxDocumented && !isVisualNote;
+
+  const color = isDraftOrUndocumented ? '#22c55e' : getLinkColor(link, source, target);
+
+  let linkDash = undefined;
+  if (isDraftOrUndocumented) {
+    linkDash = [12, 8];
+  } else if (isIntermap) {
+    linkDash = [6, 4];
+  }
 
   const line = new Konva.Arrow({
     points: arrowPts,
@@ -2190,8 +2244,11 @@ function renderLink(link, nodesDict) {
     pointerWidth: 8,
     stroke: color,
     fill: color,
-    strokeWidth: isIntermap ? 2.5 : 2,
-    dash: isIntermap ? [6, 4] : undefined,
+    strokeWidth: isDraftOrUndocumented ? 2.8 : (isIntermap ? 2.5 : 2),
+    dash: linkDash,
+    shadowColor: isDraftOrUndocumented ? '#ffffff' : undefined,
+    shadowBlur: isDraftOrUndocumented ? 4 : 0,
+    shadowOpacity: isDraftOrUndocumented ? 0.95 : 0,
     hitStrokeWidth: 14,
     lineCap: 'round',
     lineJoin: 'round',
@@ -2202,13 +2259,15 @@ function renderLink(link, nodesDict) {
   // Etiquetas flotantes de interfaces/puertos
   let srcBadge = null;
   let tgtBadge = null;
+  let draftBadge = null;
 
   const updateBadgesPos = (ptsVec) => {
     if (!ptsVec || ptsVec.length < 4) return;
 
-    // Cálculo de desfase anticolisión basado en hash del enlace
+    // Desfase anticolisión determinista basado en el índice de puerto en el switch/router
     const linkHash = Math.abs(parseInt(link.id, 10) || 0);
-    const staggerOffset = (linkHash % 2 === 1) ? 14 : 0;
+    const sIdx = (link._srcIdx !== undefined) ? link._srcIdx : (linkHash % 3);
+    const tIdx = (link._tgtIdx !== undefined) ? link._tgtIdx : ((linkHash + 1) % 3);
 
     // --- 1. UBICACIÓN Y ROTACIÓN DE ETIQUETA ORIGEN (SRC BADGE) ---
     if (srcBadge) {
@@ -2218,10 +2277,8 @@ function renderLink(link, nodesDict) {
       const dy0 = p1y - p0y;
       const segLen0 = Math.hypot(dx0, dy0);
 
-      if (segLen0 > 14) {
-        // Separación suficiente con escalonamiento dinámico para no encimar etiquetas contiguas
-        const baseOffset = segLen0 > 85 ? (38 + staggerOffset) : Math.max(20, segLen0 * 0.40);
-        const offsetDist = Math.min(baseOffset, Math.max(16, segLen0 - 16));
+      if (segLen0 > 8) {
+        const offsetDist = Math.min(38, segLen0 * 0.53);
         const bx = p0x + (dx0 / segLen0) * offsetDist;
         const by = p0y + (dy0 / segLen0) * offsetDist;
 
@@ -2246,10 +2303,8 @@ function renderLink(link, nodesDict) {
       const dy1 = pLast2y - pLast1y;
       const segLen1 = Math.hypot(dx1, dy1);
 
-      if (segLen1 > 14) {
-        // Separación suficiente con escalonamiento dinámico para no encimar etiquetas contiguas
-        const baseOffset = segLen1 > 90 ? (42 + staggerOffset) : Math.max(22, segLen1 * 0.44);
-        const offsetDist = Math.min(baseOffset, Math.max(18, segLen1 - 18));
+      if (segLen1 > 8) {
+        const offsetDist = Math.min(38, segLen1 * 0.53);
         const bx = pLast2x - (dx1 / segLen1) * offsetDist;
         const by = pLast2y - (dy1 / segLen1) * offsetDist;
 
@@ -2264,18 +2319,37 @@ function renderLink(link, nodesDict) {
         tgtBadge.visible(false);
       }
     }
+
+    // --- 3. UBICACIÓN DE ETIQUETA PENDIENTE NETBOX (DRAFT BADGE) ---
+    if (draftBadge) {
+      const n = ptsVec.length;
+      if (n >= 4) {
+        const midIdx = Math.floor(n / 4) * 2;
+        const p1x = ptsVec[midIdx], p1y = ptsVec[midIdx + 1];
+        const p2x = ptsVec[midIdx + 2] || p1x, p2y = ptsVec[midIdx + 3] || p1y;
+        const mx = (p1x + p2x) / 2;
+        const my = (p1y + p2y) / 2;
+        draftBadge.position({ x: mx, y: my });
+        draftBadge.visible(true);
+      }
+    }
   };
 
   // Agregar primero la línea y LUEGO las etiquetas encima para garantizar Z-index superior
   linksLayer.add(line);
 
-  if (link.source_interface) {
-    srcBadge = createLinkPortBadge(link.source_interface, '#38bdf8');
-    linksLayer.add(srcBadge);
-  }
-  if (link.target_interface) {
-    tgtBadge = createLinkPortBadge(link.target_interface, '#c084fc');
-    linksLayer.add(tgtBadge);
+  if (isNetboxDocumented) {
+    if (link.source_interface) {
+      srcBadge = createLinkPortBadge(link.source_interface, '#38bdf8');
+      linksLayer.add(srcBadge);
+    }
+    if (link.target_interface) {
+      tgtBadge = createLinkPortBadge(link.target_interface, '#c084fc');
+      linksLayer.add(tgtBadge);
+    }
+  } else if (isDraftOrUndocumented) {
+    draftBadge = createLinkPortBadge('⚡ Sin Doc NetBox', '#10b981');
+    linksLayer.add(draftBadge);
   }
   updateBadgesPos(arrowPts);
 
@@ -2346,6 +2420,27 @@ function renderLink(link, nodesDict) {
       if (evt) {
         standardTooltip.style.left = `${evt.clientX + 14}px`;
         standardTooltip.style.top = `${evt.clientY + 14}px`;
+      }
+
+      if (isDraftOrUndocumented) {
+        const sBadge = document.getElementById('tooltip-link-status-badge');
+        if (sBadge) sBadge.innerHTML = '<span class="status-badge" style="background: rgba(234, 179, 8, 0.2); color: #facc15; border: 1px dashed #eab308;"><i class="fas fa-exclamation-triangle"></i> Sin Doc NetBox</span>';
+        const sName = document.getElementById('tooltip-link-src-name');
+        if (sName) sName.textContent = source.name || 'Nodo A';
+        const tName = document.getElementById('tooltip-link-tgt-name');
+        if (tName) tName.textContent = target.name || 'Nodo B';
+        const srcPortEl = document.getElementById('tooltip-link-src-port');
+        if (srcPortEl) srcPortEl.textContent = '[Pendiente]';
+        const tgtPortEl = document.getElementById('tooltip-link-tgt-port');
+        if (tgtPortEl) tgtPortEl.textContent = '[Pendiente]';
+        const cableEl = document.getElementById('tooltip-link-cable');
+        if (cableEl) cableEl.textContent = 'LÍNEA PUNTEADA (BORRADOR)';
+        const cableBadge = document.getElementById('tooltip-link-cable-badge');
+        if (cableBadge) cableBadge.textContent = 'Clic para abrir NetBox y validar';
+        const telemBox = document.getElementById('tooltip-link-telemetry-box');
+        if (telemBox) telemBox.style.display = 'none';
+        standardTooltip.style.display = 'block';
+        return;
       }
 
       const sNodeName = source.name || 'Nodo A';
@@ -2421,10 +2516,14 @@ function renderLink(link, nodesDict) {
 
   line.on('mouseleave', () => {
     document.body.style.cursor = 'default';
-    const curColor = getLinkColor(link, source, target);
+    const curColor = isDraftOrUndocumented ? '#22c55e' : getLinkColor(link, source, target);
     line.stroke(curColor);
     line.fill(curColor);
-    line.strokeWidth(isIntermap ? 2.5 : 2);
+    line.strokeWidth(isDraftOrUndocumented ? 2.8 : (isIntermap ? 2.5 : 2));
+    line.dash(linkDash);
+    line.shadowColor(isDraftOrUndocumented ? '#ffffff' : undefined);
+    line.shadowBlur(isDraftOrUndocumented ? 4 : 0);
+    line.shadowOpacity(isDraftOrUndocumented ? 0.95 : 0);
     linksLayer.batchDraw();
 
     const tooltip = document.getElementById('canvas-link-tooltip');
@@ -2439,12 +2538,229 @@ function renderLink(link, nodesDict) {
     if (tooltip) tooltip.style.display = 'none';
     const gponTooltip = document.getElementById('canvas-gpon-tooltip');
     if (gponTooltip) gponTooltip.style.display = 'none';
-    openLinkPropertiesModal(link, source, target);
+
+    if (isDraftOrUndocumented) {
+      openNetboxLinkAssistant(link, source, target);
+    } else {
+      openLinkPropertiesModal(link, source, target);
+    }
   });
 
-  const linkObj = { line, srcBadge, tgtBadge, updateBadgesPos, sourceId: source.id, targetId: target.id, link, sourceNode: source, targetNode: target };
+  const linkObj = { line, srcBadge, tgtBadge, draftBadge, updateBadgesPos, sourceId: source.id, targetId: target.id, link, sourceNode: source, targetNode: target };
   linkLines.set(link.id, linkObj);
   registerAttachedLink(link.id, source.id, target.id, linkObj);
+}
+
+// ─── Asistente de Conexión en NetBox (Para Aristas Pendientes) ────────────────
+async function openNetboxLinkAssistant(link, sourceNode, targetNode, autoOpenBoth = false) {
+  const modal = document.getElementById('modal-netbox-link-assistant');
+  if (!modal) return;
+
+  const inputId = document.getElementById('netbox-assistant-link-id');
+  const srcNameEl = document.getElementById('netbox-assistant-src-name');
+  const srcIpEl = document.getElementById('netbox-assistant-src-ip');
+  const tgtNameEl = document.getElementById('netbox-assistant-tgt-name');
+  const tgtIpEl = document.getElementById('netbox-assistant-tgt-ip');
+  const srcLinkEl = document.getElementById('netbox-assistant-src-link');
+  const tgtLinkEl = document.getElementById('netbox-assistant-tgt-link');
+  const feedbackEl = document.getElementById('netbox-assistant-feedback');
+
+  if (inputId) inputId.value = link.id;
+  if (srcNameEl) srcNameEl.textContent = sourceNode.name || 'Equipo A';
+  if (srcIpEl) srcIpEl.textContent = sourceNode.ip ? `IP: ${sourceNode.ip}` : (sourceNode.device_type || '—');
+  if (tgtNameEl) tgtNameEl.textContent = targetNode.name || 'Equipo B';
+  if (tgtIpEl) tgtIpEl.textContent = targetNode.ip ? `IP: ${targetNode.ip}` : (targetNode.device_type || '—');
+
+  let srcExtra = sourceNode.extra_data;
+  if (typeof srcExtra === 'string') {
+    try { srcExtra = JSON.parse(srcExtra); } catch(e) { srcExtra = {}; }
+  } else if (!srcExtra) {
+    srcExtra = {};
+  }
+
+  let tgtExtra = targetNode.extra_data;
+  if (typeof tgtExtra === 'string') {
+    try { tgtExtra = JSON.parse(tgtExtra); } catch(e) { tgtExtra = {}; }
+  } else if (!tgtExtra) {
+    tgtExtra = {};
+  }
+
+  let linkExtra = link.extra_data;
+  if (typeof linkExtra === 'string') {
+    try { linkExtra = JSON.parse(linkExtra); } catch(e) { linkExtra = {}; }
+  } else if (!linkExtra) {
+    linkExtra = {};
+  }
+
+  const srcDevId = sourceNode.device_id || srcExtra.device_id || srcExtra.netbox_id || linkExtra.source_submap_device_id || linkExtra.remote_node_id;
+  const tgtDevId = targetNode.device_id || tgtExtra.device_id || tgtExtra.netbox_id || linkExtra.target_submap_device_id || linkExtra.remote_node_id;
+
+  const srcUrl = srcDevId ? getNetBoxDeviceUrl(srcDevId, '/interfaces/') : '#';
+  const tgtUrl = tgtDevId ? getNetBoxDeviceUrl(tgtDevId, '/interfaces/') : '#';
+
+  if (srcLinkEl) {
+    srcLinkEl.href = srcUrl;
+    srcLinkEl.style.opacity = srcDevId ? '1' : '0.5';
+    srcLinkEl.style.pointerEvents = srcDevId ? 'auto' : 'none';
+  }
+  if (tgtLinkEl) {
+    tgtLinkEl.href = tgtUrl;
+    tgtLinkEl.style.opacity = tgtDevId ? '1' : '0.5';
+    tgtLinkEl.style.pointerEvents = tgtDevId ? 'auto' : 'none';
+  }
+
+  if (feedbackEl) {
+    feedbackEl.style.display = 'none';
+    feedbackEl.textContent = '';
+  }
+
+  const btnOpenBoth = document.getElementById('btn-netbox-assistant-open-both');
+  const btnValidate = document.getElementById('btn-netbox-assistant-validate');
+  const btnAdvanced = document.getElementById('btn-netbox-assistant-advanced');
+  const btnDelete = document.getElementById('btn-netbox-assistant-delete');
+  const btnClose = document.getElementById('btn-close-netbox-link-assistant');
+
+  const cleanUp = () => {
+    modal.style.display = 'none';
+  };
+
+  if (btnClose) btnClose.onclick = cleanUp;
+
+  if (btnOpenBoth) {
+    btnOpenBoth.onclick = (e) => {
+      e.preventDefault();
+      
+      let w1 = null;
+      let w2 = null;
+
+      if (srcDevId && srcUrl !== '#') {
+        w1 = window.open(srcUrl, '_blank');
+      }
+      if (tgtDevId && tgtUrl !== '#') {
+        w2 = window.open(tgtUrl, '_blank');
+      }
+
+      // Comprobar si el navegador bloqueó la segunda pestaña
+      const tgtBlocked = !w2 || w2.closed || typeof w2.closed === 'undefined';
+
+      if (feedbackEl) {
+        feedbackEl.style.display = 'block';
+        if (tgtBlocked) {
+          feedbackEl.style.background = 'rgba(234, 179, 8, 0.12)';
+          feedbackEl.style.border = '1px solid rgba(234, 179, 8, 0.4)';
+          feedbackEl.style.color = '#fef08a';
+          feedbackEl.innerHTML = `
+            <div style="display: flex; flex-direction: column; gap: 8px;">
+              <div style="display: flex; align-items: center; gap: 6px; font-weight: 700; color: #facc15;">
+                <i class="fas fa-exclamation-triangle"></i> Pestaña 1 (${sourceNode.name}) abierta. El navegador bloqueó la 2ª pestaña automática.
+              </div>
+              <div style="font-size: 0.76rem; color: #e2e8f0;">
+                Haz clic en el botón morado de abajo para abrir el equipo destino en NetBox:
+              </div>
+              <div>
+                <a href="${tgtUrl}" target="_blank" class="btn" style="display: inline-flex; align-items: center; gap: 6px; padding: 7px 16px; background: #9333ea; border: 1px solid #c084fc; color: #ffffff; font-weight: 800; font-size: 0.8rem; text-decoration: none; border-radius: 6px; box-shadow: 0 0 12px rgba(168, 85, 247, 0.5);">
+                  <i class="fas fa-external-link-alt"></i> 👉 Abrir 2. Destino (${targetNode.name}) en NetBox
+                </a>
+              </div>
+              <div style="font-size: 0.70rem; color: #94a3b8; margin-top: 2px;">
+                <em>💡 Tip: Haz clic en el ícono de ventanas emergentes bloqueadas en la barra de direcciones de tu navegador y selecciona "Permitir siempre" para que abra las dos pestañas de forma 100% automática.</em>
+              </div>
+            </div>
+          `;
+        } else {
+          feedbackEl.style.background = 'rgba(56, 189, 248, 0.1)';
+          feedbackEl.style.border = '1px solid rgba(56, 189, 248, 0.3)';
+          feedbackEl.style.color = '#38bdf8';
+          feedbackEl.innerHTML = `
+            <div><i class="fas fa-check-circle"></i> Abriendo interfaces de ambos equipos en NetBox. Realiza la conexión del cable y luego haz clic en <strong>"Validar e Importar de NetBox"</strong>.</div>
+          `;
+        }
+      }
+    };
+  }
+
+  if (btnValidate) {
+    btnValidate.onclick = async () => {
+      btnValidate.disabled = true;
+      btnValidate.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Validando en NetBox...';
+      try {
+        const res = await API.importLinkFromNetbox(link.id);
+        if (res && res.netbox_cable_id) {
+          link.netbox_cable_id = res.netbox_cable_id;
+          link.source_interface = res.source_interface;
+          link.target_interface = res.target_interface;
+          link.cable_type = res.cable_type;
+          link.cable_status = res.cable_status;
+
+          // Re-renderizar enlace como oficial / sólido
+          const existingEntry = linkLines.get(link.id);
+          if (existingEntry) {
+            if (existingEntry.line) existingEntry.line.destroy();
+            if (existingEntry.srcBadge) existingEntry.srcBadge.destroy();
+            if (existingEntry.tgtBadge) existingEntry.tgtBadge.destroy();
+            if (existingEntry.draftBadge) existingEntry.draftBadge.destroy();
+            linkLines.delete(link.id);
+          }
+          const dict = _getOrBuildNodeMap();
+          renderLink(link, dict);
+          linksLayer.batchDraw();
+
+          alert(`🎉 Conexión Documentada Exitosamente:\nCable #${res.netbox_cable_id} sincronizado desde NetBox (${res.source_interface || 'Puerto A'} ➔ ${res.target_interface || 'Puerto B'})`);
+          cleanUp();
+        } else {
+          throw new Error('No se detectó el cable en NetBox');
+        }
+      } catch (err) {
+        if (feedbackEl) {
+          feedbackEl.style.display = 'block';
+          feedbackEl.style.background = 'rgba(239, 68, 68, 0.12)';
+          feedbackEl.style.border = '1px solid rgba(239, 68, 68, 0.3)';
+          feedbackEl.style.color = '#f87171';
+          feedbackEl.innerHTML = `<i class="fas fa-exclamation-triangle"></i> <strong>Aún no se detecta la conexión:</strong> Asegúrate de haber guardado el cable en NetBox conectando <strong>${sourceNode.name}</strong> y <strong>${targetNode.name}</strong> y vuelve a intentar.`;
+        }
+      } finally {
+        btnValidate.disabled = false;
+        btnValidate.innerHTML = '<i class="fas fa-sync-alt"></i> Validar e Importar de NetBox';
+      }
+    };
+  }
+
+  if (btnAdvanced) {
+    btnAdvanced.onclick = () => {
+      cleanUp();
+      openLinkPropertiesModal(link, sourceNode, targetNode);
+    };
+  }
+
+  if (btnDelete) {
+    btnDelete.onclick = async () => {
+      if (!confirm(`¿Eliminar la arista borrador entre "${sourceNode.name}" y "${targetNode.name}"?`)) return;
+      try {
+        await API.deleteLink(link.id);
+        const linkEntry = linkLines.get(link.id);
+        if (linkEntry) {
+          if (linkEntry.line) linkEntry.line.destroy();
+          if (linkEntry.srcBadge) linkEntry.srcBadge.destroy();
+          if (linkEntry.tgtBadge) linkEntry.tgtBadge.destroy();
+          if (linkEntry.draftBadge) linkEntry.draftBadge.destroy();
+        }
+        linkLines.delete(link.id);
+        if (currentMap && currentMap.links) {
+          currentMap.links = currentMap.links.filter(l => l.id !== link.id);
+        }
+        linksLayer.batchDraw();
+        cleanUp();
+      } catch (err) {
+        alert('Error eliminando enlace: ' + err.message);
+      }
+    };
+  }
+
+  modal.style.display = 'flex';
+
+  if (autoOpenBoth && srcDevId && tgtDevId) {
+    if (btnOpenBoth) btnOpenBoth.click();
+  }
 }
 
 function openLinkPropertiesModal(link, sourceNode, targetNode) {
@@ -2762,14 +3078,13 @@ function openLinkPropertiesModal(link, sourceNode, targetNode) {
         const linkEntry = linkLines.get(link.id);
         if (linkEntry) {
           if (linkEntry.line) linkEntry.line.destroy();
-          if (linkEntry.hitLine) linkEntry.hitLine.destroy();
-          if (linkEntry.srcLabel) linkEntry.srcLabel.destroy();
-          if (linkEntry.tgtLabel) linkEntry.tgtLabel.destroy();
-          if (linkEntry.midLabel) linkEntry.midLabel.destroy();
-          if (linkEntry.dirArrow) linkEntry.dirArrow.destroy();
+          if (linkEntry.srcBadge) linkEntry.srcBadge.destroy();
+          if (linkEntry.tgtBadge) linkEntry.tgtBadge.destroy();
+          if (linkEntry.draftBadge) linkEntry.draftBadge.destroy();
           linkLines.delete(link.id);
-          renderLink(link);
-          layer.draw();
+          const dict = _getOrBuildNodeMap();
+          renderLink(link, dict);
+          linksLayer.batchDraw();
         }
       } catch (err) {
         showNetboxMsg(`❌ <strong>Error en NetBox:</strong> ${err.message}`, true);
@@ -2806,14 +3121,13 @@ function openLinkPropertiesModal(link, sourceNode, targetNode) {
         const linkEntry = linkLines.get(link.id);
         if (linkEntry) {
           if (linkEntry.line) linkEntry.line.destroy();
-          if (linkEntry.hitLine) linkEntry.hitLine.destroy();
-          if (linkEntry.srcLabel) linkEntry.srcLabel.destroy();
-          if (linkEntry.tgtLabel) linkEntry.tgtLabel.destroy();
-          if (linkEntry.midLabel) linkEntry.midLabel.destroy();
-          if (linkEntry.dirArrow) linkEntry.dirArrow.destroy();
+          if (linkEntry.srcBadge) linkEntry.srcBadge.destroy();
+          if (linkEntry.tgtBadge) linkEntry.tgtBadge.destroy();
+          if (linkEntry.draftBadge) linkEntry.draftBadge.destroy();
           linkLines.delete(link.id);
-          renderLink(link);
-          layer.draw();
+          const dict = _getOrBuildNodeMap();
+          renderLink(link, dict);
+          linksLayer.batchDraw();
         }
       } catch (err) {
         showNetboxMsg(`❌ <strong>Error en NetBox:</strong> ${err.message}`, true);
@@ -3810,6 +4124,11 @@ async function connectSingleTargetNode(sourceNode, node) {
 
     linksLayer.batchDraw();
 
+    // Nueva Dinámica de Aristas: Si es un borrador no documentado en NetBox, abrir el asistente e interfaces en NetBox
+    if (!newLink.netbox_cable_id && !linkExtra.is_visual_only && !linkExtra.is_note_bridge && !isSourceFtth && !isTargetFtth && !isSourceNav && !isTargetNav) {
+      openNetboxLinkAssistant(newLink, sourceNode, node, true);
+    }
+
   } catch (err) {
     alert('Error creando enlace: ' + err.message);
   } finally {
@@ -4605,8 +4924,7 @@ function selectNode(node) {
 
   const netboxBtn = document.getElementById('btn-open-netbox');
   if (node.device_id && !isParentShortcut) {
-    const host = window.location.hostname || '10.9.1.6';
-    netboxBtn.href = `https://${host}:8443/dcim/devices/${node.device_id}/`;
+    netboxBtn.href = getNetBoxDeviceUrl(node.device_id);
     netboxBtn.style.display = 'inline-flex';
 
     API.getDeviceById(node.device_id).then(dev => {
@@ -7818,11 +8136,15 @@ async function autoLayoutMapAsPCB() {
 
   function layoutPCBModule(nodeId) {
     visited.add(nodeId);
+    const nObj = nodeMap.get(nodeId);
+    const nHalf = nObj ? getNodeHalfDimensions(nObj) : { halfW: compW / 2 };
+    const thisCompW = Math.max(compW, nHalf.halfW * 2);
+
     const rawKids = childrenMap.get(nodeId) || [];
     const kids = rawKids.filter(kid => !visited.has(kid));
 
     if (kids.length === 0) {
-      const singleWidth = compW + colGap;
+      const singleWidth = thisCompW + colGap;
       const nodePos = new Map();
       nodePos.set(nodeId, { relX: 0.0, depth: levelMap.get(nodeId) || 0 });
       return {
@@ -7857,7 +8179,7 @@ async function autoLayoutMapAsPCB() {
     const parentRelX = (firstKidRelX + lastKidRelX) / 2.0;
 
     moduleNodes.get(nodeId).relX = parentRelX;
-    const totalWidth = Math.max(compW + colGap, totalChildrenWidth);
+    const totalWidth = Math.max(thisCompW + colGap, totalChildrenWidth);
 
     return {
       width: totalWidth,

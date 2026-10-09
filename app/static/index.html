@@ -4,8 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>NexusDude - The Modern Network Dude</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=5.0">
-  <link rel="stylesheet" href="/static/css/docs.css?v=5.0">
+  <link rel="stylesheet" href="/static/css/style.css?v=5.3">
+  <link rel="stylesheet" href="/static/css/docs.css?v=5.3">
   <!-- FontAwesome Icons -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <!-- Konva Canvas Library -->
@@ -1003,6 +1003,93 @@
     </div>
   </div>
 
+  <!-- Modal: Asistente de Conexión en NetBox para Aristas Pendientes -->
+  <div class="modal-overlay" id="modal-netbox-link-assistant" style="display: none;">
+    <div class="modal-card" style="width: 560px; max-width: 95vw;">
+      <div class="modal-header" style="background: linear-gradient(135deg, rgba(16, 185, 129, 0.15), rgba(56, 189, 248, 0.15)); border-bottom: 1px solid rgba(16, 185, 129, 0.3);">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <div style="width: 34px; height: 34px; border-radius: 8px; background: rgba(16, 185, 129, 0.2); border: 1px dashed #10b981; display: flex; align-items: center; justify-content: center;">
+            <i class="fas fa-plug" style="color: #34d399; font-size: 1.1rem;"></i>
+          </div>
+          <div>
+            <h3 class="modal-title" style="font-size: 1.05rem; color: #f8fafc;">Documentación de Conexión en NetBox</h3>
+            <div style="font-size: 0.72rem; color: #94a3b8;">Arista sin cable físico registrado en NetBox (Línea Punteada Verde/Blanco)</div>
+          </div>
+        </div>
+        <button class="modal-close" id="btn-close-netbox-link-assistant">&times;</button>
+      </div>
+
+      <div class="modal-form" style="padding: 16px 20px; gap: 14px;">
+        <input type="hidden" id="netbox-assistant-link-id">
+
+        <!-- Banner Explicativo -->
+        <div style="background: rgba(16, 185, 129, 0.08); border: 1px dashed rgba(16, 185, 129, 0.4); border-radius: 8px; padding: 12px 14px; display: flex; gap: 12px; align-items: flex-start;">
+          <i class="fas fa-info-circle" style="color: #10b981; font-size: 1.3rem; margin-top: 2px;"></i>
+          <div style="font-size: 0.78rem; color: #e2e8f0; line-height: 1.45;">
+            En NexusDude solo se documentan como <strong>aristas oficiales (línea continua)</strong> aquellas conexiones que existen físicamente en <strong>NetBox</strong>. 
+            Abre las interfaces de los dos equipos, realiza la conexión del cable en NetBox y presiona <strong>"Validar e Importar de NetBox"</strong>.
+          </div>
+        </div>
+
+        <!-- Tarjetas de los dos equipos a conectar -->
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+          <!-- Tarjeta Equipo Origen -->
+          <div style="background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(56, 189, 248, 0.3); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; justify-content: space-between; gap: 10px;">
+            <div>
+              <div style="font-size: 0.68rem; color: #94a3b8; text-transform: uppercase; font-weight: 700; display: flex; align-items: center; gap: 5px;">
+                <span style="background: #0284c7; color: white; padding: 1px 6px; border-radius: 4px; font-size: 0.65rem; font-weight: 800;">Paso 1</span>
+                <i class="fas fa-server" style="color: #38bdf8;"></i> Equipo Origen (A)
+              </div>
+              <div id="netbox-assistant-src-name" style="font-size: 0.92rem; font-weight: 700; color: #38bdf8; margin-top: 4px; word-break: break-word;">Equipo A</div>
+              <div id="netbox-assistant-src-ip" style="font-size: 0.74rem; color: #64748b; font-family: monospace;">—</div>
+            </div>
+            <a id="netbox-assistant-src-link" href="#" target="_blank" class="btn" style="width: 100%; justify-content: center; font-size: 0.76rem; padding: 8px 10px; background: rgba(56, 189, 248, 0.15); border: 1px solid #38bdf8; color: #38bdf8; text-decoration: none; font-weight: 700;">
+              <i class="fas fa-external-link-alt"></i> 1. Abrir Origen en NetBox
+            </a>
+          </div>
+
+          <!-- Tarjeta Equipo Destino -->
+          <div style="background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(168, 85, 247, 0.3); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; justify-content: space-between; gap: 10px;">
+            <div>
+              <div style="font-size: 0.68rem; color: #94a3b8; text-transform: uppercase; font-weight: 700; display: flex; align-items: center; gap: 5px;">
+                <span style="background: #9333ea; color: white; padding: 1px 6px; border-radius: 4px; font-size: 0.65rem; font-weight: 800;">Paso 2</span>
+                <i class="fas fa-server" style="color: #a855f7;"></i> Equipo Destino (B)
+              </div>
+              <div id="netbox-assistant-tgt-name" style="font-size: 0.92rem; font-weight: 700; color: #a855f7; margin-top: 4px; word-break: break-word;">Equipo B</div>
+              <div id="netbox-assistant-tgt-ip" style="font-size: 0.74rem; color: #64748b; font-family: monospace;">—</div>
+            </div>
+            <a id="netbox-assistant-tgt-link" href="#" target="_blank" class="btn" style="width: 100%; justify-content: center; font-size: 0.76rem; padding: 8px 10px; background: rgba(168, 85, 247, 0.15); border: 1px solid #a855f7; color: #c084fc; text-decoration: none; font-weight: 700;">
+              <i class="fas fa-external-link-alt"></i> 2. Abrir Destino en NetBox
+            </a>
+          </div>
+        </div>
+
+        <!-- Botón para abrir ambas pestañas de golpe -->
+        <button type="button" class="btn" id="btn-netbox-assistant-open-both" style="width: 100%; justify-content: center; padding: 10px 14px; font-size: 0.84rem; font-weight: 700; background: linear-gradient(135deg, rgba(14, 165, 233, 0.25), rgba(168, 85, 247, 0.25)); border: 1px solid rgba(56, 189, 248, 0.5); color: #f8fafc; cursor: pointer;">
+          <i class="fas fa-window-restore" style="color: #38bdf8;"></i> Abrir Ambas Pestañas en NetBox
+        </button>
+
+        <!-- Mensaje de estado / feedback -->
+        <div id="netbox-assistant-feedback" style="display: none; font-size: 0.76rem; padding: 8px 12px; border-radius: 6px; line-height: 1.4;"></div>
+
+        <!-- Footer / Botones de Acción -->
+        <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--border-color);">
+          <button type="button" class="btn btn-danger" id="btn-netbox-assistant-delete" style="font-size: 0.76rem; padding: 6px 12px;">
+            <i class="fas fa-trash-alt"></i> Eliminar Arista
+          </button>
+          <div style="display: flex; gap: 8px;">
+            <button type="button" class="btn" id="btn-netbox-assistant-advanced" title="Abrir propiedades de flujo y dirección">
+              <i class="fas fa-sliders-h"></i> Propiedades
+            </button>
+            <button type="button" class="btn btn-success" id="btn-netbox-assistant-validate" style="font-size: 0.82rem; font-weight: 700; padding: 7px 16px; background: #10b981; border-color: #059669; color: #fff;">
+              <i class="fas fa-sync-alt"></i> Validar e Importar de NetBox
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Modal Propiedades de Arista de Servicio (Dirección de Flujo / Padre-Hijo) -->
   <div class="modal-overlay" id="modal-link-properties" style="display: none;">
     <div class="modal-card" style="width: 520px;">
@@ -1972,9 +2059,9 @@
   </div>
 
   <!-- Scripts -->
-  <script src="/static/js/api.js?v=5.1"></script>
-  <script src="/static/js/app.js?v=5.1"></script>
-  <script src="/static/js/docs.js?v=5.1"></script>
+  <script src="/static/js/api.js?v=5.3.2"></script>
+  <script src="/static/js/app.js?v=5.3.2"></script>
+  <script src="/static/js/docs.js?v=5.3.2"></script>
 </body>
 </html>
 
