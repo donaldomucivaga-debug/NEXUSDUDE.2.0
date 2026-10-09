@@ -31,6 +31,7 @@ async def init_db():
                 grid_size INTEGER DEFAULT 20,
                 position INTEGER DEFAULT 0,
                 netbox_site_id INTEGER,
+                netbox_location_id INTEGER,
                 site_name TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -45,11 +46,16 @@ async def init_db():
         except Exception:
             pass
         try:
+            await db.execute("ALTER TABLE maps ADD COLUMN netbox_location_id INTEGER;")
+        except Exception:
+            pass
+        try:
             await db.execute("ALTER TABLE maps ADD COLUMN site_name TEXT;")
         except Exception:
             pass
         await db.execute("CREATE INDEX IF NOT EXISTS idx_maps_position ON maps(position);")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_maps_netbox_site ON maps(netbox_site_id);")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_maps_netbox_location ON maps(netbox_location_id);")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_maps_site_name ON maps(site_name);")
 
         # Tabla de Jerarquía y Accesos Múltiples a Mapas (N-a-N: un mapa fuente puede tener múltiples accesos/rutas)

@@ -70,6 +70,24 @@ async def get_inventory_manufacturers(user: Dict[str, Any] = Depends(get_current
     """Lista de fabricantes de equipos (MikroTik, Cambium, etc.)."""
     return await inventory_service.get_manufacturers()
 
+@router.get("/locations")
+async def get_inventory_locations(user: Dict[str, Any] = Depends(get_current_user)):
+    """Lista de ubicaciones registradas en NetBox."""
+    return await inventory_service.get_locations()
+
+@router.post("/sync-hierarchy")
+async def sync_hierarchy_from_netbox(user: Dict[str, Any] = Depends(get_current_user)):
+    """Sincroniza la estructura de ubicaciones y sitios de NetBox para generar automáticamente la jerarquía de mapas y portales."""
+    return await inventory_service.sync_netbox_hierarchy_and_maps()
+
+@router.post("/sync-links")
+async def sync_links_from_netbox(
+    map_id: Optional[str] = Query(None, description="Filtrar sincronización para un mapa específico"),
+    user: Dict[str, Any] = Depends(get_current_user)
+):
+    """Sincroniza masivamente cables y enlaces inalámbricos de NetBox (tanto intra-mapa como inter-mapa)."""
+    return await inventory_service.sync_all_links_from_netbox(map_id=map_id)
+
 @router.post("/refresh")
 async def refresh_inventory_cache(user: Dict[str, Any] = Depends(get_current_user)):
     """Fuerza la recarga de inventario desde NetBox."""

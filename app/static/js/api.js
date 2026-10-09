@@ -529,6 +529,31 @@ const API = {
     throw new Error(await res.text());
   },
 
+  async syncNetboxHierarchy() {
+    const res = await this.fetch('/api/inventory/sync-hierarchy', {
+      method: 'POST'
+    });
+    if (res.ok) return await res.json();
+    throw new Error(await res.text());
+  },
+
+  async syncNetboxLinks(mapId = null) {
+    const url = mapId ? `/api/inventory/sync-links?map_id=${encodeURIComponent(mapId)}` : '/api/inventory/sync-links';
+    const res = await this.fetch(url, {
+      method: 'POST'
+    });
+    if (res.ok) return await res.json();
+    throw new Error(await res.text());
+  },
+
+  async syncAllNetboxNodes() {
+    const res = await this.fetch('/api/maps/sync-all-netbox-nodes', {
+      method: 'POST'
+    });
+    if (res.ok) return await res.json();
+    throw new Error(await res.text());
+  },
+
   async saveZabbixConfig(payload) {
     const res = await this.fetch('/api/config/zabbix', {
       method: 'POST',

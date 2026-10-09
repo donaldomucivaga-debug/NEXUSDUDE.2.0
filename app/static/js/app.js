@@ -8498,6 +8498,94 @@ window.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
+  // 5. Sincronizar Aristas (Intra e Intermapa) del Mapa Actual desde NetBox
+  const btnSyncNetboxLinksCurrent = document.getElementById('btn-sync-netbox-links-current');
+  if (btnSyncNetboxLinksCurrent) {
+    btnSyncNetboxLinksCurrent.addEventListener('click', async () => {
+      if (!currentMap) return;
+      const origHtml = btnSyncNetboxLinksCurrent.innerHTML;
+      btnSyncNetboxLinksCurrent.style.pointerEvents = 'none';
+      btnSyncNetboxLinksCurrent.innerHTML = '<i class="fas fa-spinner fa-spin" style="color: #38bdf8;"></i> <span>Sincronizando aristas...</span>';
+
+      try {
+        const res = await API.syncNetboxLinks(currentMap.id);
+        await loadMap(currentMap.id);
+        alert(`⚡ Sincronización de Aristas completada:\n\n${res.message || 'Aristas intra e intermapa sincronizadas exitosamente.'}`);
+      } catch (err) {
+        alert('❌ Error sincronizando aristas con NetBox: ' + err.message);
+      } finally {
+        btnSyncNetboxLinksCurrent.style.pointerEvents = '';
+        btnSyncNetboxLinksCurrent.innerHTML = origHtml;
+      }
+    });
+  }
+
+  // 6. Sincronizar Aristas Globales (Todos los Mapas) desde NetBox
+  const btnSyncNetboxLinksAll = document.getElementById('btn-sync-netbox-links-all');
+  if (btnSyncNetboxLinksAll) {
+    btnSyncNetboxLinksAll.addEventListener('click', async () => {
+      if (!confirm('¿Deseas sincronizar masivamente todas las aristas y cables de NetBox en todos los mapas de la plataforma?')) return;
+      const origHtml = btnSyncNetboxLinksAll.innerHTML;
+      btnSyncNetboxLinksAll.style.pointerEvents = 'none';
+      btnSyncNetboxLinksAll.innerHTML = '<i class="fas fa-spinner fa-spin" style="color: #a855f7;"></i> <span>Sincronizando global...</span>';
+
+      try {
+        const res = await API.syncNetboxLinks();
+        if (currentMap) await loadMap(currentMap.id);
+        await refreshMapsTabList();
+        alert(`⚡ Sincronización Global de Aristas completada:\n\n${res.message || 'Todas las aristas intra e intermapa han sido actualizadas.'}`);
+      } catch (err) {
+        alert('❌ Error en sincronización global de aristas: ' + err.message);
+      } finally {
+        btnSyncNetboxLinksAll.style.pointerEvents = '';
+        btnSyncNetboxLinksAll.innerHTML = origHtml;
+      }
+    });
+  }
+
+  // 7. Sincronizar Jerarquía de Mapas basada en Ubicaciones de NetBox
+  const btnSyncNetboxHierarchy = document.getElementById('btn-sync-netbox-hierarchy');
+  if (btnSyncNetboxHierarchy) {
+    btnSyncNetboxHierarchy.addEventListener('click', async () => {
+      const origHtml = btnSyncNetboxHierarchy.innerHTML;
+      btnSyncNetboxHierarchy.style.pointerEvents = 'none';
+      btnSyncNetboxHierarchy.innerHTML = '<i class="fas fa-spinner fa-spin" style="color: #38bdf8;"></i> <span>Sincronizando jerarquía...</span>';
+
+      try {
+        const res = await API.syncNetboxHierarchy();
+        await refreshMapsTabList();
+        if (currentMap) await loadMap(currentMap.id);
+        alert(`🌳 Jerarquía de Ubicaciones NetBox Sincronizada:\n\n${res.message || 'Jerarquía y portales actualizados exitosamente.'}`);
+      } catch (err) {
+        alert('❌ Error sincronizando jerarquía con NetBox: ' + err.message);
+      } finally {
+        btnSyncNetboxHierarchy.style.pointerEvents = '';
+        btnSyncNetboxHierarchy.innerHTML = origHtml;
+      }
+    });
+  }
+
+  // 8. Actualizar Todos los Nodos desde NetBox (Global)
+  const btnSyncNetboxNodesAll = document.getElementById('btn-sync-netbox-nodes-all');
+  if (btnSyncNetboxNodesAll) {
+    btnSyncNetboxNodesAll.addEventListener('click', async () => {
+      const origHtml = btnSyncNetboxNodesAll.innerHTML;
+      btnSyncNetboxNodesAll.style.pointerEvents = 'none';
+      btnSyncNetboxNodesAll.innerHTML = '<i class="fas fa-spinner fa-spin" style="color: #a855f7;"></i> <span>Actualizando todos los nodos...</span>';
+
+      try {
+        const res = await API.syncAllNetboxNodes();
+        if (currentMap) await loadMap(currentMap.id);
+        alert(`📥 Actualización Global de Dispositivos:\n\n${res.message || 'Nodos actualizados con éxito.'}`);
+      } catch (err) {
+        alert('❌ Error en actualización masiva de nodos: ' + err.message);
+      } finally {
+        btnSyncNetboxNodesAll.style.pointerEvents = '';
+        btnSyncNetboxNodesAll.innerHTML = origHtml;
+      }
+    });
+  }
+
   // Buscador de mapas en la pestaña de mapas
   let mapSearchTimeout = null;
   const inputSearchMaps = document.getElementById('input-search-maps');
