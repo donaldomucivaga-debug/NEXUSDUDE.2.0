@@ -98,6 +98,7 @@ class LinkBase(BaseModel):
     source_interface_id: Optional[int] = None
     target_interface_id: Optional[int] = None
     netbox_cable_id: Optional[int] = None
+    netbox_wirelesslink_id: Optional[int] = None
     cable_type: Optional[str] = "cat6"
     cable_status: Optional[str] = "connected"
     zabbix_src_interface: Optional[str] = None
@@ -118,6 +119,7 @@ class LinkUpdate(BaseModel):
     source_interface_id: Optional[int] = None
     target_interface_id: Optional[int] = None
     netbox_cable_id: Optional[int] = None
+    netbox_wirelesslink_id: Optional[int] = None
     cable_type: Optional[str] = None
     cable_status: Optional[str] = None
     zabbix_src_interface: Optional[str] = None

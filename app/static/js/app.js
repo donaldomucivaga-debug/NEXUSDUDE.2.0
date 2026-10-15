@@ -2224,8 +2224,8 @@ function renderLink(link, nodesDict) {
   const direction = link.extra_data?.direction || 'source_to_target';
   const arrowPts = getArrowPointsForDirection(pts, direction);
 
-  const isNetboxDocumented = !!link.netbox_cable_id;
-  const isVisualNote = !!(link.extra_data && (link.extra_data.is_note_bridge || link.extra_data.is_visual_only));
+  const isNetboxDocumented = !!(link.netbox_cable_id || link.netbox_wirelesslink_id || link.extra_data?.wireless_link_id);
+  const isVisualNote = !!(link.extra_data && (link.extra_data.is_note_bridge || link.extra_data.is_visual_only || link.extra_data.is_simple_link));
   const isDraftOrUndocumented = !isNetboxDocumented && !isVisualNote;
 
   const color = isDraftOrUndocumented ? '#22c55e' : getLinkColor(link, source, target);
@@ -2457,7 +2457,19 @@ function renderLink(link, nodesDict) {
       if (srcPortEl) srcPortEl.textContent = link.source_interface ? `[${link.source_interface}]` : '';
       if (tgtPortEl) tgtPortEl.textContent = link.target_interface ? `[${link.target_interface}]` : '';
       if (cableEl) cableEl.textContent = (link.cable_type || 'cat6').toUpperCase();
-      if (cableBadge) cableBadge.textContent = link.netbox_cable_id ? `NetBox Cable #${link.netbox_cable_id}` : 'Lógico / Visual';
+      if (cableBadge) {
+        if (link.netbox_cable_id) {
+          cableBadge.textContent = `NetBox Cable #${link.netbox_cable_id}`;
+          cableBadge.style.color = '#38bdf8';
+        } else if (link.netbox_wirelesslink_id || link.extra_data?.wireless_link_id) {
+          const wId = link.netbox_wirelesslink_id || link.extra_data?.wireless_link_id;
+          cableBadge.textContent = `NetBox Wireless #${wId}`;
+          cableBadge.style.color = '#10b981';
+        } else {
+          cableBadge.textContent = 'Lógico / Visual';
+          cableBadge.style.color = '#94a3b8';
+        }
+      }
 
       API.getLinkTelemetry(link.id).then(telem => {
         if (!telem || standardTooltip.style.display === 'none') return;

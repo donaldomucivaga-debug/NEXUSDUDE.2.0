@@ -593,6 +593,7 @@ async def get_map_detail(map_id: str, user: Dict[str, Any] = Depends(get_current
                 source_interface_id=r["source_interface_id"] if "source_interface_id" in keys else None,
                 target_interface_id=r["target_interface_id"] if "target_interface_id" in keys else None,
                 netbox_cable_id=r["netbox_cable_id"] if "netbox_cable_id" in keys else None,
+                netbox_wirelesslink_id=r["netbox_wirelesslink_id"] if "netbox_wirelesslink_id" in keys else None,
                 cable_type=r["cable_type"] if "cable_type" in keys else "cat6",
                 cable_status=r["cable_status"] if "cable_status" in keys else "connected",
                 zabbix_src_interface=r["zabbix_src_interface"] if "zabbix_src_interface" in keys else None,
@@ -1623,16 +1624,16 @@ async def create_link(link_data: LinkCreate, user: Dict[str, Any] = Depends(get_
                 id, map_id, source_node_id, target_node_id,
                 source_interface, target_interface,
                 source_interface_id, target_interface_id,
-                netbox_cable_id, cable_type, cable_status,
+                netbox_cable_id, netbox_wirelesslink_id, cable_type, cable_status,
                 zabbix_src_interface, zabbix_tgt_interface,
                 status, rtt_ms, loss_percent, extra_data
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             link_id, link_data.map_id, link_data.source_node_id, link_data.target_node_id,
             link_data.source_interface, link_data.target_interface,
             src_if_id, tgt_if_id,
-            netbox_cable_id, cable_type, cable_status,
+            netbox_cable_id, link_data.netbox_wirelesslink_id, cable_type, cable_status,
             link_data.zabbix_src_interface, link_data.zabbix_tgt_interface,
             link_data.status or "ok", link_data.rtt_ms or 0.0, link_data.loss_percent or 0.0, extra_str
         ))
@@ -1651,6 +1652,7 @@ async def create_link(link_data: LinkCreate, user: Dict[str, Any] = Depends(get_
             source_interface_id=r["source_interface_id"] if "source_interface_id" in keys else None,
             target_interface_id=r["target_interface_id"] if "target_interface_id" in keys else None,
             netbox_cable_id=r["netbox_cable_id"] if "netbox_cable_id" in keys else None,
+            netbox_wirelesslink_id=r["netbox_wirelesslink_id"] if "netbox_wirelesslink_id" in keys else None,
             cable_type=r["cable_type"] if "cable_type" in keys else "cat6",
             cable_status=r["cable_status"] if "cable_status" in keys else "connected",
             zabbix_src_interface=r["zabbix_src_interface"] if "zabbix_src_interface" in keys else None,
@@ -1683,6 +1685,7 @@ async def update_link(link_id: str, link_data: LinkUpdate, user: Dict[str, Any] 
         new_src_if_id = link_data.source_interface_id if link_data.source_interface_id is not None else (r["source_interface_id"] if "source_interface_id" in keys else None)
         new_tgt_if_id = link_data.target_interface_id if link_data.target_interface_id is not None else (r["target_interface_id"] if "target_interface_id" in keys else None)
         new_cable_id = link_data.netbox_cable_id if link_data.netbox_cable_id is not None else (r["netbox_cable_id"] if "netbox_cable_id" in keys else None)
+        new_wl_id = link_data.netbox_wirelesslink_id if link_data.netbox_wirelesslink_id is not None else (r["netbox_wirelesslink_id"] if "netbox_wirelesslink_id" in keys else None)
         new_cable_type = link_data.cable_type if link_data.cable_type is not None else (r["cable_type"] if "cable_type" in keys else "cat6")
         new_cable_status = link_data.cable_status if link_data.cable_status is not None else (r["cable_status"] if "cable_status" in keys else "connected")
         new_zbx_src = link_data.zabbix_src_interface if link_data.zabbix_src_interface is not None else (r["zabbix_src_interface"] if "zabbix_src_interface" in keys else None)
@@ -1699,7 +1702,7 @@ async def update_link(link_id: str, link_data: LinkUpdate, user: Dict[str, Any] 
             UPDATE links
             SET source_interface = ?, target_interface = ?,
                 source_interface_id = ?, target_interface_id = ?,
-                netbox_cable_id = ?, cable_type = ?, cable_status = ?,
+                netbox_cable_id = ?, netbox_wirelesslink_id = ?, cable_type = ?, cable_status = ?,
                 zabbix_src_interface = ?, zabbix_tgt_interface = ?,
                 status = ?, rtt_ms = ?, loss_percent = ?,
                 extra_data = ?, updated_at = CURRENT_TIMESTAMP
@@ -1707,7 +1710,7 @@ async def update_link(link_id: str, link_data: LinkUpdate, user: Dict[str, Any] 
         """, (
             new_src_iface, new_tgt_iface,
             new_src_if_id, new_tgt_if_id,
-            new_cable_id, new_cable_type, new_cable_status,
+            new_cable_id, new_wl_id, new_cable_type, new_cable_status,
             new_zbx_src, new_zbx_tgt,
             new_status, new_rtt, new_loss,
             json.dumps(cur_extra), link_id
@@ -1727,6 +1730,7 @@ async def update_link(link_id: str, link_data: LinkUpdate, user: Dict[str, Any] 
             source_interface_id=u["source_interface_id"] if "source_interface_id" in u_keys else None,
             target_interface_id=u["target_interface_id"] if "target_interface_id" in u_keys else None,
             netbox_cable_id=u["netbox_cable_id"] if "netbox_cable_id" in u_keys else None,
+            netbox_wirelesslink_id=u["netbox_wirelesslink_id"] if "netbox_wirelesslink_id" in u_keys else None,
             cable_type=u["cable_type"] if "cable_type" in u_keys else "cat6",
             cable_status=u["cable_status"] if "cable_status" in u_keys else "connected",
             zabbix_src_interface=u["zabbix_src_interface"] if "zabbix_src_interface" in u_keys else None,

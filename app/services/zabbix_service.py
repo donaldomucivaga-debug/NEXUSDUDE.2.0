@@ -659,6 +659,23 @@ class ZabbixService:
             parents = []
 
             for p_id in parent_node_ids:
+                # Prevenir cualquier ciclo en el grafo DAG de Zabbix BSM
+                is_cycle = False
+                seen = set()
+                stk = [p_id]
+                while stk:
+                    curr = stk.pop()
+                    if curr == nid:
+                        is_cycle = True
+                        break
+                    if curr not in seen:
+                        seen.add(curr)
+                        stk.extend(uplink_parents.get(curr, []))
+
+                if is_cycle:
+                    logger.warning(f"Evitado ciclo circular en Zabbix Services: {nid} ya es ancestro de {p_id}")
+                    continue
+
                 if p_id in node_service_ids:
                     parents.append({"serviceid": node_service_ids[p_id]})
                     report["direct_dependencies_created"] += 1
@@ -885,7 +902,10 @@ class ZabbixService:
                         }),
                         self._call_api("item.get", {
                             "hostids": host_ids,
-                            "filter": {"key_": ["icmpping", "icmppingsec", "icmppingloss"]},
+                            "filter": {"key_": [
+                                "icmpping", "icmppingsec", "icmppingloss",
+                                "icmpping[,10,100,,1000]", "icmppingsec[,10,100,,1000]", "icmppingloss[,10,100,,1000]"
+                            ]},
                             "output": ["hostid", "key_", "lastvalue", "lastclock"]
                         })
                     )
@@ -896,7 +916,10 @@ class ZabbixService:
                 items_by_host: Dict[str, Dict[str, Any]] = {}
                 for it in items:
                     hid = str(it["hostid"])
-                    items_by_host.setdefault(hid, {})[it["key_"]] = it.get("lastvalue")
+                    k = it["key_"]
+                    base_k = k.split("[")[0] if "[" in k else k
+                    items_by_host.setdefault(hid, {})[k] = it.get("lastvalue")
+                    items_by_host[hid][base_k] = it.get("lastvalue")
 
                 triggers_by_host: Dict[str, List[Dict[str, Any]]] = {}
                 for tr in triggers:
@@ -1202,6 +1225,7 @@ class ZabbixService:
         telemetry_keys = [
             # Ping e ICMP
             "icmpping", "icmppingsec", "icmppingloss",
+            "icmpping[,10,100,,1000]", "icmppingsec[,10,100,,1000]", "icmppingloss[,10,100,,1000]",
             # Cambium ePMP / Force 4600 / 300 / 200 / 180 / 130
             "cambium.radio.chwidth", "cambium.radio.bandwidth", "cambium.radio.freq", "cambium.radio.tx_power",
             "cambium.radio.rssi", "cambium.cpe.rssi", "cambium.radio.snr", "cambium.cpe.snr",
@@ -1241,7 +1265,12 @@ class ZabbixService:
             })
         )
 
-        pdata = {it["key_"]: it.get("lastvalue") for it in items}
+        pdata = {}
+        for it in items:
+            k = it["key_"]
+            base_k = k.split("[")[0] if "[" in k else k
+            pdata[k] = it.get("lastvalue")
+            pdata[base_k] = it.get("lastvalue")
         icmp_val = pdata.get("icmpping")
         loss_val = float(pdata.get("icmppingloss", 0) or 0)
         try:
@@ -1555,7 +1584,8 @@ class ZabbixService:
                     "cambium.sw.version", "cambium.ap.connected_sms", "cambium.ap.connected_sta_count",
                     "ubnt.radio.freq", "ubnt.radio.rssi", "ubnt.radio.signal", "ubnt.sw.version",
                     "mimosa.radio.freq", "mimosa.radio.rssi", "mimosa.radio.tx_power", "mimosa.sw.version",
-                    "icmpping", "icmppingsec"
+                    "icmpping", "icmppingsec",
+                    "icmpping[,10,100,,1000]", "icmppingsec[,10,100,,1000]"
                 ]
             },
             "output": ["hostid", "name", "key_", "lastvalue", "lastclock"]
@@ -1564,7 +1594,10 @@ class ZabbixService:
         host_items: Dict[str, Dict[str, Any]] = {}
         for it in items:
             hid = str(it["hostid"])
-            host_items.setdefault(hid, {})[it["key_"]] = it.get("lastvalue")
+            k = it["key_"]
+            base_k = k.split("[")[0] if "[" in k else k
+            host_items.setdefault(hid, {})[k] = it.get("lastvalue")
+            host_items[hid][base_k] = it.get("lastvalue")
 
         CAMBIUM_BW_MAP = {
             "1": 20,

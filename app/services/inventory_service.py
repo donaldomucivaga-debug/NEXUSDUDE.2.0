@@ -557,6 +557,46 @@ class InventoryService:
             logger.error(f"Error consultando wireless-links en NetBox: {e}")
         return []
 
+    async def create_netbox_wireless_link(self, dev1_id: int, if1_name: str, dev2_id: int, if2_name: str, ssid: str = "", description: str = "") -> Dict[str, Any]:
+        """Crea un WirelessLink en NetBox entre dos interfaces inalámbricas."""
+        headers = await self.get_headers()
+        if1 = await self.get_or_create_interface(dev1_id, if1_name, if_type="ieee802.11n")
+        if2 = await self.get_or_create_interface(dev2_id, if2_name, if_type="ieee802.11n")
+
+        payload = {
+            "interface_a": if1["id"],
+            "interface_b": if2["id"],
+            "status": "connected",
+            "ssid": ssid or "",
+            "description": description or "Radioenlace inalámbrico creado desde NexusDude"
+        }
+
+        async with httpx.AsyncClient(verify=False, timeout=15.0) as client:
+            res = await client.post(f"{settings.NETBOX_URL}/api/wireless/wireless-links/", headers=headers, json=payload)
+            if res.status_code in (200, 201):
+                wl_data = res.json()
+                logger.info(f"WirelessLink creado en NetBox: ID {wl_data.get('id')} ({if1_name} <-> {if2_name})")
+                return {
+                    "wireless_link_id": wl_data.get("id"),
+                    "if1_id": if1["id"],
+                    "if2_id": if2["id"],
+                    "status": wl_data.get("status", {}).get("value") if isinstance(wl_data.get("status"), dict) else "connected"
+                }
+            else:
+                logger.error(f"Error creando WirelessLink en NetBox: {res.status_code} - {res.text}")
+                raise Exception(f"NetBox no pudo crear WirelessLink: {res.text}")
+
+    async def delete_netbox_wireless_link(self, wireless_link_id: int) -> bool:
+        """Elimina un WirelessLink en NetBox por su ID."""
+        headers = await self.get_headers()
+        try:
+            async with httpx.AsyncClient(verify=False, timeout=10.0) as client:
+                res = await client.delete(f"{settings.NETBOX_URL}/api/wireless/wireless-links/{wireless_link_id}/", headers=headers)
+                return res.status_code in (204, 200)
+        except Exception as e:
+            logger.error(f"Error eliminando WirelessLink {wireless_link_id} en NetBox: {e}")
+            return False
+
     async def sync_netbox_hierarchy_and_maps(self) -> Dict[str, Any]:
         """
         Sincroniza la estructura de ubicaciones (Locations) y Sitios de NetBox con los Mapas de NexusDude:
