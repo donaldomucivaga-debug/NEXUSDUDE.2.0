@@ -2191,8 +2191,43 @@ async def sync_map_netbox_cables(map_id: str, user: Dict[str, Any] = Depends(get
                         pair_to_links[pkey] = [{"id": new_link_id, "netbox_cable_id": None}]
                         synced_count += 1
 
+        # Sincronizar también WirelessLinks de NetBox en este mapa
+        try:
+            c_wl_links = await db.execute("SELECT id, netbox_wirelesslink_id, source_node_id, target_node_id FROM links WHERE map_id = ?", (map_id,))
+            existing_wl_rows = await c_wl_links.fetchall()
+            existing_wl_ids = {r["netbox_wirelesslink_id"] for r in existing_wl_rows if r["netbox_wirelesslink_id"]}
+            wl_pair_to_links = {}
+            for l in existing_wl_rows:
+                pkey = (min(l["source_node_id"], l["target_node_id"]), max(l["source_node_id"], l["target_node_id"]))
+                wl_pair_to_links.setdefault(pkey, []).append(l)
+
+            all_wl = await inventory_service.get_wireless_links()
+            for wl in all_wl:
+                wl_id = wl.get("id")
+                if wl_id and wl_id not in existing_wl_ids:
+                    d_a = wl.get("interface_a", {}).get("device", {}).get("id")
+                    d_b = wl.get("interface_b", {}).get("device", {}).get("id")
+                    if d_a in dev_to_node and d_b in dev_to_node:
+                        node_a_id = dev_to_node[d_a]
+                        node_b_id = dev_to_node[d_b]
+                        pkey = (min(node_a_id, node_b_id), max(node_a_id, node_b_id))
+                        if pkey in wl_pair_to_links:
+                            for candidate in wl_pair_to_links[pkey]:
+                                if not candidate["netbox_wirelesslink_id"]:
+                                    await db.execute("""
+                                        UPDATE links
+                                        SET netbox_wirelesslink_id = ?, source_interface = 'Wireless', target_interface = 'Wireless',
+                                            cable_type = 'wireless', cable_status = 'connected', updated_at = CURRENT_TIMESTAMP
+                                        WHERE id = ?
+                                    """, (wl_id, candidate["id"]))
+                                    existing_wl_ids.add(wl_id)
+                                    synced_count += 1
+                                    break
+        except Exception as wl_err:
+            logger.warning(f"Error sincronizando wireless links en mapa {map_id}: {wl_err}")
+
         await db.commit()
-        return {"status": "success", "synced_cables_count": synced_count, "message": f"Se sincronizaron {synced_count} cables y conexiones desde NetBox"}
+        return {"status": "success", "synced_cables_count": synced_count, "message": f"Se sincronizaron {synced_count} cables y radioenlaces desde NetBox"}
 
 
 # --- Sincronización Masiva de Nodos con NetBox ---
