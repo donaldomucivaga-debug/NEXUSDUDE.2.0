@@ -216,7 +216,56 @@ class InventoryService:
             await self.refresh_cache()
         return self._manufacturers_cache
 
-    async def get_device_by_id(self, device_id: int) -> Optional[Dict[str, Any]]:
+    async def get_device_by_id(self, device_id: int, force_live: bool = False) -> Optional[Dict[str, Any]]:
+        if force_live:
+            try:
+                headers = await self.get_headers()
+                async with httpx.AsyncClient(verify=False, timeout=10.0) as client:
+                    res = await client.get(f"{settings.NETBOX_URL}/api/dcim/devices/{device_id}/", headers=headers)
+                    if res.status_code == 200:
+                        d = res.json()
+                        primary_ip = d.get("primary_ip") or {}
+                        raw_ip = primary_ip.get("address", "")
+                        clean_ip = raw_ip.split("/")[0] if raw_ip else ""
+                        site_obj = d.get("site") or {}
+                        role_obj = d.get("device_role") or d.get("role") or {}
+                        role_name = role_obj.get("name", "Desconocido")
+                        type_obj = d.get("device_type") or {}
+                        mfr_obj = type_obj.get("manufacturer") or {}
+                        cf = d.get("custom_fields") or {}
+                        dev_info = {
+                            "id": d["id"],
+                            "name": d.get("name") or f"Device-{d['id']}",
+                            "ip": clean_ip,
+                            "raw_ip": raw_ip,
+                            "site": site_obj.get("name", "Desconocido"),
+                            "site_id": site_obj.get("id"),
+                            "role": role_name,
+                            "role_slug": role_obj.get("slug", ""),
+                            "role_color": (role_obj.get("color") or "").strip(),
+                            "manufacturer": mfr_obj.get("name", "Genérico"),
+                            "model": type_obj.get("model", ""),
+                            "device_type_id": type_obj.get("id"),
+                            "status": d.get("status", {}).get("value", "active") if isinstance(d.get("status"), dict) else str(d.get("status", "active")),
+                            "serial": d.get("serial") or "",
+                            "custom_fields": cf,
+                            "azimuth": cf.get("azimuth"),
+                            "tilt": cf.get("tilt"),
+                            "height": cf.get("height")
+                        }
+                        # Actualizar caché
+                        found_in_cache = False
+                        for idx, cached in enumerate(self._devices_cache):
+                            if cached.get("id") == device_id:
+                                self._devices_cache[idx] = dev_info
+                                found_in_cache = True
+                                break
+                        if not found_in_cache:
+                            self._devices_cache.append(dev_info)
+                        return dev_info
+            except Exception as e:
+                logger.warning(f"Error consultando dispositivo {device_id} en vivo desde NetBox: {e}")
+
         if not self._devices_cache:
             await self.refresh_cache()
         for d in self._devices_cache:
@@ -250,50 +299,74 @@ class InventoryService:
     async def get_device_interfaces(self, device_id: int) -> List[Dict[str, Any]]:
         """
         Obtiene la lista completa de interfaces físicas/lógicas de un dispositivo en NetBox.
-        Si el dispositivo no tiene creadas sus interfaces físicas aún (ej. solo mgmt0),
-        consulta las plantillas de interfaz de su tipo de dispositivo y las auto-crea o retorna.
+        Sincroniza el tipo de dispositivo en tiempo real, sanea interfaces inalámbricas huérfanas
+        en infraestructura cableada/fibra (OLT, Switch, Router) y auto-crea los puertos oficiales
+        según las plantillas del Device Type si están pendientes.
         """
         headers = await self.get_headers()
         interfaces_list = []
 
         try:
             async with httpx.AsyncClient(verify=False, timeout=15.0) as client:
-                # 1. Consultar interfaces existentes
+                # 1. Consultar dispositivo en tiempo real desde NetBox para obtener modelo y rol actualizados
+                dev_type_id = None
+                dev_role_slug = ""
+                dev_role_name = ""
+                res_dev = await client.get(f"{settings.NETBOX_URL}/api/dcim/devices/{device_id}/", headers=headers)
+                if res_dev.status_code == 200:
+                    d_data = res_dev.json()
+                    type_obj = d_data.get("device_type") or {}
+                    mfr_obj = type_obj.get("manufacturer") or {}
+                    role_obj = d_data.get("device_role") or d_data.get("role") or {}
+                    dev_type_id = type_obj.get("id") or d_data.get("device_type_id")
+                    dev_role_slug = role_obj.get("slug", "").lower()
+                    dev_role_name = role_obj.get("name", "").lower()
+
+                    # Mantener caché en memoria sincronizado en tiempo real
+                    for d in self._devices_cache:
+                        if d.get("id") == device_id:
+                            d["device_type_id"] = dev_type_id
+                            d["model"] = type_obj.get("model", d.get("model"))
+                            d["manufacturer"] = mfr_obj.get("name", d.get("manufacturer"))
+                            d["role"] = role_obj.get("name", d.get("role"))
+                            d["role_slug"] = dev_role_slug
+                            break
+
+                # 2. Consultar interfaces existentes en NetBox
                 res = await client.get(f"{settings.NETBOX_URL}/api/dcim/interfaces/?device_id={device_id}&limit=200", headers=headers)
                 existing_ifaces = res.json().get("results", []) if res.status_code == 200 else []
-
-                # Mapear interfaces existentes
                 existing_names = {i["name"]: i for i in existing_ifaces}
 
-                # Si solo tiene mgmt0 o no tiene puertos físicos, intentar consultar Interface Templates del Device Type
-                dev = await self.get_device_by_id(device_id)
-                dev_type_id = None
-                if dev and dev.get("device_type_id"):
-                    dev_type_id = dev.get("device_type_id")
-                elif dev and isinstance(dev.get("device_type"), dict):
-                    dev_type_id = dev["device_type"].get("id")
+                # 3. Limpieza automática de interfaces Wireless huérfanas en infraestructura cableada/fibra
+                is_wired_infrastructure = any(r in dev_role_slug or r in dev_role_name for r in ["olt", "switch", "router", "core"])
+                if is_wired_infrastructure:
+                    for iface in list(existing_ifaces):
+                        if_name = iface.get("name", "")
+                        if_type_val = iface.get("type", {}).get("value") if isinstance(iface.get("type"), dict) else (iface.get("type") or "")
+                        if if_name == "Wireless" or if_type_val.startswith("ieee802.11"):
+                            if not iface.get("cable"):
+                                try:
+                                    del_res = await client.delete(f"{settings.NETBOX_URL}/api/dcim/interfaces/{iface['id']}/", headers=headers)
+                                    if del_res.status_code in (204, 200):
+                                        logger.info(f"Purged orphan Wireless interface ID {iface['id']} from wired device {device_id}")
+                                        existing_ifaces.remove(iface)
+                                        existing_names.pop(if_name, None)
+                                except Exception as e:
+                                    logger.warning(f"Error purgando interfaz Wireless huérfana en device {device_id}: {e}")
 
-                if not dev_type_id:
-                    res_dev = await client.get(f"{settings.NETBOX_URL}/api/dcim/devices/{device_id}/", headers=headers)
-                    if res_dev.status_code == 200:
-                        d_data = res_dev.json()
-                        if isinstance(d_data.get("device_type"), dict):
-                            dev_type_id = d_data["device_type"].get("id")
-                        elif d_data.get("device_type_id"):
-                            dev_type_id = d_data.get("device_type_id")
-
+                # 4. Consultar Interface Templates del Device Type y auto-crear puertos faltantes
                 if dev_type_id:
                     res_tmpl = await client.get(f"{settings.NETBOX_URL}/api/dcim/interface-templates/?device_type_id={dev_type_id}&limit=100", headers=headers)
                     if res_tmpl.status_code == 200:
                         templates = res_tmpl.json().get("results", [])
-                        if templates and len(existing_names) < len(templates):
+                        if templates:
                             for tmpl in templates:
                                 t_name = tmpl["name"]
                                 if t_name not in existing_names:
                                     try:
                                         t_type = tmpl.get("type", {}).get("value") if isinstance(tmpl.get("type"), dict) else (tmpl.get("type") or "1000base-t")
                                         # Normalizar tipo para NetBox 4.x
-                                        if "10gbase-x-sfp" in str(t_type):
+                                        if "10gbase-x-sfp" in str(t_type) and not str(t_type).endswith("sfpp"):
                                             t_type = "10gbase-x-sfpp"
                                         res_new = await client.post(f"{settings.NETBOX_URL}/api/dcim/interfaces/", headers=headers, json={
                                             "device": device_id,
@@ -307,6 +380,20 @@ class InventoryService:
                                             existing_names[t_name] = new_if
                                     except Exception as e:
                                         logger.warning(f"No se pudo auto-crear interfaz {t_name} en device {device_id}: {e}")
+
+                            # Si el tipo define plantillas específicas (ej. gpon0/1/0, 10ge) y quedó interfaz genérica 'Ethernet' sin cablear, purgarla
+                            template_names = {t["name"] for t in templates}
+                            if is_wired_infrastructure and "Ethernet" in existing_names and "Ethernet" not in template_names:
+                                eth_iface = existing_names["Ethernet"]
+                                if not eth_iface.get("cable"):
+                                    try:
+                                        del_eth = await client.delete(f"{settings.NETBOX_URL}/api/dcim/interfaces/{eth_iface['id']}/", headers=headers)
+                                        if del_eth.status_code in (204, 200):
+                                            logger.info(f"Purged orphan generic Ethernet interface ID {eth_iface['id']} from device {device_id}")
+                                            existing_ifaces.remove(eth_iface)
+                                            existing_names.pop("Ethernet", None)
+                                    except Exception as e:
+                                        logger.warning(f"Error purgando Ethernet genérica: {e}")
 
                 # 2. Formatear cada interfaz con su estado de conexión
                 for i in existing_ifaces:

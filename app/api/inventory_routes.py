@@ -10,8 +10,8 @@ async def get_inventory_device_by_id(
     device_id: int,
     user: Dict[str, Any] = Depends(get_current_user)
 ):
-    """Retorna los datos completos de un dispositivo por su ID de NetBox."""
-    dev = await inventory_service.get_device_by_id(device_id)
+    """Retorna los datos completos de un dispositivo por su ID de NetBox en tiempo real."""
+    dev = await inventory_service.get_device_by_id(device_id, force_live=True)
     if not dev:
         raise HTTPException(status_code=404, detail="Dispositivo no encontrado en NetBox")
     return dev

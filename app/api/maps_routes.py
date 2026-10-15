@@ -1464,6 +1464,86 @@ async def update_node(node_id: str, update_data: NodeUpdate, user: Dict[str, Any
             updated_at=str(u["updated_at"])
         )
 
+@router.post("/nodes/{node_id}/sync-netbox", response_model=NodeOut)
+async def sync_single_node_from_netbox(node_id: str, user: Dict[str, Any] = Depends(get_current_user)):
+    """
+    Sincroniza en tiempo real las propiedades del nodo contra NetBox:
+    modelo, fabricante, rol, estado, IP e interfaces físicas limpiando puertos huérfanos.
+    """
+    async with get_db_connection() as db:
+        cursor = await db.execute("SELECT * FROM nodes WHERE id = ?", (node_id,))
+        nr = await cursor.fetchone()
+        if not nr:
+            raise HTTPException(status_code=404, detail="Nodo no encontrado")
+
+        did = nr["device_id"]
+        matched_dev = None
+        if did:
+            matched_dev = await inventory_service.get_device_by_id(did, force_live=True)
+            # Sincronizar interfaces y purgar huérfanas en NetBox
+            await inventory_service.get_device_interfaces(did)
+        elif nr["name"]:
+            if not inventory_service._devices_cache:
+                await inventory_service.refresh_cache(force=True)
+            for d in inventory_service._devices_cache:
+                if d["name"].strip().lower() == nr["name"].strip().lower():
+                    matched_dev = await inventory_service.get_device_by_id(d["id"], force_live=True)
+                    did = d["id"]
+                    await inventory_service.get_device_interfaces(did)
+                    break
+
+        if not matched_dev:
+            raise HTTPException(status_code=404, detail="Dispositivo no encontrado en NetBox")
+
+        try:
+            edata = json.loads(nr["extra_data"]) if nr["extra_data"] else {}
+        except Exception:
+            edata = {}
+
+        edata["manufacturer"] = matched_dev.get("manufacturer") or edata.get("manufacturer", "Genérico")
+        edata["model"] = matched_dev.get("model") or edata.get("model", "")
+        edata["serial"] = matched_dev.get("serial") or edata.get("serial", "")
+        edata["role"] = matched_dev.get("role") or matched_dev.get("device_type") or edata.get("role", "Dispositivo")
+        edata["role_color"] = matched_dev.get("role_color") or edata.get("role_color", "")
+        edata["status"] = matched_dev.get("status") or edata.get("status", "active")
+
+        # Limpiar campos de radiofrecuencia si es infraestructura cableada/fibra
+        role_lower = str(edata["role"]).lower()
+        if any(r in role_lower for r in ["olt", "switch", "router", "core"]):
+            edata.pop("azimuth", None)
+            edata.pop("tilt", None)
+            edata.pop("height", None)
+
+        new_device_type = matched_dev.get("role") or nr["device_type"]
+        new_name = matched_dev.get("name") or nr["name"]
+        new_ip = matched_dev.get("ip") or nr["ip"]
+        new_site = matched_dev.get("site") or nr["site_name"]
+
+        await db.execute("""
+            UPDATE nodes
+            SET device_id = ?, name = ?, ip = ?, device_type = ?, site_name = ?, extra_data = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        """, (did, new_name, new_ip, new_device_type, new_site, json.dumps(edata), node_id))
+        await db.commit()
+
+        c_updated = await db.execute("SELECT * FROM nodes WHERE id = ?", (node_id,))
+        u = await c_updated.fetchone()
+        return NodeOut(
+            id=u["id"],
+            map_id=u["map_id"],
+            device_id=u["device_id"],
+            name=u["name"],
+            ip=u["ip"],
+            device_type=u["device_type"],
+            site_name=u["site_name"],
+            x=u["x"],
+            y=u["y"],
+            status=u["status"],
+            extra_data=json.loads(u["extra_data"]) if u["extra_data"] else None,
+            created_at=str(u["created_at"]),
+            updated_at=str(u["updated_at"])
+        )
+
 @router.delete("/nodes/{node_id}")
 async def delete_node(node_id: str, user: Dict[str, Any] = Depends(get_current_user)):
     """Elimina un nodo del lienzo."""
@@ -2153,6 +2233,13 @@ async def sync_all_maps_nodes_from_netbox(user: Dict[str, Any] = Depends(get_cur
                 edata["role_color"] = matched_dev.get("role_color") or edata.get("role_color", "")
                 edata["status"] = matched_dev.get("status") or edata.get("status", "active")
 
+                # Limpiar campos de radiofrecuencia si es infraestructura cableada/fibra
+                role_lower = str(edata["role"]).lower()
+                if any(r in role_lower for r in ["olt", "switch", "router", "core"]):
+                    edata.pop("azimuth", None)
+                    edata.pop("tilt", None)
+                    edata.pop("height", None)
+
                 new_device_type = matched_dev.get("role") or nr["device_type"]
                 new_name = matched_dev.get("name") or name
                 new_ip = matched_dev.get("ip") or nr["ip"]
@@ -2217,6 +2304,13 @@ async def sync_map_nodes_from_netbox(map_id: str, user: Dict[str, Any] = Depends
                 edata["role"] = matched_dev.get("role") or matched_dev.get("device_type") or edata.get("role", "Dispositivo")
                 edata["role_color"] = matched_dev.get("role_color") or edata.get("role_color", "")
                 edata["status"] = matched_dev.get("status") or edata.get("status", "active")
+
+                # Limpiar campos de radiofrecuencia si es infraestructura cableada/fibra
+                role_lower = str(edata["role"]).lower()
+                if any(r in role_lower for r in ["olt", "switch", "router", "core"]):
+                    edata.pop("azimuth", None)
+                    edata.pop("tilt", None)
+                    edata.pop("height", None)
 
                 new_device_type = matched_dev.get("role") or nr["device_type"]
                 new_name = matched_dev.get("name") or name
