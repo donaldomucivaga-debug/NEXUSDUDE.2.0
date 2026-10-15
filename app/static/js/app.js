@@ -5395,6 +5395,21 @@ function setTelemetryLoading() {
   const wBox = document.getElementById('telemetry-wireless-box');
   if (wBox) wBox.style.display = 'none';
 
+  const hwBox = document.getElementById('telemetry-hardware-box');
+  if (hwBox) hwBox.style.display = 'none';
+
+  const gBox = document.getElementById('telemetry-gpon-box');
+  if (gBox) gBox.style.display = 'none';
+
+  const envBox = document.getElementById('telemetry-env-box');
+  if (envBox) envBox.style.display = 'none';
+
+  const cBox = document.getElementById('telemetry-custom-box');
+  if (cBox) cBox.style.display = 'none';
+
+  const rowUptime = document.getElementById('row-prop-node-uptime');
+  if (rowUptime) rowUptime.style.display = 'none';
+
   const dot = document.getElementById('telemetry-status-dot');
   const lbl = document.getElementById('telemetry-status-label');
   if (dot) { dot.style.background = '#64748b'; dot.style.boxShadow = 'none'; }
@@ -5440,6 +5455,27 @@ function applyTelemetryToPanel(data) {
     if (pingPill) pingPill.style.borderColor = pColor + '55';
   }
 
+  // Uptime y Datos de Sistema (Modelo, Serial dinámico si no venía en NetBox)
+  if (data.system) {
+    const rowUptime = document.getElementById('row-prop-node-uptime');
+    if (rowUptime) {
+      if (data.system.uptime_text && data.system.uptime_text !== '—') {
+        rowUptime.style.display = 'flex';
+        safe('prop-node-uptime', data.system.uptime_text);
+      } else {
+        rowUptime.style.display = 'none';
+      }
+    }
+    const modelEl = document.getElementById('prop-node-model');
+    if (modelEl && (modelEl.textContent === 'N/A' || !modelEl.textContent.trim()) && data.system.model) {
+      modelEl.textContent = data.system.model;
+    }
+    const serialEl = document.getElementById('prop-node-serial');
+    if (serialEl && (serialEl.textContent === 'No registrado' || !serialEl.textContent.trim()) && data.system.serial) {
+      serialEl.textContent = data.system.serial;
+    }
+  }
+
   // 1. Parámetros Inalámbricos RF (Cambium / Altai / Ubiquiti / Mimosa)
   const wBox = document.getElementById('telemetry-wireless-box');
   const w = data.wireless;
@@ -5483,6 +5519,88 @@ function applyTelemetryToPanel(data) {
       }
     } else {
       wBox.style.display = 'none';
+    }
+  }
+
+  // 2. Hardware y Recursos (Routers MikroTik, Switches, OLTs)
+  const hwBox = document.getElementById('telemetry-hardware-box');
+  const hw = data.hardware;
+  if (hwBox) {
+    if (hw && (hw.cpu_util_pct != null || hw.memory_util_pct != null || hw.temp_cpu_c != null || hw.temp_board_c != null || hw.voltage_v != null)) {
+      hwBox.style.display = 'block';
+      safe('telemetry-hw-cpu', hw.cpu_util_pct != null ? `${hw.cpu_util_pct}%` : '—');
+      safe('telemetry-hw-mem', hw.memory_util_pct != null ? `${hw.memory_util_pct}%` : '—');
+      const tempVal = hw.temp_cpu_c ?? hw.temp_board_c;
+      safe('telemetry-hw-temp', tempVal != null ? `${tempVal} °C` : '—');
+
+      let voltStr = hw.voltage_v != null ? `${hw.voltage_v} V` : '';
+      if (hw.psu1_state) voltStr += (voltStr ? ' · ' : '') + `PSU: ${hw.psu1_state}`;
+      safe('telemetry-hw-volt', voltStr || '—');
+
+      const boxFans = document.getElementById('box-hw-fans');
+      if (boxFans) {
+        const parts = [];
+        if (hw.fan1_rpm) parts.push(`Fan 1: ${hw.fan1_rpm} RPM`);
+        if (hw.fan2_rpm) parts.push(`Fan 2: ${hw.fan2_rpm} RPM`);
+        if (hw.psu2_state) parts.push(`PSU 2: ${hw.psu2_state}`);
+        if (parts.length > 0) {
+          boxFans.style.display = 'block';
+          safe('telemetry-hw-fans', parts.join(' · '));
+        } else {
+          boxFans.style.display = 'none';
+        }
+      }
+    } else {
+      hwBox.style.display = 'none';
+    }
+  }
+
+  // 3. Telemetría GPON / OLT
+  const gBox = document.getElementById('telemetry-gpon-box');
+  const gp = data.gpon;
+  if (gBox) {
+    if (gp && (gp.total_onus_online != null || gp.total_onus_registered != null || gp.olt_tx_power_dbm != null || gp.avg_ont_rx_power_dbm != null)) {
+      gBox.style.display = 'block';
+      safe('telemetry-gpon-online', gp.total_onus_online != null ? `${gp.total_onus_online} ONUs` : '—');
+      safe('telemetry-gpon-reg', gp.total_onus_registered != null ? `${gp.total_onus_registered} ONUs` : '—');
+      safe('telemetry-gpon-tx', gp.olt_tx_power_dbm != null ? `${gp.olt_tx_power_dbm} dBm` : '—');
+      safe('telemetry-gpon-rx', gp.avg_ont_rx_power_dbm != null ? `${gp.avg_ont_rx_power_dbm} dBm (${gp.total_onus_monitored || 0} ONTs)` : '—');
+    } else {
+      gBox.style.display = 'none';
+    }
+  }
+
+  // 4. Sensores Ambientales e IoT (SM9S)
+  const envBox = document.getElementById('telemetry-env-box');
+  const env = data.environmental;
+  if (envBox) {
+    if (env && (env.temperature_c != null || env.humidity_pct != null || env.voltage_ac_v != null || env.voltage_dc_v != null)) {
+      envBox.style.display = 'block';
+      safe('telemetry-env-temp', env.temperature_c != null ? `${env.temperature_c} °C` : '—');
+      safe('telemetry-env-hum', env.humidity_pct != null ? `${env.humidity_pct}%` : '—');
+      safe('telemetry-env-vac', env.voltage_ac_v != null ? `${env.voltage_ac_v} V AC` : '—');
+      safe('telemetry-env-vdc', env.voltage_dc_v != null ? `${env.voltage_dc_v} V DC` : '—');
+    } else {
+      envBox.style.display = 'none';
+    }
+  }
+
+  // 5. Métricas de Plantillas Personalizadas
+  const cBox = document.getElementById('telemetry-custom-box');
+  const cList = document.getElementById('telemetry-custom-list');
+  const cCount = document.getElementById('telemetry-custom-count');
+  if (cBox && cList) {
+    if (data.custom_metrics && data.custom_metrics.length > 0) {
+      cBox.style.display = 'block';
+      if (cCount) cCount.textContent = `${data.custom_metrics.length} métricas`;
+      cList.innerHTML = data.custom_metrics.map(m => `
+        <div style="display: flex; justify-content: space-between; align-items: center; background: var(--bg-card); padding: 3px 6px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.05);">
+          <span style="color: var(--text-muted); font-size: 0.62rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 65%;" title="${m.name} (${m.key})">${m.name}</span>
+          <strong style="color: #38bdf8; font-family: monospace; font-size: 0.68rem;">${m.value} ${m.units || ''}</strong>
+        </div>
+      `).join('');
+    } else {
+      cBox.style.display = 'none';
     }
   }
 

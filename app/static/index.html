@@ -453,6 +453,11 @@
                 <span class="device-info-value" id="prop-node-serial">No registrado</span>
               </div>
 
+              <div class="device-info-row" id="row-prop-node-uptime" style="display: none;">
+                <span class="device-info-label"><i class="fas fa-clock"></i> Tiempo Activo</span>
+                <span class="device-info-value" id="prop-node-uptime" style="color: #38bdf8; font-family: monospace;">—</span>
+              </div>
+
               <div class="device-info-row">
                 <span class="device-info-label"><i class="fas fa-dot-circle"></i> Estado NetBox</span>
                 <span class="device-info-value" id="prop-node-status" style="color: var(--success);">Activo</span>
@@ -579,6 +584,99 @@
                     <span style="color: var(--text-muted); font-size: 0.62rem; display: block;">SSID / Sector Conectado:</span>
                     <strong id="telemetry-ssid" style="color: #cbd5e1; font-family: monospace; font-size: 0.68rem; word-break: break-all;">—</strong>
                   </div>
+                </div>
+              </div>
+
+              <!-- Telemetría de Hardware y Recursos (Routers, Switches, MikroTik, OLTs) -->
+              <div id="telemetry-hardware-box" style="display: none; margin-top: 6px; margin-bottom: 6px; background: rgba(15,23,42,0.6); border: 1px solid var(--border-color); border-radius: 8px; padding: 8px;">
+                <div style="font-size: 0.72rem; font-weight: 700; color: #a855f7; margin-bottom: 6px; display: flex; align-items: center; justify-content: space-between;">
+                  <span><i class="fas fa-microchip"></i> Hardware y Recursos</span>
+                  <span id="telemetry-hw-badge" style="font-size: 0.62rem; background: rgba(168,85,247,0.15); color: #c084fc; padding: 1px 5px; border-radius: 4px; font-weight: bold;">SNMP</span>
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px; font-size: 0.74rem;">
+                  <div id="box-hw-cpu" style="background: var(--bg-card); border-radius: 5px; padding: 4px 6px;">
+                    <span style="color: var(--text-muted); font-size: 0.62rem; display: block;">Uso CPU:</span>
+                    <strong id="telemetry-hw-cpu" style="color: #38bdf8; font-family: monospace;">—</strong>
+                  </div>
+                  <div id="box-hw-mem" style="background: var(--bg-card); border-radius: 5px; padding: 4px 6px;">
+                    <span style="color: var(--text-muted); font-size: 0.62rem; display: block;">Uso RAM:</span>
+                    <strong id="telemetry-hw-mem" style="color: #10b981; font-family: monospace;">—</strong>
+                  </div>
+                  <div id="box-hw-temp" style="background: var(--bg-card); border-radius: 5px; padding: 4px 6px;">
+                    <span style="color: var(--text-muted); font-size: 0.62rem; display: block;">Temperatura:</span>
+                    <strong id="telemetry-hw-temp" style="color: #f59e0b; font-family: monospace;">—</strong>
+                  </div>
+                  <div id="box-hw-volt" style="background: var(--bg-card); border-radius: 5px; padding: 4px 6px;">
+                    <span style="color: var(--text-muted); font-size: 0.62rem; display: block;">Voltaje / PSU:</span>
+                    <strong id="telemetry-hw-volt" style="color: #cbd5e1; font-family: monospace;">—</strong>
+                  </div>
+                  <div id="box-hw-fans" style="background: var(--bg-card); border-radius: 5px; padding: 4px 6px; grid-column: span 2; display: none;">
+                    <span style="color: var(--text-muted); font-size: 0.62rem; display: block;">Ventiladores / Fuentes:</span>
+                    <strong id="telemetry-hw-fans" style="color: #94a3b8; font-family: monospace; font-size: 0.68rem;">—</strong>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Telemetría GPON / FTTH (Huawei, V-SOL, OLTs) -->
+              <div id="telemetry-gpon-box" style="display: none; margin-top: 6px; margin-bottom: 6px; background: rgba(15,23,42,0.6); border: 1px solid rgba(16,185,129,0.3); border-radius: 8px; padding: 8px;">
+                <div style="font-size: 0.72rem; font-weight: 700; color: #10b981; margin-bottom: 6px; display: flex; align-items: center; justify-content: space-between;">
+                  <span><i class="fas fa-network-wired"></i> Telemetría GPON / OLT</span>
+                  <span id="telemetry-gpon-badge" style="font-size: 0.62rem; background: rgba(16,185,129,0.15); color: #34d399; padding: 1px 5px; border-radius: 4px; font-weight: bold;">GPON</span>
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px; font-size: 0.74rem;">
+                  <div style="background: var(--bg-card); border-radius: 5px; padding: 4px 6px;">
+                    <span style="color: var(--text-muted); font-size: 0.62rem; display: block;">ONUs Online:</span>
+                    <strong id="telemetry-gpon-online" style="color: #10b981; font-family: monospace;">—</strong>
+                  </div>
+                  <div style="background: var(--bg-card); border-radius: 5px; padding: 4px 6px;">
+                    <span style="color: var(--text-muted); font-size: 0.62rem; display: block;">Total Registradas:</span>
+                    <strong id="telemetry-gpon-reg" style="color: #38bdf8; font-family: monospace;">—</strong>
+                  </div>
+                  <div id="box-gpon-tx" style="background: var(--bg-card); border-radius: 5px; padding: 4px 6px;">
+                    <span style="color: var(--text-muted); font-size: 0.62rem; display: block;">Potencia TX OLT:</span>
+                    <strong id="telemetry-gpon-tx" style="color: #c084fc; font-family: monospace;">—</strong>
+                  </div>
+                  <div id="box-gpon-avg-rx" style="background: var(--bg-card); border-radius: 5px; padding: 4px 6px;">
+                    <span style="color: var(--text-muted); font-size: 0.62rem; display: block;">Rx Promedio ONTs:</span>
+                    <strong id="telemetry-gpon-rx" style="color: #f59e0b; font-family: monospace;">—</strong>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Telemetría Sensores Ambientales e IoT (SM9S) -->
+              <div id="telemetry-env-box" style="display: none; margin-top: 6px; margin-bottom: 6px; background: rgba(15,23,42,0.6); border: 1px solid rgba(245,158,11,0.3); border-radius: 8px; padding: 8px;">
+                <div style="font-size: 0.72rem; font-weight: 700; color: #f59e0b; margin-bottom: 6px; display: flex; align-items: center; justify-content: space-between;">
+                  <span><i class="fas fa-temperature-low"></i> Sensores de Sitio (SM9S)</span>
+                  <span style="font-size: 0.62rem; background: rgba(245,158,11,0.15); color: #fbbf24; padding: 1px 5px; border-radius: 4px; font-weight: bold;">IoT</span>
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px; font-size: 0.74rem;">
+                  <div style="background: var(--bg-card); border-radius: 5px; padding: 4px 6px;">
+                    <span style="color: var(--text-muted); font-size: 0.62rem; display: block;">Temp. Ambiente:</span>
+                    <strong id="telemetry-env-temp" style="color: #f59e0b; font-family: monospace;">—</strong>
+                  </div>
+                  <div style="background: var(--bg-card); border-radius: 5px; padding: 4px 6px;">
+                    <span style="color: var(--text-muted); font-size: 0.62rem; display: block;">Humedad Relativa:</span>
+                    <strong id="telemetry-env-hum" style="color: #38bdf8; font-family: monospace;">—</strong>
+                  </div>
+                  <div style="background: var(--bg-card); border-radius: 5px; padding: 4px 6px;">
+                    <span style="color: var(--text-muted); font-size: 0.62rem; display: block;">Voltaje AC:</span>
+                    <strong id="telemetry-env-vac" style="color: #10b981; font-family: monospace;">—</strong>
+                  </div>
+                  <div style="background: var(--bg-card); border-radius: 5px; padding: 4px 6px;">
+                    <span style="color: var(--text-muted); font-size: 0.62rem; display: block;">Voltaje Batería:</span>
+                    <strong id="telemetry-env-vdc" style="color: #cbd5e1; font-family: monospace;">—</strong>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Métricas de Plantillas Personalizadas / Adicionales -->
+              <div id="telemetry-custom-box" style="display: none; margin-top: 6px; margin-bottom: 6px; background: rgba(15,23,42,0.6); border: 1px solid var(--border-color); border-radius: 8px; padding: 8px;">
+                <div style="font-size: 0.72rem; font-weight: 700; color: #cbd5e1; margin-bottom: 6px; display: flex; align-items: center; justify-content: space-between;">
+                  <span><i class="fas fa-sliders-h"></i> Parámetros de Plantilla Zabbix</span>
+                  <span id="telemetry-custom-count" style="font-size: 0.62rem; background: rgba(148,163,184,0.15); color: #94a3b8; padding: 1px 5px; border-radius: 4px; font-weight: bold;">0 métricas</span>
+                </div>
+                <div id="telemetry-custom-list" style="display: flex; flex-direction: column; gap: 4px; max-height: 180px; overflow-y: auto; font-size: 0.72rem;">
+                  <!-- Rellenado dinámicamente con pares Métrica: Valor -->
                 </div>
               </div>
 

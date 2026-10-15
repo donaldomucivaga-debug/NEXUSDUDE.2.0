@@ -1222,33 +1222,6 @@ class ZabbixService:
             }
 
         hid = str(h["hostid"])
-        telemetry_keys = [
-            # Ping e ICMP
-            "icmpping", "icmppingsec", "icmppingloss",
-            "icmpping[,10,100,,1000]", "icmppingsec[,10,100,,1000]", "icmppingloss[,10,100,,1000]",
-            # Cambium ePMP / Force 4600 / 300 / 200 / 180 / 130
-            "cambium.radio.chwidth", "cambium.radio.bandwidth", "cambium.radio.freq", "cambium.radio.tx_power",
-            "cambium.radio.rssi", "cambium.cpe.rssi", "cambium.radio.snr", "cambium.cpe.snr",
-            "cambium.cpe.rx_mcs", "cambium.cpe.tx_mcs", "cambium.cpe.distance_km", "cambium.cpe.ssid",
-            "cambium.cpe.ap_mac", "cambium.ap.connected_sms", "cambium.ap.connected_sta_count",
-            "cambium.serial", "cambium.sw.version", "cambium.model", "cambium.mac",
-            "cambium.lan.speed", "net.if.status[LAN]", "net.if.in[LAN]", "net.if.out[LAN]",
-            # Altai SuperWiFi C1n / C1xn / WA1011N-G
-            "altai.radio.channel", "altai.radio.mode", "altai.radio.tx_power",
-            "altai.hw.model", "altai.hw.serial", "altai.sw.version", "altai.mac", "altai.ip",
-            "net.if.status[eth0]", "net.if.in[eth0]", "net.if.out[eth0]",
-            # MikroTik Routers & Switches
-            "system.cpu.util.total", "system.cpu.util[0]", "vm.memory.util",
-            "sensor.temp.board", "sensor.temp.cpu", "sensor.voltage",
-            "sensor.power.psu1.state", "sensor.power.psu2.state",
-            # Ubiquiti AirMAX
-            "ubnt.radio.freq", "ubnt.radio.rssi", "ubnt.radio.signal", "ubnt.radio.ccq",
-            "ubnt.radio.distance", "ubnt.sw.version",
-            # Mimosa
-            "mimosa.radio.freq", "mimosa.radio.rssi", "mimosa.radio.tx_power", "mimosa.sw.version",
-            # Sistema general
-            "system.uptime", "system.name", "system.descr"
-        ]
 
         triggers, items = await asyncio.gather(
             self._call_api("trigger.get", {
@@ -1258,9 +1231,7 @@ class ZabbixService:
             }),
             self._call_api("item.get", {
                 "hostids": [hid],
-                "filter": {
-                    "key_": telemetry_keys
-                },
+                "monitored": True,
                 "output": ["itemid", "name", "key_", "lastvalue", "units", "lastclock"]
             })
         )
@@ -1269,12 +1240,25 @@ class ZabbixService:
         for it in items:
             k = it["key_"]
             base_k = k.split("[")[0] if "[" in k else k
-            pdata[k] = it.get("lastvalue")
-            pdata[base_k] = it.get("lastvalue")
+            val = it.get("lastvalue")
+            pdata[k] = val
+            if base_k not in pdata or pdata[base_k] is None:
+                pdata[base_k] = val
+
+        # ─── PING e ICMP ───
         icmp_val = pdata.get("icmpping")
-        loss_val = float(pdata.get("icmppingloss", 0) or 0)
+        if icmp_val is None:
+            icmp_val = next((it["lastvalue"] for it in items if "icmpping" in it["key_"] and not any(x in it["key_"] for x in ["loss", "sec"])), None)
+
+        loss_raw = pdata.get("icmppingloss") or next((it.get("lastvalue") for it in items if "icmppingloss" in it["key_"]), 0)
         try:
-            rtt_sec = float(pdata.get("icmppingsec", 0) or 0)
+            loss_val = float(loss_raw or 0)
+        except Exception:
+            loss_val = 0.0
+
+        rtt_raw = pdata.get("icmppingsec") or next((it.get("lastvalue") for it in items if "icmppingsec" in it["key_"]), None)
+        try:
+            rtt_sec = float(rtt_raw or 0)
             rtt_ms = round(rtt_sec * 1000.0, 2) if rtt_sec > 0 else (0.0 if icmp_val == '0' else None)
         except Exception:
             rtt_ms = None
@@ -1290,41 +1274,50 @@ class ZabbixService:
 
         status = "down" if is_down else ("warning" if is_warn else "ok")
 
-        # Mapeo de Ancho de Canal Cambium (SNMP Enum -> MHz)
+        # ─── 1. Telemetría Inalámbrica (RF) ───
         CAMBIUM_BANDWIDTH_MAP = {
-            "1": "20 MHz",
-            "2": "40 MHz",
-            "3": "10 MHz",
-            "4": "5 MHz",
-            "5": "80 MHz",
-            "6": "160 MHz"
+            "1": "20 MHz", "2": "40 MHz", "3": "10 MHz", "4": "5 MHz", "5": "80 MHz", "6": "160 MHz"
         }
-        bw_raw = pdata.get("cambium.radio.chwidth") or pdata.get("cambium.radio.bandwidth")
+        bw_raw = pdata.get("cambium.radio.chwidth") or pdata.get("cambium.radio.bandwidth") or next((it.get("lastvalue") for it in items if "chwidth" in it["key_"] or "bandwidth" in it["key_"]), None)
         bw_text = CAMBIUM_BANDWIDTH_MAP.get(str(bw_raw)) if (bw_raw is not None and str(bw_raw) != '0') else (f"{bw_raw} MHz" if bw_raw and str(bw_raw).isdigit() and int(bw_raw) > 6 else None)
 
-        # 1. Telemetría Inalámbrica
         wireless_info = None
         has_wireless = (
             bw_raw is not None or
-            "cambium.radio.freq" in pdata or "cambium.radio.rssi" in pdata or "cambium.cpe.rssi" in pdata or
-            "altai.radio.channel" in pdata or "ubnt.radio.freq" in pdata or "mimosa.radio.freq" in pdata
+            any(k in pdata for k in ["cambium.radio.freq", "cambium.radio.rssi", "cambium.cpe.rssi", "altai.radio.channel", "ubnt.radio.freq", "mimosa.radio.freq"]) or
+            any(any(x in it["key_"] for x in ["radio.freq", "cpe.rssi", "radio.rssi", "altai.radio"]) for it in items)
         )
 
         if has_wireless:
             freq_val = pdata.get("cambium.radio.freq") or pdata.get("ubnt.radio.freq") or pdata.get("mimosa.radio.freq")
+            if not freq_val:
+                freq_val = next((it.get("lastvalue") for it in items if "radio.freq" in it["key_"]), None)
+
             altai_chan = pdata.get("altai.radio.channel")
             if not freq_val and altai_chan:
-                # Canal Wi-Fi 2.4 GHz
                 try:
                     c_num = int(altai_chan)
                     freq_val = str(2407 + (c_num * 5)) if 1 <= c_num <= 14 else str(altai_chan)
                 except Exception:
                     freq_val = str(altai_chan)
 
-            rssi_val = pdata.get("cambium.cpe.rssi") or pdata.get("cambium.radio.rssi") or pdata.get("ubnt.radio.rssi") or pdata.get("ubnt.radio.signal") or pdata.get("mimosa.radio.rssi")
-            snr_val = pdata.get("cambium.cpe.snr") or pdata.get("cambium.radio.snr")
-            tx_pow = pdata.get("cambium.radio.tx_power") or pdata.get("altai.radio.tx_power") or pdata.get("mimosa.radio.tx_power")
-            sta_cnt = pdata.get("cambium.ap.connected_sms") or pdata.get("cambium.ap.connected_sta_count")
+            rssi_val = (
+                pdata.get("cambium.cpe.rssi") or pdata.get("cambium.radio.rssi") or
+                pdata.get("ubnt.radio.rssi") or pdata.get("ubnt.radio.signal") or pdata.get("mimosa.radio.rssi") or
+                next((it.get("lastvalue") for it in items if any(x in it["key_"] for x in ["cpe.rssi", "radio.rssi", "radio.signal"])), None)
+            )
+            snr_val = (
+                pdata.get("cambium.cpe.snr") or pdata.get("cambium.radio.snr") or
+                next((it.get("lastvalue") for it in items if "snr" in it["key_"]), None)
+            )
+            tx_pow = (
+                pdata.get("cambium.radio.tx_power") or pdata.get("altai.radio.tx_power") or pdata.get("mimosa.radio.tx_power") or
+                next((it.get("lastvalue") for it in items if "tx_power" in it["key_"]), None)
+            )
+            sta_cnt = (
+                pdata.get("cambium.ap.connected_sms") or pdata.get("cambium.ap.connected_sta_count") or
+                next((it.get("lastvalue") for it in items if "connected_sm" in it["key_"] or "connected_sta" in it["key_"]), None)
+            )
 
             wireless_info = {
                 "channel_width_id": bw_raw or (altai_chan if altai_chan else None),
@@ -1333,21 +1326,25 @@ class ZabbixService:
                 "tx_power_dbm": tx_pow,
                 "rssi_dbm": rssi_val,
                 "snr_db": snr_val,
-                "rx_mcs": pdata.get("cambium.cpe.rx_mcs"),
-                "tx_mcs": pdata.get("cambium.cpe.tx_mcs"),
-                "distance_km": pdata.get("cambium.cpe.distance_km") or pdata.get("ubnt.radio.distance"),
-                "ssid": pdata.get("cambium.cpe.ssid"),
-                "connected_ap_mac": pdata.get("cambium.cpe.ap_mac"),
+                "rx_mcs": pdata.get("cambium.cpe.rx_mcs") or next((it.get("lastvalue") for it in items if "rx_mcs" in it["key_"]), None),
+                "tx_mcs": pdata.get("cambium.cpe.tx_mcs") or next((it.get("lastvalue") for it in items if "tx_mcs" in it["key_"]), None),
+                "distance_km": pdata.get("cambium.cpe.distance_km") or pdata.get("ubnt.radio.distance") or next((it.get("lastvalue") for it in items if "distance" in it["key_"]), None),
+                "ssid": pdata.get("cambium.cpe.ssid") or next((it.get("lastvalue") for it in items if "ssid" in it["key_"]), None),
+                "connected_ap_mac": pdata.get("cambium.cpe.ap_mac") or next((it.get("lastvalue") for it in items if "ap_mac" in it["key_"]), None),
                 "connected_sta_count": sta_cnt,
                 "mode": pdata.get("altai.radio.mode") or ("AP" if sta_cnt is not None else "CPE")
             }
 
-        # 2. Información del Sistema y Hardware
+        # ─── 2. Información del Sistema y Hardware ───
         def format_uptime(seconds_val):
             if not seconds_val:
                 return "—"
             try:
-                s = int(float(seconds_val))
+                s = float(seconds_val)
+                # Timeticks de SNMP (centésimas de segundo) si es excesivamente grande
+                if s > 500_000_000:
+                    s = s / 100.0
+                s = int(s)
                 days, s = divmod(s, 86400)
                 hours, s = divmod(s, 3600)
                 minutes, _ = divmod(s, 60)
@@ -1355,34 +1352,169 @@ class ZabbixService:
                 if days > 0: parts.append(f"{days}d")
                 if hours > 0: parts.append(f"{hours}h")
                 parts.append(f"{minutes}m")
-                return " ".join(parts)
+                return " ".join(parts) if parts else "0m"
             except Exception:
                 return str(seconds_val)
 
+        uptime_raw = (
+            pdata.get("system.uptime") or pdata.get("sysUpTime") or
+            next((it.get("lastvalue") for it in items if it["key_"].startswith("system.uptime") or it["key_"].lower() == "sysuptime"), None)
+        )
+        sys_name = (
+            pdata.get("system.name") or pdata.get("sysName") or
+            next((it.get("lastvalue") for it in items if it["key_"].lower() in ("system.name", "sysname")), None)
+        )
+        sys_descr = (
+            pdata.get("system.descr") or pdata.get("sysDescr") or
+            next((it.get("lastvalue") for it in items if it["key_"].lower() in ("system.descr", "sysdescr")), None)
+        )
+        model_val = (
+            pdata.get("system.hw.model[mtxrBoardName]") or pdata.get("cambium.model") or pdata.get("altai.hw.model") or
+            next((it.get("lastvalue") for it in items if "system.hw.model" in it["key_"] or it["key_"] in ("model", "cambium.model", "altai.hw.model")), None)
+        )
+        serial_val = (
+            pdata.get("system.hw.serialnumber[mtxrSerialNumber]") or pdata.get("cambium.serial") or pdata.get("altai.hw.serial") or
+            next((it.get("lastvalue") for it in items if "system.hw.serial" in it["key_"] or it["key_"] in ("serial", "cambium.serial", "altai.hw.serial")), None)
+        )
+        fw_val = (
+            pdata.get("system.hw.firmware[mtxrFirmwareVersion]") or pdata.get("system.sw.os[mtxrLicVersion]") or
+            pdata.get("cambium.sw.version") or pdata.get("altai.sw.version") or pdata.get("ubnt.sw.version") or pdata.get("mimosa.sw.version") or
+            next((it.get("lastvalue") for it in items if "system.hw.firmware" in it["key_"] or "system.sw.os" in it["key_"] or "sw.version" in it["key_"]), None)
+        )
+        mac_val = (
+            pdata.get("cambium.mac") or pdata.get("altai.mac") or
+            next((it.get("lastvalue") for it in items if "mac" in it["key_"].lower() and "ap_mac" not in it["key_"].lower()), None)
+        )
+
         system_info = {
-            "model": pdata.get("cambium.model") or pdata.get("altai.hw.model"),
-            "serial": pdata.get("cambium.serial") or pdata.get("altai.hw.serial"),
-            "firmware": pdata.get("cambium.sw.version") or pdata.get("altai.sw.version") or pdata.get("ubnt.sw.version") or pdata.get("mimosa.sw.version"),
-            "mac": pdata.get("cambium.mac") or pdata.get("altai.mac"),
-            "uptime_seconds": pdata.get("system.uptime"),
-            "uptime_text": format_uptime(pdata.get("system.uptime")),
-            "sys_name": pdata.get("system.name"),
-            "sys_descr": pdata.get("system.descr")
+            "model": model_val,
+            "serial": serial_val,
+            "firmware": fw_val,
+            "mac": mac_val,
+            "uptime_seconds": uptime_raw,
+            "uptime_text": format_uptime(uptime_raw),
+            "sys_name": sys_name,
+            "sys_descr": sys_descr
         }
 
-        # 3. Métricas de Hardware (Routers / Switches / MikroTik)
+        # ─── 3. Métricas de Hardware (Routers / Switches / MikroTik / OLTs / Sensores) ───
+        cpu_val = (
+            pdata.get("system.cpu.util.total") or pdata.get("system.cpu.util[0]") or pdata.get("vsol.cpu.util") or
+            next((it.get("lastvalue") for it in items if "huawei.board.cpu" in it["key_"] or "cpu.util.total" in it["key_"] or "cpu.util" in it["key_"]), None)
+        )
+        mem_val = (
+            pdata.get("vm.memory.util") or pdata.get("vsol.mem.util") or
+            next((it.get("lastvalue") for it in items if "huawei.board.mem" in it["key_"] or "memory.util" in it["key_"]), None)
+        )
+        # Sanitizar valores de overflow en SNMP (ej. 2147483647)
+        if mem_val and str(mem_val) in ("2147483647", "4294967295"):
+            mem_val = None
+
+        temp_val = (
+            pdata.get("sensor.temp.cpu") or pdata.get("sensor.temp.board") or pdata.get("vsol.temperature") or pdata.get("sm9s.temperature") or
+            next((it.get("lastvalue") for it in items if "huawei.board.temp" in it["key_"] or "sensor.temp" in it["key_"]), None)
+        )
+        if temp_val and str(temp_val) in ("-1", "0") and not any(k in pdata for k in ["sensor.temp.cpu", "sensor.temp.board"]):
+            temp_val = None
+
+        volt_val = (
+            pdata.get("sensor.voltage") or pdata.get("sm9s.voltage.ac") or pdata.get("sm9s.voltage.dc") or
+            next((it.get("lastvalue") for it in items if "sensor.voltage" in it["key_"] or "sm9s.voltage" in it["key_"]), None)
+        )
+        psu1_val = pdata.get("sensor.psu1.state") or pdata.get("sensor.power.psu1.state")
+        psu2_val = pdata.get("sensor.psu2.state") or pdata.get("sensor.power.psu2.state")
+        fan1_val = pdata.get("sensor.fan.speed1")
+        fan2_val = pdata.get("sensor.fan.speed2")
+
         hardware_info = None
-        has_hw = any(k in pdata for k in ["system.cpu.util.total", "system.cpu.util[0]", "vm.memory.util", "sensor.temp.cpu", "sensor.temp.board", "sensor.voltage"])
-        if has_hw:
+        if any(v is not None for v in [cpu_val, mem_val, temp_val, volt_val, psu1_val, fan1_val]):
+            try: cpu_fmt = round(float(cpu_val), 1) if cpu_val is not None else None
+            except: cpu_fmt = None
+            try: mem_fmt = round(float(mem_val), 1) if mem_val is not None else None
+            except: mem_fmt = None
+            try: temp_fmt = round(float(temp_val), 1) if temp_val is not None else None
+            except: temp_fmt = None
+            try: volt_fmt = round(float(volt_val), 2) if volt_val is not None else None
+            except: volt_fmt = None
+
             hardware_info = {
-                "cpu_util_pct": pdata.get("system.cpu.util.total") or pdata.get("system.cpu.util[0]"),
-                "memory_util_pct": pdata.get("vm.memory.util"),
-                "temp_cpu_c": pdata.get("sensor.temp.cpu"),
+                "cpu_util_pct": cpu_fmt,
+                "memory_util_pct": mem_fmt,
+                "temp_cpu_c": temp_fmt,
                 "temp_board_c": pdata.get("sensor.temp.board"),
-                "voltage_v": pdata.get("sensor.voltage")
+                "voltage_v": volt_fmt,
+                "psu1_state": "OK" if str(psu1_val) == "1" else (psu1_val if psu1_val is not None else None),
+                "psu2_state": "OK" if str(psu2_val) == "1" else (psu2_val if psu2_val is not None else None),
+                "fan1_rpm": fan1_val,
+                "fan2_rpm": fan2_val
             }
 
-        # 4. Estadísticas de Interfaz LAN
+        # ─── 4. Telemetría GPON / FTTH (Huawei, V-SOL, OLTs) ───
+        gpon_info = None
+        gpon_items = [it for it in items if it["key_"].startswith("gpon.")]
+        if gpon_items:
+            onus_online = [int(float(it["lastvalue"])) for it in gpon_items if "gpon.ont.online" in it["key_"] and it.get("lastvalue") is not None and str(it["lastvalue"]).replace('.','',1).isdigit()]
+            onus_reg = [int(float(it["lastvalue"])) for it in gpon_items if "gpon.ont.registered" in it["key_"] and it.get("lastvalue") is not None and str(it["lastvalue"]).replace('.','',1).isdigit()]
+            
+            ont_rx_powers = []
+            for it in gpon_items:
+                if "gpon.ont.rxpower" in it["key_"] and it.get("lastvalue"):
+                    try:
+                        val_rx = float(it["lastvalue"])
+                        if -40.0 <= val_rx <= -5.0:
+                            ont_rx_powers.append(val_rx)
+                    except Exception:
+                        pass
+
+            tx_opt_val = next((it["lastvalue"] for it in gpon_items if "gpon.optical.txpower" in it["key_"] and it.get("lastvalue")), None)
+
+            gpon_info = {
+                "total_onus_online": sum(onus_online) if onus_online else None,
+                "total_onus_registered": sum(onus_reg) if onus_reg else None,
+                "olt_tx_power_dbm": round(float(tx_opt_val), 2) if tx_opt_val is not None else None,
+                "total_onus_monitored": len(ont_rx_powers),
+                "avg_ont_rx_power_dbm": round(sum(ont_rx_powers) / len(ont_rx_powers), 2) if ont_rx_powers else None,
+                "min_ont_rx_power_dbm": round(min(ont_rx_powers), 2) if ont_rx_powers else None,
+                "max_ont_rx_power_dbm": round(max(ont_rx_powers), 2) if ont_rx_powers else None
+            }
+
+        # ─── 5. Sensores Ambientales e IoT (SM9S / etc.) ───
+        env_info = None
+        sm9s_items = [it for it in items if it["key_"].startswith("sm9s.")]
+        if sm9s_items:
+            env_info = {
+                "temperature_c": pdata.get("sm9s.temperature"),
+                "humidity_pct": pdata.get("sm9s.humidity"),
+                "voltage_ac_v": pdata.get("sm9s.voltage.ac"),
+                "voltage_dc_v": pdata.get("sm9s.voltage.dc"),
+                "dry_contacts": [
+                    {"name": "Contacto 1", "state": pdata.get("sm9s.dry_contact[1]")},
+                    {"name": "Contacto 2", "state": pdata.get("sm9s.dry_contact[2]")},
+                    {"name": "Contacto 3", "state": pdata.get("sm9s.dry_contact[3]")}
+                ],
+                "relay_output": pdata.get("sm9s.relay_output[1]")
+            }
+
+        # ─── 6. Métricas de Plantillas Personalizadas (Cualquier Métrica Adicional) ───
+        STD_PREFIXES = (
+            "icmpping", "cambium.", "altai.", "ubnt.", "mimosa.", "system.", "sysUpTime", "sysName", "sysDescr",
+            "sensor.", "gpon.", "sm9s.", "net.if.", "vm.memory", "vsol.", "huawei."
+        )
+        custom_metrics = []
+        for it in items:
+            k = it["key_"]
+            is_std = any(k.startswith(pfx) or k == pfx for pfx in STD_PREFIXES)
+            if not is_std and it.get("lastvalue") is not None and str(it["lastvalue"]).strip() != "":
+                if not any(ign in k.lower() for ign in ["discover", "lld", "raw", "status"]):
+                    custom_metrics.append({
+                        "name": it.get("name", k),
+                        "key": k,
+                        "value": it.get("lastvalue"),
+                        "units": it.get("units", "")
+                    })
+        custom_metrics = custom_metrics[:20]
+
+        # ─── 7. Estadísticas de Interfaz LAN ───
         lan_info = None
         has_lan = any(k in pdata for k in ["net.if.status[LAN]", "net.if.in[LAN]", "net.if.out[LAN]", "net.if.status[eth0]", "net.if.in[eth0]", "net.if.out[eth0]"])
         if has_lan:
@@ -1470,7 +1602,7 @@ class ZabbixService:
         snmp_comm = snmp_iface.get("details", {}).get("community") if snmp_iface else None
         snmp_avail_int = int(snmp_iface.get("available", 0)) if snmp_iface else 0
         has_snmp_issue = (ping_status in ("ok", "warning")) and (snmp_avail_int == 2 or snmp_status in ("down", "unknown") or bool(snmp_err))
-        
+
         snmp_warning_msg = None
         if has_snmp_issue:
             if snmp_err:
@@ -1499,6 +1631,9 @@ class ZabbixService:
             "wireless": wireless_info,
             "system": system_info,
             "hardware": hardware_info,
+            "gpon": gpon_info,
+            "environmental": env_info,
+            "custom_metrics": custom_metrics,
             "lan": lan_info,
             "zabbix_matched": True,
             "zabbix_hostid": hid,
@@ -1691,8 +1826,8 @@ class ZabbixService:
         hid = str(h["hostid"])
         items = await self._call_api("item.get", {
             "hostids": [hid],
-            "output": ["itemid", "name", "key_", "lastvalue", "units", "status", "lastclock"],
-            "limit": 300
+            "monitored": True,
+            "output": ["itemid", "name", "key_", "lastvalue", "units", "status", "lastclock"]
         })
 
         interfaces_dict: Dict[str, Dict[str, Any]] = {}
@@ -1716,17 +1851,26 @@ class ZabbixService:
             key = it.get("key_", "")
             val = it.get("lastvalue")
 
-            # 1. Interfaces SNMP Estándar o Ethernet / SFP
-            if "net.if.in[" in key or "net.if.out[" in key or "sensor.optical." in key or "net.if.status[" in key or "net.if.speed[" in key or ("Interface" in name and any(k in name.lower() for k in ["traffic", "bits", "bytes", "octets", "speed", "optical", "status"])):
+            # 1. Interfaces SNMP Estándar o Ethernet / SFP / DDM Óptico
+            is_iface_traffic = "net.if.in[" in key or "net.if.out[" in key or "net.if.status[" in key or "net.if.speed[" in key or ("Interface" in name and any(k in name.lower() for k in ["traffic", "bits", "bytes", "octets", "speed", "optical", "status"]))
+            is_sfp_ddm = "sensor.sfp." in key or "sensor.optical." in key or "gpon.optical." in key or ("SFP" in name and any(k in name.lower() for k in ["optical", "power", "temp"]))
+
+            if is_iface_traffic or is_sfp_ddm:
                 if_name = None
-                m_key = re.search(r'\[([^\]]+)\]', key)
-                if m_key:
-                    param = m_key.group(1).split(",")[-1].strip()
-                    if not param.startswith("if") or len(param) < 15:
-                        if_name = param
+                if "sensor.sfp." in key:
+                    m_sfp = re.search(r'\[\"?([^\"\]]+)\"?\]', key)
+                    if m_sfp:
+                        if_name = m_sfp.group(1).strip()
+
+                if not if_name:
+                    m_key = re.search(r'\[([^\]]+)\]', key)
+                    if m_key:
+                        param = m_key.group(1).split(",")[-1].strip().strip('"')
+                        if not param.startswith("if") or len(param) < 15:
+                            if_name = param
 
                 if not if_name or if_name.startswith("if"):
-                    m_name = re.match(r'(?:Interface|Port|Interfaz)\s+([^:]+)', name, re.IGNORECASE)
+                    m_name = re.match(r'(?:Interface|Port|Interfaz|SFP)\s+([^:]+)', name, re.IGNORECASE)
                     if m_name:
                         if_name = m_name.group(1).strip()
                     else:
@@ -1738,7 +1882,7 @@ class ZabbixService:
                     if_name = key.split("[")[0] if "[" in key else name
 
                 if if_name not in interfaces_dict:
-                    is_opt = any(k in if_name.lower() or k in name.lower() for k in ["sfp", "optical", "fiber", "xg", "ge25", "ge26", "ge27", "ge28"])
+                    is_opt = any(k in if_name.lower() or k in name.lower() for k in ["sfp", "optical", "fiber", "xg", "ge25", "ge26", "ge27", "ge28", "gpon"])
                     interfaces_dict[if_name] = {
                         "name": if_name,
                         "key": if_name,
@@ -1758,33 +1902,33 @@ class ZabbixService:
                 entry = interfaces_dict[if_name]
                 entry["item_ids"].append(it.get("itemid"))
 
-                if "net.if.in" in key or "bits received" in name.lower() or "inbound" in name.lower():
+                if "net.if.in[" in key and not any(x in key for x in ["errors", "packets", "total"]) or "bits received" in name.lower() or "inbound" in name.lower():
                     try:
                         entry["traffic_in_bps"] = float(val) if val else 0
                         entry["traffic_in_fmt"] = fmt_bps(val)
                     except Exception:
                         pass
-                elif "net.if.out" in key or "bits sent" in name.lower() or "outbound" in name.lower():
+                elif "net.if.out[" in key and not any(x in key for x in ["errors", "packets", "total"]) or "bits sent" in name.lower() or "outbound" in name.lower():
                     try:
                         entry["traffic_out_bps"] = float(val) if val else 0
                         entry["traffic_out_fmt"] = fmt_bps(val)
                     except Exception:
                         pass
-                elif "net.if.status" in key or "operational status" in name.lower():
+                elif "net.if.status[" in key or "operational status" in name.lower():
                     entry["status"] = "up" if val in ("1", "up", "UP") else ("down" if val in ("2", "down", "DOWN") else "unknown")
-                elif "net.if.speed" in key or "speed" in name.lower():
+                elif "net.if.speed[" in key or "speed" in name.lower():
                     entry["speed"] = fmt_bps(val) if val else entry["speed"]
-                elif "sensor.optical.rx_power" in key or "rx power" in name.lower() or "rx_power" in key:
+                elif "sensor.optical.rx_power" in key or "sensor.sfp.rx" in key or "rx power" in name.lower() or "rx_power" in key:
                     try:
                         entry["optical"]["rx_power_dbm"] = round(float(val), 2)
                     except Exception:
                         pass
-                elif "sensor.optical.tx_power" in key or "tx power" in name.lower() or "tx_power" in key:
+                elif "sensor.optical.tx_power" in key or "sensor.sfp.tx" in key or "gpon.optical.txpower" in key or "tx power" in name.lower() or "tx_power" in key:
                     try:
                         entry["optical"]["tx_power_dbm"] = round(float(val), 2)
                     except Exception:
                         pass
-                elif "sensor.optical.temperature" in key or "temperature" in name.lower():
+                elif "sensor.sfp.temp" in key or "sensor.optical.temperature" in key or "temperature" in name.lower():
                     try:
                         entry["optical"]["temp_c"] = round(float(val), 1)
                     except Exception:
