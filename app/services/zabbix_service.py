@@ -951,8 +951,21 @@ class ZabbixService:
                     )
                     is_down = (icmp_val == '0') or has_down_trigger
 
+                    sample_node = node_host_pairs[0][0]
+                    zh_name_u = (z_host_info.get("name") or z_host_info.get("host") or "").upper()
+                    n_name_u = (sample_node.get("name") or "").upper()
+                    n_dt_u = (sample_node.get("device_type") or "").upper()
+                    is_zona_wifi = (
+                        "ZONA" in n_dt_u or "ALTAI" in n_dt_u or "C1N" in n_dt_u or
+                        n_name_u.startswith(("ZONA ", "HP_Z", "Z1_", "Z2_", "Z3_", "Z4_", "Z5_", "Z6_", "ALTAI")) or
+                        zh_name_u.startswith(("ZONA ", "HP_Z", "Z1_", "Z2_", "Z3_", "Z4_", "Z5_", "Z6_", "ALTAI")) or
+                        "icmpping[,10,100,,1000]" in pdata
+                    )
+                    loss_thresh = 65.0 if is_zona_wifi else 10.0
+                    rtt_thresh = 600.0 if is_zona_wifi else 250.0
+
                     has_warn_trigger = any(int(t.get("priority", 0)) in (2, 3) for t in trig_list)
-                    is_warn = not is_down and (has_warn_trigger or loss_val > 10.0 or (rtt_ms and rtt_ms > 250))
+                    is_warn = not is_down and (has_warn_trigger or loss_val > loss_thresh or (rtt_ms and rtt_ms > rtt_thresh))
 
                     if is_down:
                         calc_status = "down"
@@ -968,7 +981,7 @@ class ZabbixService:
                     if icmp_val == '0':
                         ping_status = "down"
                     elif icmp_val == '1':
-                        if loss_val > 10.0 or (rtt_ms and rtt_ms > 250):
+                        if loss_val > loss_thresh or (rtt_ms and rtt_ms > rtt_thresh):
                             ping_status = "warning"
                         else:
                             ping_status = "ok"
@@ -1269,8 +1282,20 @@ class ZabbixService:
             for t in triggers
         )
         is_down = (icmp_val == '0') or has_down_trigger
+        zh_name_u = (h.get("name") or h.get("host") or "").upper()
+        n_name_u = (node.get("name") or "").upper()
+        n_dt_u = (node.get("device_type") or "").upper()
+        is_zona_wifi = (
+            "ZONA" in n_dt_u or "ALTAI" in n_dt_u or "C1N" in n_dt_u or
+            n_name_u.startswith(("ZONA ", "HP_Z", "Z1_", "Z2_", "Z3_", "Z4_", "Z5_", "Z6_", "ALTAI")) or
+            zh_name_u.startswith(("ZONA ", "HP_Z", "Z1_", "Z2_", "Z3_", "Z4_", "Z5_", "Z6_", "ALTAI")) or
+            "icmpping[,10,100,,1000]" in pdata or "altai.radio.channel" in pdata
+        )
+        loss_thresh = 65.0 if is_zona_wifi else 10.0
+        rtt_thresh = 600.0 if is_zona_wifi else 250.0
+
         has_warn_trigger = any(int(t.get("priority", 0)) in (2, 3) for t in triggers)
-        is_warn = not is_down and (has_warn_trigger or loss_val > 10.0 or (rtt_ms and rtt_ms > 250))
+        is_warn = not is_down and (has_warn_trigger or loss_val > loss_thresh or (rtt_ms and rtt_ms > rtt_thresh))
 
         status = "down" if is_down else ("warning" if is_warn else "ok")
 

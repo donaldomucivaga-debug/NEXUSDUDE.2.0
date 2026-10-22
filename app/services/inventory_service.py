@@ -14,6 +14,7 @@ class InventoryService:
     def __init__(self):
         self._devices_cache: List[Dict[str, Any]] = []
         self._sites_cache: List[Dict[str, Any]] = []
+        self._site_status_map: Dict[int, str] = {}
         self._roles_cache: List[Dict[str, Any]] = []
         self._manufacturers_cache: List[Dict[str, Any]] = []
         self._last_refresh: Optional[datetime] = None
@@ -41,14 +42,23 @@ class InventoryService:
             async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
                 headers = await self.get_headers()
 
-                # 1. Cargar Sitios
+                # 1. Cargar Sitios (mapeando estados y excluyendo inactivos del catálogo activo)
                 try:
                     res_sites = await client.get(f"{settings.NETBOX_URL}/api/dcim/sites/?limit=1000", headers=headers)
                     if res_sites.status_code == 200:
+                        results = res_sites.json().get("results", [])
                         self._sites_cache = sorted(
-                            [{"id": s["id"], "name": s["name"], "slug": s["slug"]} for s in res_sites.json().get("results", [])],
+                            [
+                                {"id": s["id"], "name": s["name"], "slug": s["slug"]}
+                                for s in results
+                                if (s.get("status", {}).get("value") if isinstance(s.get("status"), dict) else s.get("status")) == "active"
+                            ],
                             key=lambda x: x["name"]
                         )
+                        self._site_status_map = {
+                            s["id"]: (s.get("status", {}).get("value") if isinstance(s.get("status"), dict) else s.get("status") or "active")
+                            for s in results
+                        }
                 except Exception as e:
                     logger.warning(f"Error cargando sitios: {e}")
 
@@ -205,6 +215,13 @@ class InventoryService:
         if not self._sites_cache:
             await self.refresh_cache()
         return self._sites_cache
+
+    def is_site_retired(self, netbox_site_id: Optional[int]) -> bool:
+        """Determina si un ID de sitio NetBox se encuentra en estado retirado o fuera de servicio."""
+        if not netbox_site_id:
+            return False
+        status = (self._site_status_map.get(netbox_site_id) or "active").lower()
+        return status in ("retired", "decommissioning", "deprecate", "offline")
 
     async def get_roles(self) -> List[Dict[str, Any]]:
         if not self._roles_cache:
@@ -440,6 +457,81 @@ class InventoryService:
         # Ordenar puertos de forma natural (GE1, GE2... SFP1...)
         return sorted(interfaces_list, key=lambda x: (x.get("mgmt_only", False), x.get("name", "")))
 
+    def build_switch_ports_from_interfaces(self, interfaces_list: List[Dict[str, Any]], model_name: str = "") -> List[Dict[str, Any]]:
+        """
+        Convierte la lista de interfaces de NetBox en la especificación ordenada de bahías (switch_ports)
+        para representar el panel frontal del switch en el lienzo de NexusDude.
+        """
+        import re
+        bays = []
+        m_low = (model_name or "").strip().lower()
+
+        for iface in interfaces_list:
+            if_name = (iface.get("name") or "").strip()
+            if_type = (iface.get("type") or "1000base-t").strip()
+            mgmt_only = bool(iface.get("mgmt_only", False))
+            is_conn = bool(iface.get("is_connected", False))
+            n_low = if_name.lower()
+            t_low = if_type.lower()
+
+            if not is_conn:
+                if mgmt_only or n_low in ("mgmt", "mgmt0", "wireless", "wirelles", "poe", "ethernet", "lo", "loopback", "vlan1"):
+                    continue
+                if t_low.startswith("ieee802.11") or t_low in ("other", "virtual"):
+                    continue
+
+            media = "rj45"
+            if "copper" in n_low:
+                media = "rj45"
+            elif any(k in n_low for k in ("sfp", "xfp", "qsfp", "10ge", "fiber", "pon")) or any(
+                k in t_low for k in ("sfp", "xfp", "qsfp", "10gbase-x", "1000base-x", "gpon", "fiber")
+            ):
+                media = "sfp"
+            elif "24t4x" in m_low or "24upl4x" in m_low:
+                nums = re.findall(r"\d+", n_low)
+                if nums and int(nums[-1]) >= 25:
+                    media = "sfp"
+
+            bays.append({
+                "id": iface.get("id"),
+                "name": if_name,
+                "type": if_type,
+                "media": media,
+                "is_connected": is_conn,
+                "cable_id": iface.get("cable_id"),
+                "peer_device": iface.get("connected_device"),
+                "peer_interface": iface.get("connected_interface"),
+            })
+
+        def sort_key(item):
+            nums = [int(x) for x in re.findall(r"\d+", item["name"])]
+            media_rank = 1 if item["media"] == "sfp" else 0
+            if not nums and "sfp" in item["name"].lower():
+                nums = [999]
+            return (media_rank, nums, item["name"].lower())
+
+        bays.sort(key=sort_key)
+        for idx, b in enumerate(bays, 1):
+            nums = [int(x) for x in re.findall(r"\d+", b["name"])]
+            if "copper" in b["name"].lower() and nums:
+                b["label"] = f"{nums[-1]}C"
+            elif "sfp" in b["name"].lower():
+                if nums:
+                    if nums[-1] <= 4:
+                        b["label"] = f"S{nums[-1]}"
+                    elif any(k in b["name"].lower() for k in ("ge", "gi", "eth", "port")):
+                        b["label"] = f"{nums[-1]}S"
+                    else:
+                        b["label"] = str(nums[-1])
+                else:
+                    b["label"] = "SFP"
+            elif nums:
+                b["label"] = str(nums[-1])
+            else:
+                b["label"] = b["name"][:3].upper() or str(idx)
+
+        return bays
+
     async def get_or_create_interface(self, device_id: int, interface_name: str, if_type: str = "1000base-t") -> Dict[str, Any]:
         """Obtiene o crea una interfaz específica en NetBox."""
         headers = await self.get_headers()
@@ -669,40 +761,34 @@ class InventoryService:
                             h_id = f"h-{uuid.uuid4().hex[:8]}"
                             await db.execute("INSERT INTO map_hierarchy (id, parent_map_id, child_map_id, is_primary) VALUES (?, ?, ?, 1)", (h_id, parent_map_id, child_map_id))
 
-            # 2.1. Establecer jerarquía basada en Site Groups de NetBox (site.group.parent)
+            # 2.1. Establecer jerarquía basada en sitios_origen / sitios_dependientes de NetBox
             headers = await self.get_headers()
             try:
                 async with httpx.AsyncClient(verify=False, timeout=15.0) as client:
                     res_raw_sites = await client.get(f"{settings.NETBOX_URL}/api/dcim/sites/?limit=1000", headers=headers)
                     raw_sites = res_raw_sites.json().get("results", []) if res_raw_sites.status_code == 200 else []
 
-                    # Mapear group_id -> site_id
-                    group_to_site_id = {}
-                    for s in raw_sites:
-                        grp = s.get("group")
-                        if grp and isinstance(grp, dict):
-                            group_to_site_id[grp.get("id")] = s.get("id")
-
                     for s in raw_sites:
                         site_id = s.get("id")
-                        grp = s.get("group")
-                        if site_id in map_by_site_id and grp and isinstance(grp, dict):
+                        cf = s.get("custom_fields") or {}
+                        p_list = cf.get("sitios_origen") or []
+                        if site_id in map_by_site_id and p_list:
                             child_map_id = map_by_site_id[site_id]["id"]
-                            # Consultar el grupo para ver si tiene parent
-                            parent_grp = grp.get("parent")
-                            if parent_grp and isinstance(parent_grp, dict):
-                                parent_grp_id = parent_grp.get("id")
-                                parent_site_id = group_to_site_id.get(parent_grp_id)
-                                if parent_site_id and parent_site_id in map_by_site_id:
-                                    parent_map_id = map_by_site_id[parent_site_id]["id"]
+                            is_first = True
+                            for p_item in p_list:
+                                p_site_id = p_item["id"] if isinstance(p_item, dict) else p_item
+                                if p_site_id in map_by_site_id:
+                                    parent_map_id = map_by_site_id[p_site_id]["id"]
                                     if parent_map_id and child_map_id and parent_map_id != child_map_id:
-                                        await db.execute("UPDATE maps SET parent_map_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (parent_map_id, child_map_id))
+                                        if is_first:
+                                            await db.execute("UPDATE maps SET parent_map_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (parent_map_id, child_map_id))
+                                            is_first = False
                                         c_h = await db.execute("SELECT id FROM map_hierarchy WHERE child_map_id = ? AND parent_map_id = ?", (child_map_id, parent_map_id))
                                         if not await c_h.fetchone():
                                             h_id = f"h-{uuid.uuid4().hex[:8]}"
                                             await db.execute("INSERT INTO map_hierarchy (id, parent_map_id, child_map_id, is_primary) VALUES (?, ?, ?, 1)", (h_id, parent_map_id, child_map_id))
             except Exception as e:
-                logger.warning(f"Error procesando jerarquía de Site Groups: {e}")
+                logger.warning(f"Error procesando jerarquía de Sitios Origen: {e}")
 
             # 3. Generar portales de navegación automáticamente para todos los mapas padre-hijo
             c_all_maps = await db.execute("SELECT id, name, parent_map_id FROM maps WHERE parent_map_id IS NOT NULL")
@@ -1098,6 +1184,190 @@ class InventoryService:
         except Exception as e:
             logger.error(f"Excepción eliminando cable NetBox: {e}")
             return False
+
+    async def sync_site_group_parent(
+        self,
+        child_map_name: str,
+        parent_map_name: Optional[str] = None,
+        netbox_site_id: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """
+        Sincroniza en NetBox el cambio de jerarquía de un mapa hacia los Grupos de Sitios (SiteGroup) y Sitios (Site).
+        """
+        headers = await self.get_headers()
+        clean_child = child_map_name.strip().upper()
+        clean_parent = parent_map_name.strip().upper() if parent_map_name and parent_map_name not in ("TOPOLOGÍA PRINCIPAL", "DEFAULT-MAP", "ROOT") else None
+
+        result = {
+            "child_map": child_map_name,
+            "parent_map": parent_map_name,
+            "netbox_updated": False,
+            "site_group_id": None,
+            "parent_site_group_id": None,
+            "error": None
+        }
+
+        try:
+            async with httpx.AsyncClient(verify=False, timeout=15.0) as client:
+                res_sg = await client.get(f"{settings.NETBOX_URL}/api/dcim/site-groups/?limit=1000", headers=headers)
+                if res_sg.status_code != 200:
+                    result["error"] = f"NetBox API error HTTP {res_sg.status_code}"
+                    return result
+
+                sg_list = res_sg.json().get("results", [])
+                sg_by_name = {sg["name"].strip().upper(): sg for sg in sg_list}
+
+                child_sg = sg_by_name.get(clean_child)
+                parent_sg = sg_by_name.get(clean_parent) if clean_parent else None
+                target_parent_id = parent_sg["id"] if parent_sg else None
+
+                # 1. Actualizar SiteGroup en NetBox
+                if child_sg:
+                    child_sg_id = child_sg["id"]
+                    result["site_group_id"] = child_sg_id
+                    result["parent_site_group_id"] = target_parent_id
+
+                    current_p = child_sg.get("parent")
+                    current_p_id = current_p["id"] if isinstance(current_p, dict) else current_p
+
+                    if current_p_id != target_parent_id:
+                        patch_res = await client.patch(
+                            f"{settings.NETBOX_URL}/api/dcim/site-groups/{child_sg_id}/",
+                            headers=headers,
+                            json={"parent": target_parent_id}
+                        )
+                        if patch_res.status_code in (200, 201):
+                            result["netbox_updated"] = True
+                            logger.info(f"NetBox SiteGroup '{clean_child}' (id={child_sg_id}) actualizado con parent={target_parent_id}")
+                        else:
+                            result["error"] = f"Error actualizando SiteGroup en NetBox: {patch_res.text}"
+                    else:
+                        result["netbox_updated"] = True
+
+                # 2. Actualizar Sitio NetBox si está vinculado
+                if netbox_site_id or not child_sg:
+                    target_site_id = netbox_site_id
+                    if not target_site_id:
+                        res_sites = await client.get(f"{settings.NETBOX_URL}/api/dcim/sites/?name={child_map_name}", headers=headers)
+                        if res_sites.status_code == 200 and res_sites.json().get("results"):
+                            target_site_id = res_sites.json()["results"][0]["id"]
+
+                    if target_site_id:
+                        patch_site = await client.patch(
+                            f"{settings.NETBOX_URL}/api/dcim/sites/{target_site_id}/",
+                            headers=headers,
+                            json={"group": target_parent_id}
+                        )
+                        if patch_site.status_code in (200, 201):
+                            result["netbox_updated"] = True
+                            logger.info(f"NetBox Site '{clean_child}' (id={target_site_id}) actualizado con group={target_parent_id}")
+
+        except Exception as e:
+            logger.error(f"Error en sync_site_group_parent: {e}")
+            result["error"] = str(e)
+
+        return result
+
+    async def sync_hierarchy_bidirectional(self) -> Dict[str, Any]:
+        """
+        Sincronización bidireccional completa entre Grupos de Sitios de NetBox y la Jerarquía de Mapas de NexusDude.
+        """
+        headers = await self.get_headers()
+        stats = {
+            "success": True,
+            "netbox_site_groups_total": 0,
+            "nexusdude_maps_total": 0,
+            "site_groups_updated_in_netbox": 0,
+            "maps_updated_in_nexusdude": 0,
+            "details": []
+        }
+
+        try:
+            async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
+                # 1. Obtener todos los Grupos de Sitios de NetBox
+                res_sg = await client.get(f"{settings.NETBOX_URL}/api/dcim/site-groups/?limit=1000", headers=headers)
+                if res_sg.status_code != 200:
+                    return {"success": False, "error": f"Error NetBox: {res_sg.status_code}"}
+
+                sg_list = res_sg.json().get("results", [])
+                stats["netbox_site_groups_total"] = len(sg_list)
+                sg_by_id = {sg["id"]: sg for sg in sg_list}
+                sg_by_name = {sg["name"].strip().upper(): sg for sg in sg_list}
+
+                # 2. Obtener todos los mapas de NexusDude
+                async with get_db_connection() as db:
+                    c_maps = await db.execute("SELECT id, name, parent_map_id, netbox_site_id FROM maps")
+                    all_maps = [dict(r) for r in await c_maps.fetchall()]
+                    stats["nexusdude_maps_total"] = len(all_maps)
+
+                    map_by_id = {m["id"]: m for m in all_maps}
+                    map_by_name = {m["name"].strip().upper(): m for m in all_maps}
+
+                    # A. EXPORTAR: De NexusDude hacia NetBox SiteGroups
+                    for m in all_maps:
+                        if m["id"] == "default-map":
+                            continue
+                        clean_m = m["name"].strip().upper()
+                        child_sg = sg_by_name.get(clean_m)
+                        if not child_sg:
+                            continue
+
+                        pid = m.get("parent_map_id")
+                        parent_m = map_by_id.get(pid) if pid else None
+                        parent_name = parent_m["name"].strip().upper() if parent_m and parent_m["id"] != "default-map" else None
+                        parent_sg = sg_by_name.get(parent_name) if parent_name else None
+                        target_parent_sg_id = parent_sg["id"] if parent_sg else None
+
+                        curr_p = child_sg.get("parent")
+                        curr_p_id = curr_p["id"] if isinstance(curr_p, dict) else curr_p
+
+                        if curr_p_id != target_parent_sg_id:
+                            patch_res = await client.patch(
+                                f"{settings.NETBOX_URL}/api/dcim/site-groups/{child_sg['id']}/",
+                                headers=headers,
+                                json={"parent": target_parent_sg_id}
+                            )
+                            if patch_res.status_code in (200, 201):
+                                stats["site_groups_updated_in_netbox"] += 1
+                                stats["details"].append(f"NetBox: '{m['name']}' parent ➔ '{parent_name or 'Raíz'}'")
+
+                    # B. IMPORTAR: De NetBox SiteGroups hacia NexusDude
+                    for sg in sg_list:
+                        sg_name = sg["name"].strip().upper()
+                        nd_map = map_by_name.get(sg_name)
+                        if not nd_map or nd_map["id"] == "default-map":
+                            continue
+
+                        p_sg = sg.get("parent")
+                        p_sg_obj = sg_by_id.get(p_sg["id"] if isinstance(p_sg, dict) else p_sg) if p_sg else None
+                        target_nd_parent = map_by_name.get(p_sg_obj["name"].strip().upper()) if p_sg_obj else None
+                        target_parent_map_id = target_nd_parent["id"] if target_nd_parent else None
+
+                        curr_nd_pid = nd_map.get("parent_map_id")
+                        if curr_nd_pid in ("default-map", ""):
+                            curr_nd_pid = None
+
+                        if curr_nd_pid != target_parent_map_id:
+                            final_pid = target_parent_map_id if target_parent_map_id else "default-map"
+                            await db.execute(
+                                "UPDATE maps SET parent_map_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                                (final_pid, nd_map["id"])
+                            )
+                            await db.execute("""
+                                UPDATE map_hierarchy SET parent_map_id = ?, updated_at = CURRENT_TIMESTAMP
+                                WHERE child_map_id = ? AND is_primary = 1
+                            """, (final_pid, nd_map["id"]))
+                            stats["maps_updated_in_nexusdude"] += 1
+                            stats["details"].append(f"NexusDude: '{nd_map['name']}' parent_map_id ➔ '{final_pid}'")
+
+                    await db.commit()
+
+        except Exception as e:
+            logger.error(f"Error en sync_hierarchy_bidirectional: {e}")
+            stats["success"] = False
+            stats["error"] = str(e)
+
+        return stats
 
 inventory_service = InventoryService()
 

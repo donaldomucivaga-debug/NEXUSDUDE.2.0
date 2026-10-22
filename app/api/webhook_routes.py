@@ -143,10 +143,53 @@ async def receive_netbox_webhook(request: Request):
 
     # 2. EVENTOS DE DISPOSITIVOS (dcim.device)
     elif model in ("device", "dcim.device") or "device" in obj_type:
-        dev_name = data.get("name") or f"Device-{data.get('id')}"
-        logger.info(f"Webhook NetBox: Dispositivo '{dev_name}' {event}. Refrescando inventario...")
-        asyncio.create_task(inventory_service.refresh_cache(force=True))
-        return {"status": "synced", "message": f"Dispositivo '{dev_name}' sincronizado"}
+        dev_id = data.get("id")
+        dev_name = data.get("name") or f"Device-{dev_id}"
+        logger.info(f"Webhook NetBox: Dispositivo '{dev_name}' (ID: {dev_id}) {event}. Sincronizando interfaces y perfil...")
+
+        async def _sync_device_profile_and_interfaces(did: Optional[int]):
+            if did and event not in ("deleted", "object_deleted", "delete"):
+                try:
+                    # 1. Auto-instanciar plantillas de interfaz del DeviceType y sanear huérfanas en NetBox
+                    await inventory_service.get_device_interfaces(int(did))
+                    # 2. Sincronizar perfil (role, model, manufacturer) en la tabla nodes de nexusdude.db
+                    dev_live = await inventory_service.get_device_by_id(int(did), force_live=True)
+                    if dev_live:
+                        role_to_nd_type = {
+                            "PTP AP": "Access Point",
+                            "SECTOR": "Sector Access Point",
+                            "ZONA WIFI": "Zona Wifi",
+                            "CORE ROUTER": "RB CORE",
+                            "SWITCH CORE": "SWITCH",
+                            "SWITCH MAIN": "SWITCH",
+                        }
+                        nb_role = dev_live.get("role") or "Unknown"
+                        nd_type = role_to_nd_type.get(nb_role, nb_role)
+                        async with get_db_connection() as db:
+                            cur = await db.execute("SELECT id, extra_data FROM nodes WHERE device_id = ?", (int(did),))
+                            for row in await cur.fetchall():
+                                ed = {}
+                                if row["extra_data"]:
+                                    try:
+                                        ed = json.loads(row["extra_data"]) if isinstance(row["extra_data"], str) else row["extra_data"]
+                                    except Exception:
+                                        ed = {}
+                                ed["role"] = nb_role
+                                ed["model"] = dev_live.get("model") or "Generic"
+                                ed["manufacturer"] = dev_live.get("manufacturer") or "Generic"
+                                if dev_live.get("role_color"):
+                                    ed["role_color"] = dev_live["role_color"]
+                                await db.execute(
+                                    "UPDATE nodes SET name = ?, device_type = ?, extra_data = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                                    (dev_live.get("name") or dev_name, nd_type, json.dumps(ed, ensure_ascii=False), row["id"])
+                                )
+                            await db.commit()
+                except Exception as exc:
+                    logger.warning(f"Error en sincronización reactiva de dispositivo {did}: {exc}")
+            await inventory_service.refresh_cache(force=True)
+
+        asyncio.create_task(_sync_device_profile_and_interfaces(dev_id))
+        return {"status": "synced", "message": f"Dispositivo '{dev_name}' e interfaces sincronizados"}
 
     return {"status": "ignored", "message": f"Modelo '{model}' no requiere acción de submapa"}
 

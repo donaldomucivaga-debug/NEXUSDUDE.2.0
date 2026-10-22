@@ -12,7 +12,7 @@ let currentMap = null;
 let currentUser = null;
 let snapToGrid = true;
 const GRID_SIZE = 20;
-window.currentPollIntervalSeconds = 30;
+window.currentPollIntervalSeconds = 15;
 window.allowEdgeEditing = true;
 
 // Estado de modo conexión de enlaces
@@ -314,6 +314,7 @@ function initCanvas() {
         cancelLinkMode();
       } else {
         deselectNode();
+        deselectLink();
         clearMultiSelection();
       }
     }
@@ -400,6 +401,16 @@ function setupDragAndDrop() {
           // Si ya existía el acceso en jerarquía, no hay problema
         }
 
+        // Auto-sincronizar enlaces intermapa hacia este submapa si ya existen equipos conectados
+        try {
+          const syncRes = await API.syncNetboxLinks(currentMap.id);
+          if (syncRes && ((syncRes.intra_links_synced || 0) > 0 || (syncRes.inter_links_synced || 0) > 0)) {
+            await loadMap(currentMap.id);
+          }
+        } catch (sErr) {
+          console.warn('Auto-sync links failed for dropped submap:', sErr);
+        }
+
         return;
       } catch (err) {
         console.error('Error insertando mapa en el lienzo:', err);
@@ -450,6 +461,18 @@ function setupDragAndDrop() {
       renderNode(newNode);
       nodesLayer.batchDraw();
       selectNode(newNode);
+
+      // Auto-descubrir y sincronizar enlaces (cables y wireless) documentados en NetBox para este dispositivo
+      if (device.id) {
+        try {
+          const syncRes = await API.syncNetboxLinks(currentMap.id);
+          if (syncRes && ((syncRes.intra_links_synced || 0) > 0 || (syncRes.inter_links_synced || 0) > 0)) {
+            await loadMap(currentMap.id);
+          }
+        } catch (sErr) {
+          console.warn('Auto-sync links failed for dropped device:', sErr);
+        }
+      }
 
     } catch (err) {
       console.error('Error soltando dispositivo en lienzo:', err);
@@ -624,6 +647,341 @@ function measureTextWidth(text, font) {
   return _textMeasureContext.measureText(text || '').width;
 }
 
+// ─── Molde Oficial de Bahías de Switches desde NetBox (Fallback por Modelo) ──
+function _genPortRange(prefix, start, end, type = '1000base-t', media = 'rj45', labelPrefix = '') {
+  const arr = [];
+  for (let i = start; i <= end; i++) {
+    arr.push({
+      name: `${prefix}${i}`,
+      label: labelPrefix ? `${labelPrefix}${i}` : `${i}`,
+      type,
+      media,
+      is_connected: false
+    });
+  }
+  return arr;
+}
+
+const NETBOX_SWITCH_MODEL_TEMPLATES = {
+  'css106-1g-4p-1s': _genPortRange('GE', 1, 5),
+  'css106-5g-1s': [
+    ..._genPortRange('GE', 1, 5),
+    { name: 'Port SFP', label: 'SFP', type: '1000base-x-sfp', media: 'sfp', is_connected: false }
+  ],
+  'gsd-1002m': _genPortRange('GE', 1, 8),
+  'igs-801m': _genPortRange('GE', 1, 8),
+  'igs-10020mt': [
+    ..._genPortRange('Gigabit Ethernet ', 1, 8),
+    ..._genPortRange('SFP ', 1, 2, '1000base-x-sfp', 'sfp', 'S')
+  ],
+  'xgs-6311-12x': _genPortRange('Port-', 1, 12, '10gbase-x-sfpp', 'sfp'),
+  'gs-4210-16t2s': [
+    ..._genPortRange('GE', 1, 16),
+    ..._genPortRange('SFP', 17, 18, '1000base-x-sfp', 'sfp')
+  ],
+  'xgs-6350-12x8tr': [
+    ..._genPortRange('GE', 1, 8),
+    ..._genPortRange('SFP', 9, 20, '10gbase-x-sfpp', 'sfp')
+  ],
+  'gs-4210-24t2s': [
+    ..._genPortRange('GE', 1, 24),
+    ..._genPortRange('SFP', 25, 26, '1000base-x-sfp', 'sfp')
+  ],
+  'css326-24g-2s+': [
+    ..._genPortRange('GE', 1, 24),
+    { name: 'Port SFP-1', label: 'S1', type: '10gbase-x-sfpp', media: 'sfp', is_connected: false },
+    { name: 'Port SFP-2', label: 'S2', type: '10gbase-x-sfpp', media: 'sfp', is_connected: false }
+  ],
+  'crs125-24g-1s': [
+    ..._genPortRange('GE', 1, 24),
+    { name: 'Port SFP', label: 'SFP', type: '1000base-x-sfp', media: 'sfp', is_connected: false }
+  ],
+  'gs-5220-24upl4x': [
+    ..._genPortRange('GE', 1, 24),
+    ..._genPortRange('SFP', 25, 28, '10gbase-x-sfpp', 'sfp')
+  ],
+  'gs-5220-24upl4xvr': [
+    ..._genPortRange('GE', 1, 24),
+    ..._genPortRange('SFP', 25, 28, '10gbase-x-sfpp', 'sfp')
+  ],
+  'sgs-6341-24t4x': [
+    ..._genPortRange('Ethernet1/0/', 1, 24),
+    ..._genPortRange('Ethernet1/0/', 25, 28, '10gbase-x-sfpp', 'sfp')
+  ],
+  'igs-5225-20t4c2x': [
+    ..._genPortRange('GE', 1, 20),
+    { name: 'GE21-Copper', label: '21C', type: '1000base-t', media: 'rj45', is_connected: false },
+    { name: 'GE21-SFP', label: 'S21', type: '10gbase-x-sfpp', media: 'sfp', is_connected: false },
+    { name: 'GE22-Copper', label: '22C', type: '1000base-t', media: 'rj45', is_connected: false },
+    { name: 'GE22-SFP', label: 'S22', type: '10gbase-x-sfpp', media: 'sfp', is_connected: false },
+    { name: 'GE23-Copper', label: '23C', type: '1000base-t', media: 'rj45', is_connected: false },
+    { name: 'GE23-SFP', label: 'S23', type: '10gbase-x-sfpp', media: 'sfp', is_connected: false },
+    { name: 'GE24-Copper', label: '24C', type: '1000base-t', media: 'rj45', is_connected: false },
+    { name: 'GE24-SFP', label: 'S24', type: '10gbase-x-sfpp', media: 'sfp', is_connected: false }
+  ],
+  'default_8port': _genPortRange('GE', 1, 8)
+};
+
+function isSwitchNode(node) {
+  if (!node) return false;
+  const dt = (node.device_type || '').toLowerCase();
+  if (dt === 'note' || dt === 'ftth_branch' || dt === 'submap' || dt === 'parent_map' || node.extra_data?.is_parent_shortcut) {
+    return false;
+  }
+  const role = (node.extra_data?.role || '').toLowerCase();
+  const model = (node.extra_data?.model || '').toLowerCase().trim();
+  const name = (node.name || '').toLowerCase().trim();
+
+  if (Array.isArray(node.extra_data?.switch_ports) && node.extra_data.switch_ports.length > 0) {
+    return true;
+  }
+  if (dt.includes('switch') || role.includes('switch')) {
+    return true;
+  }
+  if (model && NETBOX_SWITCH_MODEL_TEMPLATES[model]) {
+    if (!dt.includes('cpe') && !role.includes('cpe') && !dt.includes('ap') && !role.includes('ap')) {
+      return true;
+    }
+  }
+  if (/^(sw[_\s\d-]|switch)/i.test(name) && !dt.includes('router') && !role.includes('router')) {
+    return true;
+  }
+  return false;
+}
+
+function _normalizePortMatchTokens(ifName) {
+  const raw = String(ifName || '').trim().toLowerCase();
+  const nums = (raw.match(/\d+/g) || []).map(n => parseInt(n, 10));
+  const lastNum = nums.length > 0 ? nums[nums.length - 1] : null;
+  const isSfp = raw.includes('sfp') || raw.includes('xfp') || raw.includes('10g');
+  const isCopper = raw.includes('copper');
+  return { raw, nums, lastNum, isSfp, isCopper };
+}
+
+function _doesInterfaceMatchBay(ifName, bay) {
+  if (!ifName || !bay) return false;
+  const a = String(ifName).trim().toLowerCase();
+  const b = String(bay.name || '').trim().toLowerCase();
+  if (a === b) return true;
+
+  const ta = _normalizePortMatchTokens(a);
+  const tb = _normalizePortMatchTokens(b);
+
+  if (ta.isCopper && !tb.isCopper && b.includes('sfp')) return false;
+  if (ta.isSfp && !tb.isSfp && b.includes('copper')) return false;
+
+  if (ta.lastNum !== null && tb.lastNum !== null && ta.lastNum === tb.lastNum) {
+    if (ta.isSfp === tb.isSfp || (!a.includes('sfp') && !b.includes('copper'))) {
+      return true;
+    }
+  }
+  if (ta.isSfp && tb.isSfp && ta.lastNum === null && tb.lastNum === null) {
+    return true;
+  }
+  return false;
+}
+
+function resolveSwitchBays(node) {
+  if (!node) return [];
+  const extra = node.extra_data || {};
+  const modelKey = (extra.model || '').toLowerCase().trim();
+
+  let basePorts = [];
+  if (Array.isArray(extra.switch_ports) && extra.switch_ports.length > 0) {
+    basePorts = extra.switch_ports.map(p => ({ ...p }));
+  } else if (modelKey && NETBOX_SWITCH_MODEL_TEMPLATES[modelKey]) {
+    basePorts = NETBOX_SWITCH_MODEL_TEMPLATES[modelKey].map(p => ({ ...p }));
+  } else {
+    basePorts = NETBOX_SWITCH_MODEL_TEMPLATES['default_8port'].map(p => ({ ...p }));
+  }
+
+  // Garantizar separación estricta: todos los puertos RJ45/Cobre primero, seguidos por SFP/Fibra
+  basePorts.sort((a, b) => {
+    const isSfpA = (a.media || (String(a.name || '').toLowerCase().includes('sfp') ? 'sfp' : 'rj45')) === 'sfp';
+    const isSfpB = (b.media || (String(b.name || '').toLowerCase().includes('sfp') ? 'sfp' : 'rj45')) === 'sfp';
+    const rankA = isSfpA ? 1 : 0;
+    const rankB = isSfpB ? 1 : 0;
+    if (rankA !== rankB) return rankA - rankB;
+
+    const numsA = (String(a.name || '').match(/\d+/g) || []).map(Number);
+    const numsB = (String(b.name || '').match(/\d+/g) || []).map(Number);
+    const numA = numsA.length ? numsA[numsA.length - 1] : 999;
+    const numB = numsB.length ? numsB[numsB.length - 1] : 999;
+    if (numA !== numB) return numA - numB;
+
+    return String(a.name || '').localeCompare(String(b.name || ''), undefined, { numeric: true, sensitivity: 'base' });
+  });
+
+  // Recolectar enlaces activos en el lienzo conectados a este switch
+  const attachedLinks = [];
+  if (typeof nodeAttachedLinksMap !== 'undefined' && nodeAttachedLinksMap.has(node.id)) {
+    nodeAttachedLinksMap.get(node.id).forEach(entry => {
+      const l = entry.link || entry;
+      if (l) attachedLinks.push(l);
+    });
+  } else if (currentMap && Array.isArray(currentMap.links)) {
+    currentMap.links.forEach(l => {
+      if (l.source_node_id === node.id || l.target_node_id === node.id) {
+        attachedLinks.push(l);
+      }
+    });
+  }
+
+  const nodeMap = typeof _getOrBuildNodeMap === 'function' ? _getOrBuildNodeMap() : new Map();
+
+  return basePorts.map((bay, idx) => {
+    const matchedLinks = [];
+    for (let i = 0; i < attachedLinks.length; i++) {
+      const l = attachedLinks[i];
+      const isSrc = l.source_node_id === node.id;
+      const ifName = isSrc
+        ? (l.source_interface || l.extra_data?.source_interface || '')
+        : (l.target_interface || l.extra_data?.target_interface || '');
+      if (ifName && _doesInterfaceMatchBay(ifName, bay)) {
+        const peerId = isSrc ? l.target_node_id : l.source_node_id;
+        const peerNode = nodeMap.get(peerId) || null;
+        matchedLinks.push({ link: l, ifName, peerNode, isSrc });
+      }
+    }
+
+    const primaryMatch = matchedLinks[0] || null;
+    const isCanvasConnected = matchedLinks.length > 0;
+    const isNetboxConnected = !!bay.is_connected || !!bay.cable_id;
+    const isOccupied = isCanvasConnected || isNetboxConnected;
+
+    let bayState = 'free'; // 'free' | 'up' | 'down' | 'netbox_only'
+    if (isCanvasConnected) {
+      const peer = primaryMatch.peerNode;
+      const peerPing = peer ? (peer.ping_status || peer.status || 'ok') : (primaryMatch.link?.status || 'ok');
+      const isDown = peerPing === 'problem' || peerPing === 'down' || peerPing === 'critical' || peerPing === 'error';
+      bayState = isDown ? 'down' : 'up';
+    } else if (isNetboxConnected) {
+      bayState = 'netbox_only';
+    }
+
+    return {
+      ...bay,
+      index: idx,
+      label: bay.label || String(idx + 1),
+      media: bay.media || (String(bay.name || '').toLowerCase().includes('sfp') ? 'sfp' : 'rj45'),
+      isOccupied,
+      isCanvasConnected,
+      isNetboxConnected,
+      bayState,
+      primaryMatch,
+      matchedLinks
+    };
+  });
+}
+
+function computeSwitchLayout(node) {
+  const bays = resolveSwitchBays(node);
+  const count = bays.length || 8;
+
+  // Dimensionamiento minimalista proporcional al número de bahías del modelo NetBox
+  let bayW = 14;
+  let bayH = 13.5;
+  let bayGap = 2.5;
+  let bankSepGap = 5;
+
+  if (count <= 6) {
+    bayW = 15;
+    bayH = 14;
+    bayGap = 3.5;
+  } else if (count <= 10) {
+    bayW = 14;
+    bayH = 14;
+    bayGap = 3;
+  } else if (count <= 14) {
+    bayW = 12.5;
+    bayH = 13.5;
+    bayGap = 2.5;
+  } else if (count <= 20) {
+    bayW = 11;
+    bayH = 13.5;
+    bayGap = 2;
+  } else {
+    // 24 a 28 puertos: ultra compacto para no interferir con otros nodos del lienzo
+    bayW = 10.2;
+    bayH = 13.5;
+    bayGap = 1.8;
+    bankSepGap = 4.5;
+  }
+
+  // Calcular ancho de la tira de bahías (incluyendo separador entre banco RJ45 y SFP)
+  let stripContentW = 0;
+  const relPositions = [];
+  let sfpDividerRelX = null;
+
+  for (let i = 0; i < bays.length; i++) {
+    if (i > 0) {
+      const prevMedia = bays[i - 1].media;
+      const curMedia = bays[i].media;
+      if (prevMedia === 'rj45' && curMedia === 'sfp' && sfpDividerRelX === null) {
+        sfpDividerRelX = stripContentW + (bayGap + bankSepGap) / 2;
+        stripContentW += bayGap + bankSepGap;
+      } else {
+        stripContentW += bayGap;
+      }
+    }
+    relPositions.push(stripContentW);
+    stripContentW += bayW;
+  }
+
+  const occupiedCount = bays.filter(b => b.isOccupied).length;
+  const nameFont = 'bold 10px system-ui, -apple-system, sans-serif';
+  const nameW = measureTextWidth(node.name || 'Switch', nameFont);
+  const badgeText = `${occupiedCount}/${count}`;
+  const subInfoText = node.ip ? `${node.ip} · ${badgeText}` : `${node.extra_data?.model || 'SW'} · ${badgeText}`;
+  const subW = measureTextWidth(subInfoText, 'bold 8.5px monospace');
+
+  const headerNeededW = Math.ceil(24 + nameW + 10 + subW + 12);
+  const baysNeededW = Math.ceil(stripContentW + 18);
+
+  const minSwitchW = count <= 8 ? 156 : (count <= 12 ? 185 : 220);
+  const maxSwitchW = count <= 10 ? 230 : (count <= 20 ? 310 : 385);
+  const nodeWidth = Math.min(Math.max(minSwitchW, baysNeededW, Math.min(headerNeededW, maxSwitchW)), maxSwitchW);
+  const nodeHeight = 52;
+
+  const trayX = 5;
+  const trayY = 25;
+  const trayW = nodeWidth - 10;
+  const trayH = 22;
+
+  const startX = trayX + Math.max(4, (trayW - stripContentW) / 2);
+  const bayY = trayY + (trayH - bayH) / 2;
+
+  const positionedBays = bays.map((b, i) => {
+    const bx = startX + relPositions[i];
+    return {
+      ...b,
+      x: bx,
+      y: bayY,
+      w: bayW,
+      h: bayH,
+      cx: bx + bayW / 2,
+      cy: bayY + bayH / 2,
+      totalBays: bays.length
+    };
+  });
+
+  const sfpDividerX = sfpDividerRelX !== null ? (startX + sfpDividerRelX) : null;
+
+  return {
+    nodeWidth,
+    nodeHeight,
+    trayX,
+    trayY,
+    trayW,
+    trayH,
+    bays: positionedBays,
+    occupiedCount,
+    totalCount: count,
+    subInfoText,
+    sfpDividerX
+  };
+}
+
 function computeNodeDimensions(node) {
   // ── Nodo Nota (Sticky Note) ──
   if (node.device_type === 'note') {
@@ -649,6 +1007,20 @@ function computeNodeDimensions(node) {
     const branchWidth = Math.min(Math.max(130, Math.ceil(nameW) + 42), 270);
     const branchHeight = 36;
     return { nodeWidth: branchWidth, nodeHeight: branchHeight, subLabelText: '', pins: [] };
+  }
+
+  // ── Nodo Switch Minimalista con Bahías de Interfaces NetBox ──
+  if (isSwitchNode(node)) {
+    const swLayout = computeSwitchLayout(node);
+    const pins = node.extra_data?.pins || [];
+    const pinsHeight = pins.length * 20;
+    return {
+      nodeWidth: swLayout.nodeWidth,
+      nodeHeight: swLayout.nodeHeight + pinsHeight,
+      subLabelText: swLayout.subInfoText,
+      pins,
+      switchLayout: swLayout
+    };
   }
 
   const isParentShortcut = node.device_type === 'parent_map' || !!node.extra_data?.is_parent_shortcut;
@@ -682,54 +1054,29 @@ function computeNodeDimensions(node) {
     if (pw > maxPinW) maxPinW = pw;
   });
 
-  // Margen izquierdo del título: statusDot (14px) + gap + icon (16px) + gap = 44px + text + margen derecho (16px)
-  const titleNeeded = 44 + nameW + 16;
-  // Margen izquierdo del subtítulo: 14px + subW + margen derecho (16px)
-  const subNeeded = 14 + subW + 16;
-  const pinNeeded = maxPinW > 0 ? (28 + maxPinW + 16) : 0;
+  // Margen izquierdo del título: 9px + texto del nombre + margen derecho (9px) = nameW + 18
+  const titleNeeded = 9 + nameW + 9;
+  // Margen izquierdo del subtítulo: 9px + texto de IP + gap (6px) + statusDot (9px) + margen derecho (8px) = subW + 32
+  const subNeeded = 9 + subW + 23;
+  const pinNeeded = maxPinW > 0 ? (20 + maxPinW + 10) : 0;
 
-  // Detección de dispositivos de infraestructura (Switch, Router, OLT, Core, Gateway, etc.)
-  const devType = (node.device_type || '').toLowerCase();
-  const roleName = (node.extra_data?.role || '').toLowerCase();
-  const modelName = (node.extra_data?.model || '').toLowerCase();
-  const nodeName = (node.name || '').toLowerCase();
-  const combinedType = `${devType} ${roleName} ${modelName} ${nodeName}`;
-  const isInfra = combinedType.includes('switch') || 
-                  combinedType.includes('router') || 
-                  combinedType.includes('olt') || 
-                  combinedType.includes('core') || 
-                  combinedType.includes('gateway') || 
-                  combinedType.includes('borde') || 
-                  combinedType.includes('distribucion') ||
-                  combinedType.includes('firewall') ||
-                  /\b(sw|rt|gw|olt)\b/i.test(combinedType);
-
-  let minWidth = 140;
+  let minWidth = 110;
   let maxWidth = 260;
-  let baseHeight = 52;
+  let baseHeight = 44;
 
   if (isParentShortcut) {
-    minWidth = 170;
-    maxWidth = 320;
-    baseHeight = 56;
-  } else if (isSubmap) {
-    minWidth = 150;
+    minWidth = 135;
     maxWidth = 300;
-    baseHeight = 56;
-  } else if (isInfra) {
-    // Formato alargado tipo Rack/Switch/Router/OLT: aumentado en ancho
-    // para brindar amplio perímetro horizontal y permitir que 24+ aristas y etiquetas conecten sin colisionar
-    const attachedCount = (typeof nodeAttachedLinksMap !== 'undefined' && nodeAttachedLinksMap?.get(node.id)?.size) || 
-                          (currentMap?.links?.filter(l => l.source_node_id === node.id || l.target_node_id === node.id)?.length) || 0;
-    const dynamicW = Math.max(680, (Math.max(attachedCount, 18) * 20) + 80);
-    minWidth = Math.min(dynamicW, 1100);
-    maxWidth = Math.max(minWidth, 1300);
-    baseHeight = 52;
+    baseHeight = 46;
+  } else if (isSubmap) {
+    minWidth = 120;
+    maxWidth = 280;
+    baseHeight = 46;
   }
 
   const nodeWidth = Math.min(Math.max(minWidth, Math.ceil(Math.max(titleNeeded, subNeeded, pinNeeded))), maxWidth);
   
-  const pinsHeight = pins.length * 20;
+  const pinsHeight = pins.length * 18;
   const nodeHeight = baseHeight + pinsHeight;
 
   return { nodeWidth, nodeHeight, subLabelText, pins };
@@ -1190,6 +1537,536 @@ function _renderFtthBranchNode(node) {
   nodeGroups.set(node.id, group);
 }
 
+// ─── Renderizado Minimalista de Switch con Bahías desde Molde NetBox ─────────
+function _getOrCreateSwitchBayTooltip() {
+  let el = document.getElementById('canvas-switch-bay-tooltip');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'canvas-switch-bay-tooltip';
+    el.style.cssText = [
+      'position: fixed',
+      'display: none',
+      'z-index: 9999',
+      'pointer-events: none',
+      'background: rgba(15, 23, 42, 0.96)',
+      'border: 1px solid rgba(56, 189, 248, 0.45)',
+      'border-radius: 6px',
+      'padding: 6px 9px',
+      'font-family: system-ui, -apple-system, sans-serif',
+      'font-size: 11px',
+      'color: #f8fafc',
+      'box-shadow: 0 6px 18px rgba(0, 0, 0, 0.65)',
+      'backdrop-filter: blur(6px)',
+      'max-width: 280px',
+      'line-height: 1.35'
+    ].join(';');
+    document.body.appendChild(el);
+  }
+  return el;
+}
+
+function _hideSwitchBayTooltip() {
+  const el = document.getElementById('canvas-switch-bay-tooltip');
+  if (el) el.style.display = 'none';
+}
+
+function _getBayVisualTheme(bay) {
+  const isSfp = bay.media === 'sfp';
+  if (bay.bayState === 'down') {
+    return {
+      fill: 'rgba(239, 68, 68, 0.34)',
+      stroke: '#ef4444',
+      led: '#f87171',
+      text: '#ffffff',
+      notch: '#ef4444'
+    };
+  }
+  if (bay.bayState === 'up') {
+    return {
+      fill: isSfp ? 'rgba(16, 185, 129, 0.34)' : 'rgba(34, 197, 94, 0.30)',
+      stroke: isSfp ? '#10b981' : '#22c55e',
+      led: '#4ade80',
+      text: '#ffffff',
+      notch: isSfp ? '#34d399' : '#22c55e'
+    };
+  }
+  if (bay.bayState === 'netbox_only') {
+    return {
+      fill: 'rgba(56, 189, 248, 0.26)',
+      stroke: '#38bdf8',
+      led: '#38bdf8',
+      text: '#e0f2fe',
+      notch: '#38bdf8'
+    };
+  }
+  // Bahía Libre / Disponible
+  return {
+    fill: isSfp ? 'rgba(8, 25, 48, 0.92)' : 'rgba(9, 14, 25, 0.92)',
+    stroke: isSfp ? 'rgba(56, 189, 248, 0.38)' : 'rgba(100, 116, 139, 0.42)',
+    led: 'rgba(51, 65, 85, 0.75)',
+    text: isSfp ? '#7dd3fc' : '#64748b',
+    notch: isSfp ? 'rgba(56, 189, 248, 0.32)' : 'rgba(100, 116, 139, 0.32)'
+  };
+}
+
+function _renderSwitchNode(node) {
+  const dims = computeNodeDimensions(node);
+  const { nodeWidth, nodeHeight, pins } = dims;
+  const swLayout = dims.switchLayout || computeSwitchLayout(node);
+
+  const group = new Konva.Group({
+    x: node.x,
+    y: node.y,
+    draggable: true,
+    id: node.id
+  });
+  group.isSwitch = true;
+  group.isSubmap = false;
+  group.isParentShortcut = false;
+
+  const pingStatus = node.ping_status || node.status;
+  const pingColor = getNodeStatusColor(pingStatus, false);
+  const roleHex = getNodeRoleColor(node) || '#4caf50';
+  const boxFill = hexToRgba(roleHex, 0.22) || 'rgba(22, 34, 53, 0.92)';
+
+  // 1. Chasis exterior minimalista del Switch
+  const box = new Konva.Rect({
+    width: nodeWidth,
+    height: nodeHeight,
+    fill: boxFill,
+    stroke: pingColor,
+    strokeWidth: 1.5,
+    cornerRadius: 6,
+    shadowColor: hexToRgba(roleHex, 0.25) || 'rgba(0, 0, 0, 0.45)',
+    shadowBlur: 4,
+    shadowOpacity: 0.4,
+    shadowOffset: { x: 0, y: 2 },
+    shadowForStrokeEnabled: false,
+    perfectDrawEnabled: false,
+    name: 'box'
+  });
+
+  // 2. LED de estado general (PING) en cabecera izquierda
+  const statusDot = new Konva.Circle({
+    x: 10,
+    y: 13,
+    radius: 4.5,
+    fill: pingColor,
+    stroke: 'rgba(0, 0, 0, 0.4)',
+    strokeWidth: 1,
+    listening: false,
+    perfectDrawEnabled: false,
+    name: 'statusDot'
+  });
+
+  // 3. Texto de SubInfo (IP + Conteo Ocupados/Total) alineado a la derecha de la cabecera
+  const subInfoW = Math.min(Math.ceil(measureTextWidth(swLayout.subInfoText, 'bold 8.5px monospace')) + 6, Math.floor(nodeWidth * 0.52));
+  const ipText = new Konva.Text({
+    x: nodeWidth - subInfoW - 6,
+    y: 8.5,
+    width: subInfoW,
+    align: 'right',
+    text: swLayout.subInfoText,
+    ellipsis: true,
+    wrap: 'none',
+    fontSize: 8.5,
+    fontFamily: 'monospace',
+    fontStyle: 'bold',
+    fill: '#38bdf8',
+    listening: false,
+    perfectDrawEnabled: false,
+    name: 'ipText'
+  });
+
+  // 4. Nombre del Switch en cabecera izquierda
+  const maxNameW = Math.max(48, nodeWidth - subInfoW - 28);
+  const label = new Konva.Text({
+    x: 18,
+    y: 7.5,
+    text: node.name,
+    width: maxNameW,
+    ellipsis: true,
+    wrap: 'none',
+    fontSize: 10,
+    fontStyle: 'bold',
+    fontFamily: 'system-ui, -apple-system, sans-serif',
+    fill: '#f8fafc',
+    listening: false,
+    perfectDrawEnabled: false,
+    name: 'label'
+  });
+
+  // 5. Bandeja frontal empotrada de bahías (Front-Panel Port Tray)
+  const trayRect = new Konva.Rect({
+    x: swLayout.trayX,
+    y: swLayout.trayY,
+    width: swLayout.trayW,
+    height: swLayout.trayH,
+    fill: 'rgba(7, 11, 20, 0.84)',
+    stroke: 'rgba(148, 163, 184, 0.20)',
+    strokeWidth: 0.9,
+    cornerRadius: 3.5,
+    listening: false,
+    perfectDrawEnabled: false,
+    name: 'switchTray'
+  });
+
+  group.add(box);
+  group.add(statusDot);
+  group.add(label);
+  group.add(ipText);
+  group.add(trayRect);
+
+  // Separador sutil entre puertos RJ45 (Cobre) y bahías SFP/SFP+ (Fibra)
+  if (swLayout.sfpDividerX !== null) {
+    const sfpSep = new Konva.Line({
+      points: [swLayout.sfpDividerX, swLayout.trayY + 3, swLayout.sfpDividerX, swLayout.trayY + swLayout.trayH - 3],
+      stroke: 'rgba(56, 189, 248, 0.45)',
+      strokeWidth: 1,
+      dash: [2, 1.5],
+      listening: false,
+      perfectDrawEnabled: false
+    });
+    group.add(sfpSep);
+  }
+
+  // 6. Dibujar cada bahía física del molde NetBox (ocupadas y libres)
+  const baysContainer = new Konva.Group({
+    name: 'switchBaysContainer',
+    perfectDrawEnabled: false
+  });
+
+  swLayout.bays.forEach((bay) => {
+    const theme = _getBayVisualTheme(bay);
+    const isSfp = bay.media === 'sfp';
+
+    const bayRect = new Konva.Rect({
+      x: bay.x,
+      y: bay.y,
+      width: bay.w,
+      height: bay.h,
+      fill: theme.fill,
+      stroke: theme.stroke,
+      strokeWidth: bay.isOccupied ? 1.15 : 0.85,
+      cornerRadius: isSfp ? 1.5 : 2,
+      perfectDrawEnabled: false,
+      name: `bayRect_${bay.index}`
+    });
+
+    // Micro-LED superior en cada bahía
+    const bayLed = new Konva.Circle({
+      x: bay.cx,
+      y: bay.y + 2.1,
+      radius: bay.w >= 12 ? 1.35 : 1.1,
+      fill: theme.led,
+      listening: false,
+      perfectDrawEnabled: false,
+      name: `bayLed_${bay.index}`
+    });
+
+    // Pestaña inferior tipo conector RJ45 / jaula SFP
+    const notchW = Math.max(3, bay.w * 0.42);
+    const bayNotch = new Konva.Rect({
+      x: bay.cx - notchW / 2,
+      y: bay.y + bay.h - 1.6,
+      width: notchW,
+      height: 1.4,
+      fill: theme.notch,
+      listening: false,
+      perfectDrawEnabled: false,
+      name: `bayNotch_${bay.index}`
+    });
+
+    // Número de bahía / puerto
+    const fontSize = bay.label.length >= 3 ? 5.6 : (bay.w >= 13 ? 7.2 : 6.3);
+    const bayTxt = new Konva.Text({
+      x: bay.x,
+      y: bay.y + (bay.h - fontSize) / 2 + 0.8,
+      width: bay.w,
+      align: 'center',
+      text: bay.label,
+      fontSize: fontSize,
+      fontFamily: 'monospace',
+      fontStyle: 'bold',
+      fill: theme.text,
+      listening: false,
+      perfectDrawEnabled: false,
+      name: `bayTxt_${bay.index}`
+    });
+
+    bayRect.on('mouseenter mousemove', (e) => {
+      const evt = e.evt || window.event;
+      if (bay.primaryMatch?.link) {
+        highlightLinkAndEndpoints(bay.primaryMatch.link);
+      }
+      const tip = _getOrCreateSwitchBayTooltip();
+      const mediaLabel = isSfp ? 'Fibra SFP/SFP+' : 'Cobre RJ45';
+      const peerName = bay.primaryMatch?.peerNode?.name || bay.peer_device || '';
+      const peerIf = (bay.primaryMatch ? (bay.primaryMatch.isSrc ? bay.primaryMatch.link?.target_interface : bay.primaryMatch.link?.source_interface) : '') || bay.peer_interface || '';
+      const cableId = bay.primaryMatch?.link?.netbox_cable_id || bay.cable_id || null;
+
+      let statusBadgeHtml = '';
+      if (bay.isOccupied) {
+        const stColor = bay.bayState === 'down' ? '#f87171' : (bay.bayState === 'netbox_only' ? '#38bdf8' : '#4ade80');
+        const stLabel = bay.bayState === 'down' ? '● Ocupado (Enlace Caído)' : '● Ocupado (Conectado)';
+        statusBadgeHtml = `
+          <div style="color:${stColor}; font-weight:700; margin-top:3px;">${stLabel}</div>
+          ${peerName ? `<div style="color:#e2e8f0; font-size:10.5px;">➔ <strong>${peerName}</strong> ${peerIf ? `<span style="color:#38bdf8;">[${peerIf}]</span>` : ''}</div>` : ''}
+          ${cableId ? `<div style="color:#94a3b8; font-size:9.5px;">NetBox Cable #${cableId}</div>` : ''}
+        `;
+      } else {
+        statusBadgeHtml = `<div style="color:#94a3b8; font-weight:600; margin-top:3px;">○ Bahía Libre (Disponible)</div>`;
+      }
+
+      tip.innerHTML = `
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; border-bottom:1px solid rgba(148,163,184,0.2); padding-bottom:3px;">
+          <strong style="color:#38bdf8;">Puerto ${bay.name}</strong>
+          <span style="font-size:9.5px; color:#cbd5e1; background:rgba(255,255,255,0.08); padding:1px 5px; border-radius:3px;">${mediaLabel}</span>
+        </div>
+        <div style="font-size:10px; color:#94a3b8; margin-top:2px;">${node.name} (${node.extra_data?.model || 'Switch'})</div>
+        ${statusBadgeHtml}
+      `;
+      if (evt) {
+        tip.style.left = `${evt.clientX + 12}px`;
+        tip.style.top = `${evt.clientY + 12}px`;
+      }
+      tip.style.display = 'block';
+    });
+
+    bayRect.on('mouseleave', () => {
+      _hideSwitchBayTooltip();
+      if (bay.primaryMatch?.link) {
+        unhighlightLinkAndEndpoints(bay.primaryMatch.link);
+      }
+    });
+
+    bayRect.on('click tap', () => {
+      window._lastClickedSwitchBay = {
+        nodeId: node.id,
+        portName: bay.name,
+        portId: bay.id || null
+      };
+    });
+
+    baysContainer.add(bayRect);
+    baysContainer.add(bayLed);
+    baysContainer.add(bayNotch);
+    baysContainer.add(bayTxt);
+  });
+
+  group.add(baysContainer);
+
+  // Si tiene pines de interconexión (Bornes virtuales) debajo de las bahías
+  if (pins && pins.length > 0) {
+    const divider = new Konva.Line({
+      points: [6, 50, nodeWidth - 6, 50],
+      stroke: 'rgba(255, 255, 255, 0.18)',
+      strokeWidth: 1,
+      dash: [3, 2],
+      listening: false
+    });
+    group.add(divider);
+
+    pins.forEach((pin, idx) => {
+      const pinY = 52 + idx * 20 + 8;
+      const pinDot = new Konva.Circle({
+        x: 14,
+        y: pinY + 2,
+        radius: 3.5,
+        fill: '#a855f7',
+        stroke: '#ffffff',
+        strokeWidth: 0.8,
+        listening: false
+      });
+      const pinLabel = new Konva.Text({
+        x: 24,
+        y: pinY - 3,
+        text: pin.label || `➔ ${pin.remote_node_name}`,
+        width: nodeWidth - 30,
+        ellipsis: true,
+        wrap: 'none',
+        fontSize: 9,
+        fontFamily: 'monospace',
+        fontStyle: 'bold',
+        fill: '#e9d5ff',
+        listening: false
+      });
+      group.add(pinDot);
+      group.add(pinLabel);
+    });
+  }
+
+  // Arrastre y eventos del grupo
+  let lastDragPos = { x: node.x, y: node.y };
+  group.on('dragstart', () => {
+    _hideSwitchBayTooltip();
+    lastDragPos = { x: group.x(), y: group.y() };
+    if (selectedNodes.size > 0 && !selectedNodes.has(node)) {
+      clearMultiSelection();
+    }
+  });
+
+  group.on('dragmove', () => {
+    let curX = group.x();
+    let curY = group.y();
+    if (snapToGrid) {
+      curX = Math.round(curX / GRID_SIZE) * GRID_SIZE;
+      curY = Math.round(curY / GRID_SIZE) * GRID_SIZE;
+      group.position({ x: curX, y: curY });
+    }
+    const dx = curX - lastDragPos.x;
+    const dy = curY - lastDragPos.y;
+    lastDragPos = { x: curX, y: curY };
+
+    if (selectedNodes.has(node) && selectedNodes.size > 1) {
+      selectedNodes.forEach(otherNode => {
+        if (otherNode.id !== node.id) {
+          const otherGrp = nodeGroups.get(otherNode.id);
+          if (otherGrp) {
+            let newX = otherGrp.x() + dx;
+            let newY = otherGrp.y() + dy;
+            if (snapToGrid) {
+              newX = Math.round(newX / GRID_SIZE) * GRID_SIZE;
+              newY = Math.round(newY / GRID_SIZE) * GRID_SIZE;
+            }
+            otherGrp.position({ x: newX, y: newY });
+            otherNode.x = newX;
+            otherNode.y = newY;
+            updateAttachedLinks(otherNode.id, newX, newY);
+          }
+        }
+      });
+    }
+
+    updateAttachedLinks(node.id, curX, curY);
+    if (selectedNode && selectedNode.id === node.id) {
+      const coordsEl = document.getElementById('prop-node-coords');
+      if (coordsEl) coordsEl.textContent = `X: ${Math.round(curX)}, Y: ${Math.round(curY)}`;
+    }
+  });
+
+  group.on('dragend', async () => {
+    try {
+      if (selectedNodes.has(node) && selectedNodes.size > 1) {
+        selectedNodes.forEach(async (sNode) => {
+          const sGrp = nodeGroups.get(sNode.id);
+          if (sGrp) {
+            sNode.x = sGrp.x();
+            sNode.y = sGrp.y();
+            await API.updateNode(sNode.id, { x: sGrp.x(), y: sGrp.y() });
+          }
+        });
+      } else {
+        await API.updateNode(node.id, { x: group.x(), y: group.y() });
+        node.x = group.x();
+        node.y = group.y();
+      }
+      if (selectedNode && selectedNode.id === node.id) {
+        const coordsEl = document.getElementById('prop-node-coords');
+        if (coordsEl) coordsEl.textContent = `X: ${Math.round(group.x())}, Y: ${Math.round(group.y())}`;
+      }
+      updateAllLinks();
+    } catch (err) {
+      console.error('Error guardando posición de switch:', err);
+    }
+  });
+
+  group.on('click tap', (e) => {
+    e.cancelBubble = true;
+    _hideSwitchBayTooltip();
+    if (linkMode) {
+      handleLinkNodeClick(node, e.evt);
+    } else {
+      const evt = e.evt || {};
+      if (evt.shiftKey || evt.ctrlKey || evt.metaKey) {
+        if (selectedNodes.has(node)) {
+          removeNodeFromMultiSelection(node);
+        } else {
+          if (selectedNode) {
+            const prev = selectedNode;
+            deselectNode();
+            addNodeToMultiSelection(prev);
+          }
+          addNodeToMultiSelection(node);
+          showMultiSelectionNotice(selectedNodes.size);
+        }
+      } else {
+        if (selectedNodes.size > 0 && selectedNodes.has(node)) {
+          showMultiSelectionNotice(selectedNodes.size);
+        } else {
+          clearMultiSelection();
+          selectNode(node);
+        }
+      }
+    }
+  });
+
+  group.on('mouseenter', () => {
+    document.body.style.cursor = linkMode ? 'crosshair' : 'pointer';
+    if (!box.isHighlighted) {
+      if (linkMode && linkSourceNode && linkSourceNode.id === node.id) return;
+      box.stroke('#38bdf8');
+      nodesLayer.batchDraw();
+    }
+  });
+
+  group.on('mouseleave', () => {
+    document.body.style.cursor = 'default';
+    _hideSwitchBayTooltip();
+    if (!box.isHighlighted) {
+      if (linkMode && linkSourceNode && linkSourceNode.id === node.id) {
+        box.stroke('#10b981');
+        box.strokeWidth(3);
+      } else if (linkMode && linkTargetNodes.has(node)) {
+        box.stroke('#38bdf8');
+        box.strokeWidth(2.5);
+      } else if (selectedNodes.has(node)) {
+        box.stroke('#a855f7');
+        box.strokeWidth(2);
+      } else if (selectedNode && selectedNode.id === node.id) {
+        box.stroke('#38bdf8');
+        box.strokeWidth(2);
+      } else {
+        const curPingStatus = node.ping_status || node.status;
+        box.stroke(getNodeStatusColor(curPingStatus, false));
+        box.strokeWidth(1.5);
+      }
+      nodesLayer.batchDraw();
+    }
+  });
+
+  nodesLayer.add(group);
+  nodeGroups.set(node.id, group);
+}
+
+function refreshSwitchNodeBays(nodeOrId) {
+  const nodeMap = typeof _getOrBuildNodeMap === 'function' ? _getOrBuildNodeMap() : new Map();
+  const node = typeof nodeOrId === 'object' ? nodeOrId : nodeMap.get(nodeOrId);
+  if (!node || !isSwitchNode(node)) return;
+  const grp = nodeGroups.get(node.id);
+  if (!grp) return;
+
+  const swLayout = computeSwitchLayout(node);
+  const ipTxt = grp.findOne('.ipText');
+  if (ipTxt) ipTxt.text(swLayout.subInfoText);
+
+  swLayout.bays.forEach((bay) => {
+    const theme = _getBayVisualTheme(bay);
+    const bRect = grp.findOne(`.bayRect_${bay.index}`);
+    const bLed = grp.findOne(`.bayLed_${bay.index}`);
+    const bNotch = grp.findOne(`.bayNotch_${bay.index}`);
+    const bTxt = grp.findOne(`.bayTxt_${bay.index}`);
+    if (bRect) {
+      bRect.fill(theme.fill);
+      bRect.stroke(theme.stroke);
+      bRect.strokeWidth(bay.isOccupied ? 1.15 : 0.85);
+    }
+    if (bLed) bLed.fill(theme.led);
+    if (bNotch) bNotch.fill(theme.notch);
+    if (bTxt) bTxt.fill(theme.text);
+  });
+}
+
 function renderNode(node) {
   // ── Nodo Nota: Sticky Note visual ──
   if (node.device_type === 'note') {
@@ -1199,6 +2076,11 @@ function renderNode(node) {
   // ── Brazo FTTH / Ramal GPON ──
   if (node.device_type === 'ftth_branch') {
     return _renderFtthBranchNode(node);
+  }
+
+  // ── Nodo Switch Minimalista con Bahías de Interfaces NetBox ──
+  if (isSwitchNode(node)) {
+    return _renderSwitchNode(node);
   }
 
   const isParentShortcut = node.device_type === 'parent_map' || !!node.extra_data?.is_parent_shortcut;
@@ -1236,7 +2118,7 @@ function renderNode(node) {
     stroke: isParentShortcut ? '#38bdf8' : pingColor,
     strokeWidth: isParentShortcut ? 2 : 1.5,
     dash: isParentShortcut ? [5, 3] : undefined,
-    cornerRadius: 8,
+    cornerRadius: 6,
     shadowColor: isParentShortcut ? 'rgba(56, 189, 248, 0.4)' : (roleHex ? hexToRgba(roleHex, 0.25) : 'rgba(0, 0, 0, 0.45)'),
     shadowBlur: isParentShortcut ? 8 : (roleHex ? 4 : 0),
     shadowOpacity: 0.4,
@@ -1246,35 +2128,11 @@ function renderNode(node) {
     name: 'box'
   });
 
-  // Indicador de estado circular interior gobernado por PING
-  const statusDot = new Konva.Circle({
-    x: 13,
-    y: isSubmap ? 16 : 15,
-    radius: 6.75,
-    fill: isParentShortcut ? '#38bdf8' : pingColor,
-    stroke: 'rgba(0, 0, 0, 0.35)',
-    strokeWidth: 1,
-    listening: false,
-    perfectDrawEnabled: false,
-    name: 'statusDot'
-  });
-
-  // Icono
-  const iconEmoji = getRoleIcon(node.device_type, node.extra_data);
-  const iconText = new Konva.Text({
-    x: 24,
-    y: isSubmap ? 10 : 9,
-    text: iconEmoji,
-    fontSize: 12,
-    listening: false,
-    perfectDrawEnabled: false
-  });
-
-  // Nombre responsivo (muestra el nombre completo; aplica elipsis inteligente solo si excede el ancho máximo)
-  const maxLabelWidth = nodeWidth - 48;
+  // 1. Nombre responsivo en el primer renglón (sin íconos de equipo, margen compacto y justo)
+  const maxLabelWidth = nodeWidth - 18;
   const label = new Konva.Text({
-    x: 44,
-    y: isSubmap ? 11 : 10,
+    x: 9,
+    y: isSubmap ? 7.5 : 7,
     text: node.name,
     width: maxLabelWidth,
     ellipsis: true,
@@ -1288,11 +2146,12 @@ function renderNode(node) {
     name: 'label'
   });
 
-  // Subtexto (cantidad de equipos, IP o subir nivel)
-  const maxSubWidth = nodeWidth - 24;
+  // 2. Subtexto (Dirección IP / información) en el segundo renglón
+  // El ancho máximo reserva espacio a la derecha para el punto verde de estado
+  const maxSubWidth = Math.max(16, nodeWidth - 28);
   const ipText = new Konva.Text({
-    x: 14,
-    y: isSubmap ? 33 : 29,
+    x: 9,
+    y: isSubmap ? 25.5 : 24,
     text: subLabelText,
     width: maxSubWidth,
     ellipsis: true,
@@ -1306,16 +2165,30 @@ function renderNode(node) {
     name: 'ipText'
   });
 
+  // 3. Indicador de estado circular interior gobernado por PING
+  // Ubicado al extremo derecho del segundo renglón, después de la dirección IP
+  const statusDot = new Konva.Circle({
+    x: nodeWidth - 10,
+    y: isSubmap ? 31 : 29.5,
+    radius: 4.5,
+    fill: isParentShortcut ? '#38bdf8' : pingColor,
+    stroke: 'rgba(0, 0, 0, 0.4)',
+    strokeWidth: 1,
+    listening: false,
+    perfectDrawEnabled: false,
+    name: 'statusDot'
+  });
+
   group.add(box);
-  group.add(statusDot);
-  group.add(iconText);
   group.add(label);
   group.add(ipText);
+  group.add(statusDot);
 
   // Si tiene pines de interconexión (Bornes virtuales)
   if (pins && pins.length > 0) {
+    const dividerY = isSubmap ? 43 : 41;
     const divider = new Konva.Line({
-      points: [6, 48, nodeWidth - 6, 48],
+      points: [6, dividerY, nodeWidth - 6, dividerY],
       stroke: 'rgba(255, 255, 255, 0.18)',
       strokeWidth: 1,
       dash: [3, 2],
@@ -1324,12 +2197,12 @@ function renderNode(node) {
     group.add(divider);
 
     pins.forEach((pin, idx) => {
-      const pinY = 52 + idx * 20 + 8;
+      const pinY = (isSubmap ? 46 : 44) + idx * 18 + 6;
       
       const pinDot = new Konva.Circle({
-        x: 14,
-        y: pinY + 2,
-        radius: 3.5,
+        x: 10,
+        y: pinY + 3,
+        radius: 3,
         fill: isParentShortcut ? '#38bdf8' : '#a855f7',
         stroke: '#ffffff',
         strokeWidth: 0.8,
@@ -1337,10 +2210,10 @@ function renderNode(node) {
       });
 
       const pinLabel = new Konva.Text({
-        x: 24,
-        y: pinY - 3,
+        x: 18,
+        y: pinY - 2,
         text: pin.label || (isParentShortcut ? `⬅ ${pin.remote_node_name}` : `➔ ${pin.remote_node_name}`),
-        width: nodeWidth - 30,
+        width: nodeWidth - 24,
         ellipsis: true,
         wrap: 'none',
         fontSize: 9,
@@ -1837,6 +2710,31 @@ function comparePortsAscending(aKey, bKey) {
   return (aKey.raw || '').localeCompare(bKey.raw || '', undefined, { numeric: true, sensitivity: 'base' });
 }
 
+function getSwitchBayForLink(switchNode, ifName) {
+  if (!switchNode || !ifName || !isSwitchNode(switchNode)) return null;
+  const swLayout = computeSwitchLayout(switchNode);
+  if (!swLayout || !Array.isArray(swLayout.bays) || swLayout.bays.length === 0) return null;
+
+  for (let i = 0; i < swLayout.bays.length; i++) {
+    if (_doesInterfaceMatchBay(ifName, swLayout.bays[i])) {
+      return swLayout.bays[i];
+    }
+  }
+  return null;
+}
+
+function formatCompactPortBadge(ifName, isSwitchSide = false) {
+  if (!ifName) return '';
+  const raw = String(ifName).trim();
+  if (!isSwitchSide) return raw;
+  // Abreviar nombres largos de interfaces de switch para que el badge no colisione con el chasis
+  return raw
+    .replace(/^Ethernet(\d+\/\d+\/\d+)$/i, 'E$1')
+    .replace(/^Gigabit\s*Ethernet\s*(\d+)$/i, 'GE$1')
+    .replace(/^Port\s+SFP-?(\d*)$/i, (_, d) => d ? `SFP${d}` : 'SFP')
+    .replace(/^Port-(\d+)$/i, 'P$1');
+}
+
 function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
   if (!sourceNode || !targetNode) return [0, 0, 0, 0];
 
@@ -1855,179 +2753,238 @@ function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
   const tgtCx = tgtNx + tgtHalf.halfW;
   const tgtCy = tgtNy + tgtHalf.halfH;
 
-  const sFace = determineNodeFace(srcCx, srcCy, tgtCx, tgtCy, srcHalf.halfW, srcHalf.halfH);
-  const tFace = determineNodeFace(tgtCx, tgtCy, srcCx, srcCy, tgtHalf.halfW, tgtHalf.halfH);
+  let sFace = determineNodeFace(srcCx, srcCy, tgtCx, tgtCy, srcHalf.halfW, srcHalf.halfH);
+  let tFace = determineNodeFace(tgtCx, tgtCy, srcCx, srcCy, tgtHalf.halfW, tgtHalf.halfH);
+
+  // Verificar si el nodo origen o destino es un Switch con bahía específica en NetBox
+  const srcIfForLink = link ? (
+    link.source_node_id === sourceNode.id
+      ? (link.source_interface || link.extra_data?.source_interface || '')
+      : (link.target_interface || link.extra_data?.target_interface || '')
+  ) : '';
+  const tgtIfForLink = link ? (
+    link.target_node_id === targetNode.id
+      ? (link.target_interface || link.extra_data?.target_interface || '')
+      : (link.source_interface || link.extra_data?.source_interface || '')
+  ) : '';
+
+  const srcSwitchBay = getSwitchBayForLink(sourceNode, srcIfForLink);
+  const tgtSwitchBay = getSwitchBayForLink(targetNode, tgtIfForLink);
+
+  if (srcSwitchBay) {
+    sFace = (tgtCy < srcCy - 18) ? 'top' : 'bottom';
+  }
+  if (tgtSwitchBay) {
+    tFace = (srcCy < tgtCy - 18) ? 'top' : 'bottom';
+  }
 
   const nodeMap = _getOrBuildNodeMap();
 
   const isSVert = (sFace === 'top' || sFace === 'bottom');
   const isTVert = (tFace === 'top' || tFace === 'bottom');
 
-  // 1. Recolectar todas las conexiones que salen por la cara de origen (Source Face) de forma O(1) usando el índice
-  const allSrcSiblings = [];
-  const srcAttached = nodeAttachedLinksMap.get(sourceNode.id);
-  const srcLinksList = srcAttached ? Array.from(srcAttached) : (currentMap?.links?.filter(l => l.source_node_id === sourceNode.id || l.target_node_id === sourceNode.id) || []);
-
-  for (let i = 0; i < srcLinksList.length; i++) {
-    const l = srcLinksList[i].link || srcLinksList[i];
-    let otherId = (l.source_node_id === sourceNode.id) ? l.target_node_id : l.source_node_id;
-
-    if (otherId) {
-      const other = nodeMap.get(otherId);
-      if (other) {
-        const oHalf = getNodeHalfDimensions(other);
-        const oGrp = nodeGroups.get(other.id);
-        const oNx = oGrp ? oGrp.x() : (other.x || 0);
-        const oNy = oGrp ? oGrp.y() : (other.y || 0);
-        const oCx = oNx + oHalf.halfW;
-        const oCy = oNy + oHalf.halfH;
-
-        const oFace = determineNodeFace(srcCx, srcCy, oCx, oCy, srcHalf.halfW, srcHalf.halfH);
-        if (oFace === sFace) {
-          const ifName = (l.source_node_id === sourceNode.id) ?
-            (l.source_interface || l.extra_data?.source_interface || l.extra_data?.gpon_port || '') :
-            (l.target_interface || l.extra_data?.target_interface || '');
-          const portKey = extractInterfacePortKey(ifName);
-          allSrcSiblings.push({
-            linkId: l.id,
-            id: other.id,
-            cx: oCx,
-            cy: oCy,
-            portKey: portKey,
-            ifName: ifName
-          });
-        }
-      }
-    }
-  }
-
-  // Ordenar TODOS los enlaces de la cara de origen en sentido antihorario de menor a mayor según puerto
-  allSrcSiblings.sort((a, b) => {
-    const portCmp = comparePortsAscending(a.portKey, b.portKey);
-    if (portCmp !== 0) return portCmp;
-    if (sFace === 'bottom') {
-      return a.cx !== b.cx ? (a.cx - b.cx) : String(a.linkId).localeCompare(String(b.linkId));
-    } else if (sFace === 'top') {
-      return a.cx !== b.cx ? (b.cx - a.cx) : String(a.linkId).localeCompare(String(b.linkId));
-    } else if (sFace === 'right') {
-      return a.cy !== b.cy ? (b.cy - a.cy) : String(a.linkId).localeCompare(String(b.linkId));
-    } else { // left
-      return a.cy !== b.cy ? (a.cy - b.cy) : String(a.linkId).localeCompare(String(b.linkId));
-    }
-  });
-
-  const srcN = allSrcSiblings.length;
-  let srcIdx = allSrcSiblings.findIndex(s => (link && String(s.linkId) === String(link.id)) || String(s.id) === String(targetNode.id));
-  if (srcIdx === -1) srcIdx = 0;
-
-  // Distribuir pines uniformemente a lo largo de la cara: CADA ENLACE TIENE SU PROPIO PUERTO/PIN ÚNICO
-  let srcPinOffset = 0;
-  if (srcN > 1) {
-    const margin = isSVert ? 20 : 10;
-    const maxSpan = isSVert ? Math.max(30, (srcHalf.halfW - margin) * 2) : Math.max(16, (srcHalf.halfH - margin) * 2);
-    const minStep = isSVert ? 14 : 9;
-    const desiredStep = isSVert ? 20 : 11;
-    const availableStep = maxSpan / (srcN - 1);
-    const step = Math.max(minStep, Math.min(desiredStep, availableStep));
-    const totalSpan = step * (srcN - 1);
-
-    if (sFace === 'bottom') {
-      srcPinOffset = -totalSpan / 2.0 + srcIdx * step;
-    } else if (sFace === 'top') {
-      srcPinOffset = totalSpan / 2.0 - srcIdx * step;
-    } else if (sFace === 'right') {
-      srcPinOffset = totalSpan / 2.0 - srcIdx * step;
-    } else if (sFace === 'left') {
-      srcPinOffset = -totalSpan / 2.0 + srcIdx * step;
-    }
-  }
-
   let srcPt = { x: srcCx, y: srcCy };
-  if (sFace === 'bottom') {
-    srcPt = { x: srcCx + srcPinOffset, y: srcNy + srcHalf.halfH * 2 };
-  } else if (sFace === 'top') {
-    srcPt = { x: srcCx + srcPinOffset, y: srcNy };
-  } else if (sFace === 'right') {
-    srcPt = { x: srcNx + srcHalf.halfW * 2, y: srcCy + srcPinOffset };
+  let srcIdx = 0;
+  let srcN = 1;
+
+  if (srcSwitchBay) {
+    // Conectar el cable directamente en la coordenada X de la bahía correspondiente del Switch
+    srcPt = {
+      x: srcNx + srcSwitchBay.cx,
+      y: sFace === 'bottom' ? (srcNy + srcHalf.halfH * 2) : srcNy
+    };
+    srcIdx = srcSwitchBay.index;
+    srcN = srcSwitchBay.totalBays;
   } else {
-    srcPt = { x: srcNx, y: srcCy + srcPinOffset };
-  }
+    // 1. Recolectar todas las conexiones que salen por la cara de origen (Source Face) de forma O(1) usando el índice
+    const allSrcSiblings = [];
+    const srcAttached = nodeAttachedLinksMap.get(sourceNode.id);
+    const srcLinksList = srcAttached ? Array.from(srcAttached) : (currentMap?.links?.filter(l => l.source_node_id === sourceNode.id || l.target_node_id === sourceNode.id) || []);
 
-  // 2. Recolectar y distribuir pines en la cara de destino (Target Face) de forma O(1)
-  const allTgtSiblings = [];
-  const tgtAttached = nodeAttachedLinksMap.get(targetNode.id);
-  const tgtLinksList = tgtAttached ? Array.from(tgtAttached) : (currentMap?.links?.filter(l => l.source_node_id === targetNode.id || l.target_node_id === targetNode.id) || []);
+    for (let i = 0; i < srcLinksList.length; i++) {
+      const l = srcLinksList[i].link || srcLinksList[i];
+      let otherId = (l.source_node_id === sourceNode.id) ? l.target_node_id : l.source_node_id;
 
-  for (let i = 0; i < tgtLinksList.length; i++) {
-    const l = tgtLinksList[i].link || tgtLinksList[i];
-    let otherId = (l.target_node_id === targetNode.id) ? l.source_node_id : l.target_node_id;
+      if (otherId) {
+        const other = nodeMap.get(otherId);
+        if (other) {
+          const oHalf = getNodeHalfDimensions(other);
+          const oGrp = nodeGroups.get(other.id);
+          const oNx = oGrp ? oGrp.x() : (other.x || 0);
+          const oNy = oGrp ? oGrp.y() : (other.y || 0);
+          const oCx = oNx + oHalf.halfW;
+          const oCy = oNy + oHalf.halfH;
 
-    if (otherId) {
-      const other = nodeMap.get(otherId);
-      if (other) {
-        const oHalf = getNodeHalfDimensions(other);
-        const oGrp = nodeGroups.get(other.id);
-        const oNx = oGrp ? oGrp.x() : (other.x || 0);
-        const oNy = oGrp ? oGrp.y() : (other.y || 0);
-        const oCx = oNx + oHalf.halfW;
-        const oCy = oNy + oHalf.halfH;
-
-        const oFace = determineNodeFace(tgtCx, tgtCy, oCx, oCy, tgtHalf.halfW, tgtHalf.halfH);
-        if (oFace === tFace) {
-          const ifName = (l.target_node_id === targetNode.id) ?
-            (l.target_interface || l.extra_data?.target_interface || '') :
-            (l.source_interface || l.extra_data?.source_interface || l.extra_data?.gpon_port || '');
-          const portKey = extractInterfacePortKey(ifName);
-          allTgtSiblings.push({
-            linkId: l.id,
-            id: other.id,
-            cx: oCx,
-            cy: oCy,
-            portKey: portKey,
-            ifName: ifName
-          });
+          const oFace = determineNodeFace(srcCx, srcCy, oCx, oCy, srcHalf.halfW, srcHalf.halfH);
+          if (oFace === sFace) {
+            const ifName = (l.source_node_id === sourceNode.id) ?
+              (l.source_interface || l.extra_data?.source_interface || l.extra_data?.gpon_port || '') :
+              (l.target_interface || l.extra_data?.target_interface || '');
+            const portKey = extractInterfacePortKey(ifName);
+            allSrcSiblings.push({
+              linkId: l.id,
+              id: other.id,
+              cx: oCx,
+              cy: oCy,
+              portKey: portKey,
+              ifName: ifName
+            });
+          }
         }
       }
     }
+
+    // Ordenar TODOS los enlaces de la cara de origen en sentido antihorario de menor a mayor según puerto
+    allSrcSiblings.sort((a, b) => {
+      const portCmp = comparePortsAscending(a.portKey, b.portKey);
+      if (portCmp !== 0) return portCmp;
+      if (sFace === 'bottom') {
+        return a.cx !== b.cx ? (a.cx - b.cx) : String(a.linkId).localeCompare(String(b.linkId));
+      } else if (sFace === 'top') {
+        return a.cx !== b.cx ? (b.cx - a.cx) : String(a.linkId).localeCompare(String(b.linkId));
+      } else if (sFace === 'right') {
+        return a.cy !== b.cy ? (b.cy - a.cy) : String(a.linkId).localeCompare(String(b.linkId));
+      } else { // left
+        return a.cy !== b.cy ? (a.cy - b.cy) : String(a.linkId).localeCompare(String(b.linkId));
+      }
+    });
+
+    srcN = allSrcSiblings.length;
+    srcIdx = allSrcSiblings.findIndex(s => (link && String(s.linkId) === String(link.id)) || String(s.id) === String(targetNode.id));
+    if (srcIdx === -1) srcIdx = 0;
+
+    // Distribuir pines uniformemente a lo largo de la cara: CADA ENLACE TIENE SU PROPIO PUERTO/PIN ÚNICO
+    let srcPinOffset = 0;
+    if (srcN > 1) {
+      const margin = isSVert ? 20 : 10;
+      const maxSpan = isSVert ? Math.max(30, (srcHalf.halfW - margin) * 2) : Math.max(16, (srcHalf.halfH - margin) * 2);
+      const minStep = isSVert ? 14 : 9;
+      const desiredStep = isSVert ? 20 : 11;
+      const availableStep = maxSpan / (srcN - 1);
+      const step = Math.max(minStep, Math.min(desiredStep, availableStep));
+      const totalSpan = step * (srcN - 1);
+
+      if (sFace === 'bottom') {
+        srcPinOffset = -totalSpan / 2.0 + srcIdx * step;
+      } else if (sFace === 'top') {
+        srcPinOffset = totalSpan / 2.0 - srcIdx * step;
+      } else if (sFace === 'right') {
+        srcPinOffset = totalSpan / 2.0 - srcIdx * step;
+      } else if (sFace === 'left') {
+        srcPinOffset = -totalSpan / 2.0 + srcIdx * step;
+      }
+    }
+
+    if (sFace === 'bottom') {
+      srcPt = { x: srcCx + srcPinOffset, y: srcNy + srcHalf.halfH * 2 };
+    } else if (sFace === 'top') {
+      srcPt = { x: srcCx + srcPinOffset, y: srcNy };
+    } else if (sFace === 'right') {
+      srcPt = { x: srcNx + srcHalf.halfW * 2, y: srcCy + srcPinOffset };
+    } else {
+      srcPt = { x: srcNx, y: srcCy + srcPinOffset };
+    }
   }
 
-  // Ordenar enlaces de la cara de destino en sentido antihorario de menor a mayor según puerto
-  allTgtSiblings.sort((a, b) => {
-    const portCmp = comparePortsAscending(a.portKey, b.portKey);
-    if (portCmp !== 0) return portCmp;
-    if (tFace === 'bottom') {
-      return a.cx !== b.cx ? (a.cx - b.cx) : String(a.linkId).localeCompare(String(b.linkId));
-    } else if (tFace === 'top') {
-      return a.cx !== b.cx ? (b.cx - a.cx) : String(a.linkId).localeCompare(String(b.linkId));
-    } else if (tFace === 'right') {
-      return a.cy !== b.cy ? (b.cy - a.cy) : String(a.linkId).localeCompare(String(b.linkId));
-    } else { // left
-      return a.cy !== b.cy ? (a.cy - b.cy) : String(a.linkId).localeCompare(String(b.linkId));
+  let tgtPt = { x: tgtCx, y: tgtCy };
+  let tgtIdx = 0;
+  let tgtN = 1;
+
+  if (tgtSwitchBay) {
+    // Conectar el cable directamente en la coordenada X de la bahía correspondiente del Switch destino
+    tgtPt = {
+      x: tgtNx + tgtSwitchBay.cx,
+      y: tFace === 'bottom' ? (tgtNy + tgtHalf.halfH * 2) : tgtNy
+    };
+    tgtIdx = tgtSwitchBay.index;
+    tgtN = tgtSwitchBay.totalBays;
+  } else {
+    // 2. Recolectar y distribuir pines en la cara de destino (Target Face) de forma O(1)
+    const allTgtSiblings = [];
+    const tgtAttached = nodeAttachedLinksMap.get(targetNode.id);
+    const tgtLinksList = tgtAttached ? Array.from(tgtAttached) : (currentMap?.links?.filter(l => l.source_node_id === targetNode.id || l.target_node_id === targetNode.id) || []);
+
+    for (let i = 0; i < tgtLinksList.length; i++) {
+      const l = tgtLinksList[i].link || tgtLinksList[i];
+      let otherId = (l.target_node_id === targetNode.id) ? l.source_node_id : l.target_node_id;
+
+      if (otherId) {
+        const other = nodeMap.get(otherId);
+        if (other) {
+          const oHalf = getNodeHalfDimensions(other);
+          const oGrp = nodeGroups.get(other.id);
+          const oNx = oGrp ? oGrp.x() : (other.x || 0);
+          const oNy = oGrp ? oGrp.y() : (other.y || 0);
+          const oCx = oNx + oHalf.halfW;
+          const oCy = oNy + oHalf.halfH;
+
+          const oFace = determineNodeFace(tgtCx, tgtCy, oCx, oCy, tgtHalf.halfW, tgtHalf.halfH);
+          if (oFace === tFace) {
+            const ifName = (l.target_node_id === targetNode.id) ?
+              (l.target_interface || l.extra_data?.target_interface || '') :
+              (l.source_interface || l.extra_data?.source_interface || l.extra_data?.gpon_port || '');
+            const portKey = extractInterfacePortKey(ifName);
+            allTgtSiblings.push({
+              linkId: l.id,
+              id: other.id,
+              cx: oCx,
+              cy: oCy,
+              portKey: portKey,
+              ifName: ifName
+            });
+          }
+        }
+      }
     }
-  });
 
-  const tgtN = allTgtSiblings.length;
-  let tgtIdx = allTgtSiblings.findIndex(s => (link && String(s.linkId) === String(link.id)) || String(s.id) === String(sourceNode.id));
-  if (tgtIdx === -1) tgtIdx = 0;
+    // Ordenar enlaces de la cara de destino en sentido antihorario de menor a mayor según puerto
+    allTgtSiblings.sort((a, b) => {
+      const portCmp = comparePortsAscending(a.portKey, b.portKey);
+      if (portCmp !== 0) return portCmp;
+      if (tFace === 'bottom') {
+        return a.cx !== b.cx ? (a.cx - b.cx) : String(a.linkId).localeCompare(String(b.linkId));
+      } else if (tFace === 'top') {
+        return a.cx !== b.cx ? (b.cx - a.cx) : String(a.linkId).localeCompare(String(b.linkId));
+      } else if (tFace === 'right') {
+        return a.cy !== b.cy ? (b.cy - a.cy) : String(a.linkId).localeCompare(String(b.linkId));
+      } else { // left
+        return a.cy !== b.cy ? (a.cy - b.cy) : String(a.linkId).localeCompare(String(b.linkId));
+      }
+    });
 
-  let tgtPinOffset = 0;
-  if (tgtN > 1) {
-    const margin = isTVert ? 20 : 10;
-    const maxSpan = isTVert ? Math.max(30, (tgtHalf.halfW - margin) * 2) : Math.max(16, (tgtHalf.halfH - margin) * 2);
-    const minStep = isTVert ? 14 : 9;
-    const desiredStep = isTVert ? 20 : 11;
-    const availableStep = maxSpan / (tgtN - 1);
-    const step = Math.max(minStep, Math.min(desiredStep, availableStep));
-    const totalSpan = step * (tgtN - 1);
+    tgtN = allTgtSiblings.length;
+    tgtIdx = allTgtSiblings.findIndex(s => (link && String(s.linkId) === String(link.id)) || String(s.id) === String(sourceNode.id));
+    if (tgtIdx === -1) tgtIdx = 0;
 
-    if (tFace === 'bottom') {
-      tgtPinOffset = -totalSpan / 2.0 + tgtIdx * step;
-    } else if (tFace === 'top') {
-      tgtPinOffset = totalSpan / 2.0 - tgtIdx * step;
-    } else if (tFace === 'right') {
-      tgtPinOffset = totalSpan / 2.0 - tgtIdx * step;
+    let tgtPinOffset = 0;
+    if (tgtN > 1) {
+      const margin = isTVert ? 20 : 10;
+      const maxSpan = isTVert ? Math.max(30, (tgtHalf.halfW - margin) * 2) : Math.max(16, (tgtHalf.halfH - margin) * 2);
+      const minStep = isTVert ? 14 : 9;
+      const desiredStep = isTVert ? 20 : 11;
+      const availableStep = maxSpan / (tgtN - 1);
+      const step = Math.max(minStep, Math.min(desiredStep, availableStep));
+      const totalSpan = step * (tgtN - 1);
+
+      if (tFace === 'bottom') {
+        tgtPinOffset = -totalSpan / 2.0 + tgtIdx * step;
+      } else if (tFace === 'top') {
+        tgtPinOffset = totalSpan / 2.0 - tgtIdx * step;
+      } else if (tFace === 'right') {
+        tgtPinOffset = totalSpan / 2.0 - tgtIdx * step;
+      } else if (tFace === 'left') {
+        tgtPinOffset = -totalSpan / 2.0 + tgtIdx * step;
+      }
+    }
+
+    if (tFace === 'top') {
+      tgtPt = { x: tgtCx + tgtPinOffset, y: tgtNy };
+    } else if (tFace === 'bottom') {
+      tgtPt = { x: tgtCx + tgtPinOffset, y: tgtNy + tgtHalf.halfH * 2 };
     } else if (tFace === 'left') {
-      tgtPinOffset = -totalSpan / 2.0 + tgtIdx * step;
+      tgtPt = { x: tgtNx, y: tgtCy + tgtPinOffset };
+    } else {
+      tgtPt = { x: tgtNx + tgtHalf.halfW * 2, y: tgtCy + tgtPinOffset };
     }
   }
 
@@ -2037,17 +2994,8 @@ function calculateLinkEndpoints(sourceNode, targetNode, link = null) {
     link._tgtIdx = tgtIdx;
     link._srcN = srcN;
     link._tgtN = tgtN;
-  }
-
-  let tgtPt = { x: tgtCx, y: tgtCy };
-  if (tFace === 'top') {
-    tgtPt = { x: tgtCx + tgtPinOffset, y: tgtNy };
-  } else if (tFace === 'bottom') {
-    tgtPt = { x: tgtCx + tgtPinOffset, y: tgtNy + tgtHalf.halfH * 2 };
-  } else if (tFace === 'left') {
-    tgtPt = { x: tgtNx, y: tgtCy + tgtPinOffset };
-  } else {
-    tgtPt = { x: tgtNx + tgtHalf.halfW * 2, y: tgtCy + tgtPinOffset };
+    link._srcIsSwitchBay = !!srcSwitchBay;
+    link._tgtIsSwitchBay = !!tgtSwitchBay;
   }
 
   // 3. Vértices de conexión fija y línea recta / dirección libre estilo The Dude
@@ -2148,23 +3096,26 @@ function updateAllLinkColors() {
       if (isDraftOrUndocumented) {
         line.stroke('#22c55e');
         line.fill('#22c55e');
-        line.strokeWidth(2.8);
-        line.dash([12, 8]);
-        line.shadowColor('#ffffff');
-        line.shadowBlur(4);
-        line.shadowOpacity(0.95);
+        line.strokeWidth(2.2);
+        line.dash([10, 6]);
+        line.shadowBlur(0);
+        line.shadowOpacity(0);
       } else {
         const color = getLinkColor(link, srcNode, tgtNode);
         line.stroke(color);
         line.fill(color);
-        line.strokeWidth(isIntermap ? 2.5 : 2);
+        line.strokeWidth(isIntermap ? 2.2 : 1.8);
         line.dash(isIntermap ? [6, 4] : undefined);
         line.shadowBlur(0);
         line.shadowOpacity(0);
       }
     }
   });
+  currentMap.nodes.forEach(n => {
+    if (isSwitchNode(n)) refreshSwitchNodeBays(n);
+  });
   linksLayer.batchDraw();
+  if (nodesLayer) nodesLayer.batchDraw();
 }
 
 function createLinkPortBadge(text, color = '#38bdf8') {
@@ -2214,6 +3165,271 @@ function getNetBoxDeviceUrl(deviceId, subpath = '') {
   return `${cleanBase}/dcim/devices/${deviceId}${cleanSub}`;
 }
 
+// ─── Resaltado Coordinado: Aristas, Nodos Conectados y Bahías de Switch ───────
+let selectedLink = null;
+
+function findSwitchBayForNodeLink(switchNode, link, isSource = true) {
+  if (!switchNode || !isSwitchNode(switchNode)) return null;
+  const swLayout = computeSwitchLayout(switchNode);
+  if (!swLayout || !Array.isArray(swLayout.bays) || swLayout.bays.length === 0) return null;
+
+  // 1. Coincidencia directa por ID de enlace en matchedLinks de cada bahía
+  for (let i = 0; i < swLayout.bays.length; i++) {
+    const bay = swLayout.bays[i];
+    if (bay.matchedLinks && bay.matchedLinks.length > 0) {
+      if (bay.matchedLinks.some(m => m.link && String(m.link.id) === String(link.id))) {
+        return bay;
+      }
+    }
+  }
+
+  // 2. Coincidencia por nombre de interfaz
+  const ifName = isSource
+    ? (link.source_interface || link.extra_data?.source_interface || '')
+    : (link.target_interface || link.extra_data?.target_interface || '');
+
+  if (ifName) {
+    for (let i = 0; i < swLayout.bays.length; i++) {
+      if (_doesInterfaceMatchBay(ifName, swLayout.bays[i])) {
+        return swLayout.bays[i];
+      }
+    }
+  }
+
+  // 3. Coincidencia por nodo remoto (peerNode)
+  const otherId = isSource ? link.target_node_id : link.source_node_id;
+  if (otherId) {
+    for (let i = 0; i < swLayout.bays.length; i++) {
+      const bay = swLayout.bays[i];
+      if (bay.primaryMatch?.peerNode?.id === otherId) {
+        return bay;
+      }
+    }
+  }
+
+  return null;
+}
+
+function _applySwitchBayHighlight(nodeId, bay, highlight) {
+  const grp = nodeGroups.get(nodeId);
+  if (!grp) return;
+
+  const bayRect = grp.findOne(`.bayRect_${bay.index}`);
+  const bayLed = grp.findOne(`.bayLed_${bay.index}`);
+  const bayNotch = grp.findOne(`.bayNotch_${bay.index}`);
+  const bayTxt = grp.findOne(`.bayTxt_${bay.index}`);
+
+  const theme = _getBayVisualTheme(bay);
+
+  if (highlight) {
+    if (bayRect) {
+      if (bayRect._origStroke === undefined) bayRect._origStroke = bayRect.stroke();
+      if (bayRect._origFill === undefined) bayRect._origFill = bayRect.fill();
+      if (bayRect._origStrokeWidth === undefined) bayRect._origStrokeWidth = bayRect.strokeWidth();
+      if (bayRect._origShadowBlur === undefined) bayRect._origShadowBlur = bayRect.shadowBlur();
+      if (bayRect._origShadowColor === undefined) bayRect._origShadowColor = bayRect.shadowColor();
+      if (bayRect._origShadowOpacity === undefined) bayRect._origShadowOpacity = bayRect.shadowOpacity();
+
+      bayRect.stroke('#38bdf8');
+      bayRect.strokeWidth(1.8);
+      bayRect.fill('rgba(56, 189, 248, 0.35)');
+      bayRect.shadowBlur(0);
+      bayRect.shadowOpacity(0);
+    }
+    if (bayLed) {
+      if (bayLed._origFill === undefined) bayLed._origFill = bayLed.fill();
+      if (bayLed._origShadowBlur === undefined) bayLed._origShadowBlur = bayLed.shadowBlur();
+      if (bayLed._origShadowColor === undefined) bayLed._origShadowColor = bayLed.shadowColor();
+
+      bayLed.fill('#38bdf8');
+      bayLed.shadowBlur(0);
+    }
+    if (bayNotch) {
+      if (bayNotch._origFill === undefined) bayNotch._origFill = bayNotch.fill();
+      bayNotch.fill('#38bdf8');
+    }
+    if (bayTxt) {
+      if (bayTxt._origFill === undefined) bayTxt._origFill = bayTxt.fill();
+      bayTxt.fill('#ffffff');
+    }
+  } else {
+    if (bayRect) {
+      bayRect.stroke(bayRect._origStroke !== undefined ? bayRect._origStroke : theme.stroke);
+      bayRect.fill(bayRect._origFill !== undefined ? bayRect._origFill : theme.fill);
+      bayRect.strokeWidth(bayRect._origStrokeWidth !== undefined ? bayRect._origStrokeWidth : (bay.isOccupied ? 1.15 : 0.85));
+      bayRect.shadowBlur(bayRect._origShadowBlur !== undefined ? bayRect._origShadowBlur : 0);
+      bayRect.shadowColor(bayRect._origShadowColor || 'rgba(0,0,0,0)');
+      bayRect.shadowOpacity(bayRect._origShadowOpacity !== undefined ? bayRect._origShadowOpacity : 0);
+
+      delete bayRect._origStroke;
+      delete bayRect._origFill;
+      delete bayRect._origStrokeWidth;
+      delete bayRect._origShadowBlur;
+      delete bayRect._origShadowColor;
+      delete bayRect._origShadowOpacity;
+    }
+    if (bayLed) {
+      bayLed.fill(bayLed._origFill !== undefined ? bayLed._origFill : theme.led);
+      bayLed.shadowBlur(bayLed._origShadowBlur !== undefined ? bayLed._origShadowBlur : 0);
+      bayLed.shadowColor(bayLed._origShadowColor || 'rgba(0,0,0,0)');
+
+      delete bayLed._origFill;
+      delete bayLed._origShadowBlur;
+      delete bayLed._origShadowColor;
+    }
+    if (bayNotch) {
+      bayNotch.fill(bayNotch._origFill !== undefined ? bayNotch._origFill : theme.notch);
+      delete bayNotch._origFill;
+    }
+    if (bayTxt) {
+      bayTxt.fill(bayTxt._origFill !== undefined ? bayTxt._origFill : theme.text);
+      delete bayTxt._origFill;
+    }
+  }
+}
+
+function _highlightSwitchBaysForLink(link, sourceNode, targetNode, highlight) {
+  if (sourceNode && isSwitchNode(sourceNode)) {
+    const srcBay = findSwitchBayForNodeLink(sourceNode, link, true);
+    if (srcBay) {
+      _applySwitchBayHighlight(sourceNode.id, srcBay, highlight);
+    }
+  }
+  if (targetNode && isSwitchNode(targetNode)) {
+    const tgtBay = findSwitchBayForNodeLink(targetNode, link, false);
+    if (tgtBay) {
+      _applySwitchBayHighlight(targetNode.id, tgtBay, highlight);
+    }
+  }
+}
+
+function highlightLinkAndEndpoints(link) {
+  if (!link || linkMode) return;
+  const linkObj = linkLines.get(link.id);
+  if (!linkObj) return;
+
+  const { line, sourceNode, targetNode } = linkObj;
+
+  // 1. Iluminar la arista (Línea) - Simple y limpia sin efecto neón
+  if (line) {
+    line.stroke('#38bdf8');
+    line.fill('#38bdf8');
+    line.strokeWidth(2.8);
+    line.shadowBlur(0);
+    line.shadowOpacity(0);
+  }
+
+  // 2. Iluminar ambos nodos conectados (Extremos Origen y Destino)
+  [sourceNode, targetNode].forEach(node => {
+    if (!node) return;
+    const grp = nodeGroups.get(node.id);
+    if (!grp) return;
+
+    const box = grp.findOne('.box') || grp.findOne('.capsule') || grp.findOne('.noteBg');
+    if (box && !box.isHighlighted) {
+      if (box._origStroke === undefined) box._origStroke = box.stroke();
+      if (box._origStrokeWidth === undefined) box._origStrokeWidth = box.strokeWidth();
+      if (box._origShadowBlur === undefined) box._origShadowBlur = box.shadowBlur();
+      if (box._origShadowColor === undefined) box._origShadowColor = box.shadowColor();
+      if (box._origShadowOpacity === undefined) box._origShadowOpacity = box.shadowOpacity();
+
+      box.stroke('#38bdf8');
+      box.strokeWidth(2.2);
+      box.shadowBlur(0);
+      box.shadowOpacity(0);
+      box._linkHoverActive = true;
+    }
+  });
+
+  // 3. Iluminar la bahía/puerto del switch donde pertenece
+  _highlightSwitchBaysForLink(link, sourceNode, targetNode, true);
+
+  linksLayer.batchDraw();
+  nodesLayer.batchDraw();
+}
+
+function unhighlightLinkAndEndpoints(link) {
+  if (!link) return;
+  if (selectedLink && selectedLink.id === link.id) return;
+
+  const linkObj = linkLines.get(link.id);
+  if (!linkObj) return;
+
+  const { line, sourceNode, targetNode } = linkObj;
+
+  // 1. Restaurar arista
+  if (line) {
+    const isNetboxDocumented = !!(link.netbox_cable_id || link.netbox_wirelesslink_id || link.extra_data?.wireless_link_id);
+    const isVisualNote = !!(link.extra_data && (link.extra_data.is_note_bridge || link.extra_data.is_visual_only || link.extra_data.is_simple_link));
+    const isDraftOrUndocumented = !isNetboxDocumented && !isVisualNote;
+    const isIntermap = !!(link.extra_data && (link.extra_data.is_intermap || link.extra_data.remote_node_id));
+    const curColor = isDraftOrUndocumented ? '#22c55e' : getLinkColor(link, sourceNode, targetNode);
+
+    line.stroke(curColor);
+    line.fill(curColor);
+    line.strokeWidth(isDraftOrUndocumented ? 2.2 : (isIntermap ? 2.2 : 1.8));
+    line.dash(isDraftOrUndocumented ? [10, 6] : (isIntermap ? [6, 4] : undefined));
+    line.shadowBlur(0);
+    line.shadowOpacity(0);
+  }
+
+  // 2. Restaurar ambos nodos
+  [sourceNode, targetNode].forEach(node => {
+    if (!node) return;
+    const grp = nodeGroups.get(node.id);
+    if (!grp) return;
+
+    const box = grp.findOne('.box') || grp.findOne('.capsule') || grp.findOne('.noteBg');
+    if (box && box._linkHoverActive) {
+      box._linkHoverActive = false;
+      if (!box.isHighlighted) {
+        if (box._origStroke !== undefined) {
+          box.stroke(box._origStroke);
+          box.strokeWidth(box._origStrokeWidth !== undefined ? box._origStrokeWidth : 1.5);
+          box.shadowBlur(box._origShadowBlur !== undefined ? box._origShadowBlur : 0);
+          box.shadowColor(box._origShadowColor || 'rgba(0,0,0,0)');
+          box.shadowOpacity(box._origShadowOpacity !== undefined ? box._origShadowOpacity : 0.4);
+          delete box._origStroke;
+          delete box._origStrokeWidth;
+          delete box._origShadowBlur;
+          delete box._origShadowColor;
+          delete box._origShadowOpacity;
+        } else {
+          const isParentShortcut = grp.isParentShortcut || false;
+          const isSubmap = grp.isSubmap || (node.device_type === 'submap');
+          const curPingStatus = node.ping_status || node.status;
+          box.stroke(isParentShortcut ? '#38bdf8' : getNodeStatusColor(curPingStatus, isSubmap));
+          box.strokeWidth(isParentShortcut ? 2 : 1.5);
+        }
+      }
+    }
+  });
+
+  // 3. Restaurar bahías de switch
+  _highlightSwitchBaysForLink(link, sourceNode, targetNode, false);
+
+  linksLayer.batchDraw();
+  nodesLayer.batchDraw();
+}
+
+function selectLink(link) {
+  if (selectedLink && selectedLink.id !== link.id) {
+    const prev = selectedLink;
+    selectedLink = null;
+    unhighlightLinkAndEndpoints(prev);
+  }
+  selectedLink = link;
+  highlightLinkAndEndpoints(link);
+}
+
+function deselectLink() {
+  if (selectedLink) {
+    const prev = selectedLink;
+    selectedLink = null;
+    unhighlightLinkAndEndpoints(prev);
+  }
+}
+
 function renderLink(link, nodesDict) {
   const source = nodesDict.get(link.source_node_id);
   const target = nodesDict.get(link.target_node_id);
@@ -2244,11 +3460,10 @@ function renderLink(link, nodesDict) {
     pointerWidth: 8,
     stroke: color,
     fill: color,
-    strokeWidth: isDraftOrUndocumented ? 2.8 : (isIntermap ? 2.5 : 2),
+    strokeWidth: isDraftOrUndocumented ? 2.2 : (isIntermap ? 2.2 : 1.8),
     dash: linkDash,
-    shadowColor: isDraftOrUndocumented ? '#ffffff' : undefined,
-    shadowBlur: isDraftOrUndocumented ? 4 : 0,
-    shadowOpacity: isDraftOrUndocumented ? 0.95 : 0,
+    shadowBlur: 0,
+    shadowOpacity: 0,
     hitStrokeWidth: 14,
     lineCap: 'round',
     lineJoin: 'round',
@@ -2278,7 +3493,8 @@ function renderLink(link, nodesDict) {
       const segLen0 = Math.hypot(dx0, dy0);
 
       if (segLen0 > 8) {
-        const offsetDist = Math.min(38, segLen0 * 0.53);
+        const baseOff0 = link._srcIsSwitchBay ? ((sIdx % 2 === 0) ? 26 : 44) : 38;
+        const offsetDist = Math.min(baseOff0, segLen0 * 0.62);
         const bx = p0x + (dx0 / segLen0) * offsetDist;
         const by = p0y + (dy0 / segLen0) * offsetDist;
 
@@ -2304,7 +3520,8 @@ function renderLink(link, nodesDict) {
       const segLen1 = Math.hypot(dx1, dy1);
 
       if (segLen1 > 8) {
-        const offsetDist = Math.min(38, segLen1 * 0.53);
+        const baseOff1 = link._tgtIsSwitchBay ? ((tIdx % 2 === 0) ? 26 : 44) : 38;
+        const offsetDist = Math.min(baseOff1, segLen1 * 0.62);
         const bx = pLast2x - (dx1 / segLen1) * offsetDist;
         const by = pLast2y - (dy1 / segLen1) * offsetDist;
 
@@ -2339,12 +3556,18 @@ function renderLink(link, nodesDict) {
   linksLayer.add(line);
 
   if (isNetboxDocumented) {
-    if (link.source_interface) {
-      srcBadge = createLinkPortBadge(link.source_interface, '#38bdf8');
+    // Si el nodo de origen es un Switch (o el enlace está anclado a su bahía interna),
+    // omitimos la etiqueta flotante de la arista porque el número y estado de puerto ya se visualizan dentro del nodo.
+    const isSrcSwitch = isSwitchNode(source) || !!link._srcIsSwitchBay;
+    if (link.source_interface && !isSrcSwitch) {
+      const srcLabel = formatCompactPortBadge(link.source_interface, false);
+      srcBadge = createLinkPortBadge(srcLabel, '#38bdf8');
       linksLayer.add(srcBadge);
     }
-    if (link.target_interface) {
-      tgtBadge = createLinkPortBadge(link.target_interface, '#c084fc');
+    const isTgtSwitch = isSwitchNode(target) || !!link._tgtIsSwitchBay;
+    if (link.target_interface && !isTgtSwitch) {
+      const tgtLabel = formatCompactPortBadge(link.target_interface, false);
+      tgtBadge = createLinkPortBadge(tgtLabel, '#c084fc');
       linksLayer.add(tgtBadge);
     }
   } else if (isDraftOrUndocumented) {
@@ -2355,10 +3578,7 @@ function renderLink(link, nodesDict) {
 
   line.on('mouseenter', (e) => {
     document.body.style.cursor = 'pointer';
-    line.stroke('#38bdf8');
-    line.fill('#38bdf8');
-    line.strokeWidth(3.5);
-    linksLayer.batchDraw();
+    highlightLinkAndEndpoints(link);
 
     const isGponBranch = target.device_type === 'ftth_branch' || source.device_type === 'ftth_branch' || !!link.extra_data?.is_gpon_branch;
     const gponTooltip = document.getElementById('canvas-gpon-tooltip');
@@ -2528,15 +3748,7 @@ function renderLink(link, nodesDict) {
 
   line.on('mouseleave', () => {
     document.body.style.cursor = 'default';
-    const curColor = isDraftOrUndocumented ? '#22c55e' : getLinkColor(link, source, target);
-    line.stroke(curColor);
-    line.fill(curColor);
-    line.strokeWidth(isDraftOrUndocumented ? 2.8 : (isIntermap ? 2.5 : 2));
-    line.dash(linkDash);
-    line.shadowColor(isDraftOrUndocumented ? '#ffffff' : undefined);
-    line.shadowBlur(isDraftOrUndocumented ? 4 : 0);
-    line.shadowOpacity(isDraftOrUndocumented ? 0.95 : 0);
-    linksLayer.batchDraw();
+    unhighlightLinkAndEndpoints(link);
 
     const tooltip = document.getElementById('canvas-link-tooltip');
     if (tooltip) tooltip.style.display = 'none';
@@ -2551,10 +3763,26 @@ function renderLink(link, nodesDict) {
     const gponTooltip = document.getElementById('canvas-gpon-tooltip');
     if (gponTooltip) gponTooltip.style.display = 'none';
 
+    selectLink(link);
+
     if (isDraftOrUndocumented) {
       openNetboxLinkAssistant(link, source, target);
     } else {
       openLinkPropertiesModal(link, source, target);
+    }
+  });
+
+  // Permitir que las etiquetas de interfaz de la arista también iluminen el circuito completo
+  [srcBadge, tgtBadge, draftBadge].forEach(b => {
+    if (b) {
+      b.on('mouseenter', () => {
+        document.body.style.cursor = 'pointer';
+        highlightLinkAndEndpoints(link);
+      });
+      b.on('mouseleave', () => {
+        document.body.style.cursor = 'default';
+        unhighlightLinkAndEndpoints(link);
+      });
     }
   });
 
@@ -2634,6 +3862,7 @@ async function openNetboxLinkAssistant(link, sourceNode, targetNode, autoOpenBot
 
   const cleanUp = () => {
     modal.style.display = 'none';
+    deselectLink();
   };
 
   if (btnClose) btnClose.onclick = cleanUp;
@@ -3154,6 +4383,7 @@ function openLinkPropertiesModal(link, sourceNode, targetNode) {
 
   const cleanUp = () => {
     modal.style.display = 'none';
+    deselectLink();
     if (btnClose) btnClose.onclick = null;
     if (btnCancel) btnCancel.onclick = null;
     if (btnSave) btnSave.onclick = null;
@@ -3362,7 +4592,11 @@ function updateAllLinks() {
       if (updateBadgesPos) updateBadgesPos(arrowPts);
     }
   });
+  currentMap.nodes.forEach(n => {
+    if (isSwitchNode(n)) refreshSwitchNodeBays(n);
+  });
   linksLayer.batchDraw();
+  if (nodesLayer) nodesLayer.batchDraw();
 }
 
 // ─── 5. Herramienta de Conexión de Enlaces ──────────────────────────────────
@@ -4053,7 +5287,10 @@ async function connectSingleTargetNode(sourceNode, node) {
       try {
         const targetMapDetail = await API.getMapDetail(targetMapId);
         if (targetMapDetail && targetMapDetail.nodes) {
-          const complementaryNav = targetMapDetail.nodes.find(n => (isParentNav ? n.device_type === 'submap' : (n.device_type === 'parent_map' || n.extra_data?.is_parent_shortcut)));
+          const complementaryNav = targetMapDetail.nodes.find(n => {
+            const isMatch = isParentNav ? n.device_type === 'submap' : (n.device_type === 'parent_map' || n.extra_data?.is_parent_shortcut);
+            return isMatch && n.extra_data?.target_map_id === currentMap.id;
+          }) || targetMapDetail.nodes.find(n => (isParentNav ? n.device_type === 'submap' : (n.device_type === 'parent_map' || n.extra_data?.is_parent_shortcut)));
           if (complementaryNav) {
             if (!complementaryNav.extra_data) complementaryNav.extra_data = {};
             if (!complementaryNav.extra_data.pins) complementaryNav.extra_data.pins = [];
@@ -4798,8 +6035,110 @@ async function openFtthBranchEditorModal(node) {
   }
 }
 
+// ─── Resumen Compacto de Conexiones de Interfaz y Equipos Involucrados ───────
+function renderNodeConnectionsSummary(node) {
+  const container = document.getElementById('prop-node-connections-list');
+  const countBadge = document.getElementById('prop-node-conn-count');
+  if (!container) return;
+
+  if (!node || !currentMap) {
+    container.innerHTML = '<div style="color: #64748b; font-size: 0.68rem; font-style: italic; padding: 4px 0;"><i class="fas fa-info-circle"></i> Ningún dispositivo seleccionado.</div>';
+    if (countBadge) countBadge.textContent = '0';
+    return;
+  }
+
+  const allLinks = currentMap.links || [];
+  const attached = allLinks.filter(l => l.source_node_id === node.id || l.target_node_id === node.id);
+
+  if (countBadge) countBadge.textContent = `${attached.length}`;
+
+  if (attached.length === 0) {
+    container.innerHTML = '<div style="color: #64748b; font-size: 0.68rem; font-style: italic; padding: 4px 0;"><i class="fas fa-info-circle"></i> Sin conexiones de interfaz en este mapa.</div>';
+    return;
+  }
+
+  const nodesDict = new Map((currentMap.nodes || []).map(n => [n.id, n]));
+  let html = '';
+
+  const safeStr = (s) => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+  attached.forEach(link => {
+    const isSrc = (link.source_node_id === node.id);
+    const peerId = isSrc ? link.target_node_id : link.source_node_id;
+    const peerNode = nodesDict.get(peerId);
+    const peerName = peerNode ? peerNode.name : (link.extra_data?.peer_name || link.extra_data?.target_map_name || 'Extremo Remoto');
+
+    const localIf = isSrc 
+      ? (link.source_interface || link.extra_data?.source_interface || link.extra_data?.gpon_port || 'Local')
+      : (link.target_interface || link.extra_data?.target_interface || 'Local');
+
+    const peerIf = isSrc 
+      ? (link.target_interface || link.extra_data?.target_interface || '')
+      : (link.source_interface || link.extra_data?.source_interface || link.extra_data?.gpon_port || '');
+
+    // Tipo de medio y badges visuales
+    const isFiber = link.cable_type === 'fiber' || link.cable_type === 'fibra' || !!link.extra_data?.gpon_port;
+    const isWireless = link.cable_type === 'wireless' || !!link.netbox_wirelesslink_id || !!link.extra_data?.wireless_link_id;
+    
+    let typeIcon = 'fa-ethernet';
+    let typeColor = '#38bdf8';
+    let typeLabel = 'Cat6';
+    if (isFiber) {
+      typeIcon = 'fa-bolt';
+      typeColor = '#c084fc';
+      typeLabel = 'Fibra';
+    } else if (isWireless) {
+      typeIcon = 'fa-broadcast-tower';
+      typeColor = '#fbbf24';
+      typeLabel = 'Radio';
+    }
+
+    const desc = link.description || link.extra_data?.description || link.extra_data?.name || (isWireless ? (link.extra_data?.ssid ? `SSID: ${link.extra_data.ssid}` : '') : '');
+
+    html += `
+      <div class="node-conn-item" data-link-id="${link.id}" title="Clic para seleccionar y enfocar este enlace en el lienzo">
+        <div class="node-conn-row-main">
+          <span class="node-conn-badge-port local" title="Interfaz en este equipo: ${safeStr(localIf)}">
+            <i class="fas ${typeIcon}" style="color: ${typeColor}; font-size: 0.58rem; margin-right: 3px;"></i>${safeStr(localIf)}
+          </span>
+          <i class="fas fa-arrows-alt-h" style="font-size: 0.60rem; color: #64748b; flex-shrink: 0;"></i>
+          <span class="node-conn-badge-port remote" title="Interfaz remota: ${safeStr(peerIf || '—')}">
+            ${peerIf ? safeStr(peerIf) : '—'}
+          </span>
+          <span class="node-conn-peer-name" title="Equipo conectado: ${safeStr(peerName)}">
+            @ ${safeStr(peerName)}
+          </span>
+        </div>
+        ${desc ? `<div class="node-conn-desc"><i class="fas fa-info-circle" style="font-size: 0.55rem; color: #94a3b8;"></i> ${safeStr(desc)}</div>` : ''}
+      </div>
+    `;
+  });
+
+  container.innerHTML = html;
+
+  // Interacción: al pasar el ratón o hacer clic, iluminar/seleccionar el enlace en el lienzo
+  container.querySelectorAll('.node-conn-item').forEach(item => {
+    item.addEventListener('mouseenter', () => {
+      const linkId = item.dataset.linkId;
+      const l = attached.find(x => x.id === linkId);
+      if (l) highlightLinkAndEndpoints(l);
+    });
+    item.addEventListener('mouseleave', () => {
+      const linkId = item.dataset.linkId;
+      const l = attached.find(x => x.id === linkId);
+      if (l) unhighlightLinkAndEndpoints(l);
+    });
+    item.addEventListener('click', () => {
+      const linkId = item.dataset.linkId;
+      const l = attached.find(x => x.id === linkId);
+      if (l) selectLink(l);
+    });
+  });
+}
+
 function selectNode(node) {
   deselectNode();
+  deselectLink();
   selectedNode = node;
 
   const grp = nodeGroups.get(node.id);
@@ -4813,6 +6152,7 @@ function selectNode(node) {
 
   document.getElementById('no-selection-msg').style.display = 'none';
   document.getElementById('node-properties-panel').style.display = 'block';
+  renderNodeConnectionsSummary(node);
 
   // ── Panel especial para Nodo Nota ──
   if (node.device_type === 'note') {
@@ -5066,6 +6406,7 @@ function deselectNode() {
   }
   document.getElementById('no-selection-msg').style.display = 'block';
   document.getElementById('node-properties-panel').style.display = 'none';
+  renderNodeConnectionsSummary(null);
   const gponPanel = document.getElementById('gpon-properties-panel');
   if (gponPanel) gponPanel.style.display = 'none';
   const notePanel = document.getElementById('note-properties-panel');
@@ -5673,7 +7014,7 @@ function applyNodeStatusToCanvas(nodeId, statusData) {
   nodesLayer.batchDraw();
 }
 
-// ─── POLLING EN TIEMPO REAL: actualiza el mapa completo cada 45s ─────────────
+// ─── POLLING EN TIEMPO REAL: actualización cronológica del lienzo ─────────────
 function startRealtimePolling(mapId) {
   // Limpiar polling anterior
   if (_realtimePollInterval) {
@@ -5684,9 +7025,21 @@ function startRealtimePolling(mapId) {
 
   const poll = async () => {
     if (!currentMap || currentMap.id !== mapId) return;
+    const pulseIcon = document.getElementById('icon-poll-pulse');
+    if (pulseIcon) pulseIcon.classList.add('fa-spin');
+
     try {
       const data = await API.getMapRealtimeStatus(mapId);
       if (!data || !data.nodes) return;
+
+      const now = new Date();
+      const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
+      
+      const lastSyncEl = document.getElementById('canvas-last-sync-time');
+      if (lastSyncEl) lastSyncEl.textContent = timeStr;
+
+      const telemetryLastUpdate = document.getElementById('telemetry-last-update');
+      if (telemetryLastUpdate) telemetryLastUpdate.textContent = timeStr;
 
       // Actualizar indicador de conectividad con Zabbix
       const sourceDot = document.getElementById('telemetry-source-dot');
@@ -5727,12 +7080,16 @@ function startRealtimePolling(mapId) {
         sourceDot.style.color = '#ef4444';
         sourceDot.title = 'Error de conexión con servicio de telemetría';
       }
+    } finally {
+      if (pulseIcon) {
+        setTimeout(() => pulseIcon.classList.remove('fa-spin'), 600);
+      }
     }
   };
 
   // Primera ejecución inmediata + polling periódico según intervalo configurado
   poll();
-  const intervalMs = Math.max(5000, (window.currentPollIntervalSeconds || 30) * 1000);
+  const intervalMs = Math.max(5000, (window.currentPollIntervalSeconds || 15) * 1000);
   _realtimePollInterval = setInterval(poll, intervalMs);
 }
 
@@ -5756,6 +7113,7 @@ async function loadMap(mapId) {
   linkLines.clear();
   nodeAttachedLinksMap.clear();
   deselectNode();
+  deselectLink();
   clearMultiSelection();
 
   // Detener polling del mapa anterior
@@ -5801,6 +7159,15 @@ async function loadMap(mapId) {
 
   // Persistir mapa actual y sincronizar estado en URL
   localStorage.setItem('nexusdude_last_map_id', mapId);
+
+  // Mantener la vista de pestaña activa (o regresar a Jerarquía si estaba en Propiedades sin selección)
+  const curTab = localStorage.getItem('nexusdude_active_tab');
+  if (curTab === 'tab-properties' || curTab === 'tab-spectrum' || !curTab) {
+    switchTab('tab-maps');
+  } else {
+    switchTab(curTab);
+  }
+
   updateUrlHashState();
 }
 
@@ -6185,6 +7552,7 @@ async function renderInventorySitesList(filterText = '') {
 
 // ─── 9. Pestaña de Mapas y Jerarquía Estilo Gestor de Archivos ───────────────
 let cachedMaps = [];
+let allMaps = [];
 const expandedMapIds = new Set();
 
 // Inicializar mapas expandidos desde localStorage
@@ -6207,9 +7575,12 @@ function saveExpandedMapIds() {
 
 function autoExpandAncestors(mapId) {
   if (!mapId || !Array.isArray(cachedMaps)) return;
-  const mapDict = new Map(cachedMaps.map(m => [m.id, m]));
+  const mapDict = new Map((cachedMaps || []).filter(Boolean).map(m => [m.id, m]));
   let cur = mapDict.get(mapId);
+  const visited = new Set();
   while (cur && cur.parent_map_id) {
+    if (visited.has(cur.id)) break;
+    visited.add(cur.id);
     expandedMapIds.add(cur.parent_map_id);
     cur = mapDict.get(cur.parent_map_id);
   }
@@ -6231,10 +7602,68 @@ function clearHoverTimer() {
   hoverExpandTargetId = null;
 }
 
+// ── Auto-scroll continuo y suave al arrastrar sobre el árbol de jerarquía (Windows Explorer) ──
+let treeAutoScrollInterval = null;
+let treeAutoScrollSpeed = 0;
+
+function handleTreeDragAutoScroll(clientY, container) {
+  if (!container) return;
+  const box = container.getBoundingClientRect();
+  const threshold = 55;
+  const maxSpeed = 16;
+
+  if (clientY < box.top + threshold && clientY >= box.top - 10) {
+    // Zona superior: scroll hacia arriba con aceleración proporcional a la cercanía del borde
+    const factor = Math.min(1, Math.max(0.15, (box.top + threshold - clientY) / threshold));
+    treeAutoScrollSpeed = -Math.round(maxSpeed * factor);
+  } else if (clientY > box.bottom - threshold && clientY <= box.bottom + 10) {
+    // Zona inferior: scroll hacia abajo con aceleración proporcional a la cercanía del borde
+    const factor = Math.min(1, Math.max(0.15, (clientY - (box.bottom - threshold)) / threshold));
+    treeAutoScrollSpeed = Math.round(maxSpeed * factor);
+  } else {
+    stopTreeAutoScroll();
+    return;
+  }
+
+  if (!treeAutoScrollInterval) {
+    treeAutoScrollInterval = setInterval(() => {
+      if (treeAutoScrollSpeed !== 0 && container) {
+        container.scrollTop += treeAutoScrollSpeed;
+      }
+    }, 20);
+  }
+}
+
+function stopTreeAutoScroll() {
+  if (treeAutoScrollInterval) {
+    clearInterval(treeAutoScrollInterval);
+    treeAutoScrollInterval = null;
+  }
+  treeAutoScrollSpeed = 0;
+}
+
+// ── Verificación de ciclos jerárquicos (evita colocar una carpeta dentro de sí misma o de sus hijos) ──
+function isMapDescendantOf(potentialDescendantId, ancestorId) {
+  if (!potentialDescendantId || !ancestorId) return false;
+  if (potentialDescendantId === ancestorId) return false; // Un mapa no es descendiente de sí mismo
+  if (ancestorId === 'default-map') return false; // default-map es la raíz global
+  const mapById = new Map((cachedMaps || []).map(m => [m.id, m]));
+  let cur = mapById.get(potentialDescendantId);
+  const visited = new Set();
+  while (cur && cur.parent_map_id) {
+    if (visited.has(cur.id)) break;
+    visited.add(cur.id);
+    if (cur.parent_map_id === ancestorId) return true;
+    cur = mapById.get(cur.parent_map_id);
+  }
+  return false;
+}
+
 async function refreshMapsTabList(filterText = '') {
   window.loadMapsTree = refreshMapsTabList;
   try {
     cachedMaps = await API.getMaps();
+    allMaps = cachedMaps;
   } catch (err) {
     console.error('Error obteniendo mapas en refreshMapsTabList:', err);
   }
@@ -6302,7 +7731,11 @@ async function refreshMapsTabList(filterText = '') {
     }
 
     let matchSite = true;
-    if (treeSiteFilter === 'linked') {
+    if (treeSiteFilter === 'active') {
+      matchSite = !m.is_site_retired;
+    } else if (treeSiteFilter === 'retired') {
+      matchSite = Boolean(m.is_site_retired);
+    } else if (treeSiteFilter === 'linked') {
       matchSite = Boolean(m.site_name || m.netbox_site_id);
     } else if (treeSiteFilter === 'unlinked') {
       matchSite = !m.site_name && !m.netbox_site_id;
@@ -6386,35 +7819,18 @@ async function refreshMapsTabList(filterText = '') {
     const card = document.createElement('div');
     card.className = `map-item-card ${isSubmap ? 'is-submap' : ''} ${isActive ? 'active' : ''}`;
 
-    let iconClass = 'fa-sitemap';
-    let iconExtraClass = '';
-    if (isSubmap) {
-      iconClass = isExpanded ? 'fa-folder-open' : 'fa-folder';
-      iconExtraClass = isExpanded ? 'submap open' : 'submap';
-    }
-
     card.innerHTML = `
       <div class="map-card-head">
-        <div class="map-card-title-group" title="Hacer clic para abrir este mapa en el lienzo (o arrastra para reordenar)">
+        <div class="map-card-title-group" title="${mapObj.name} (Clic para abrir o arrastrar)">
           <i class="fas fa-grip-vertical map-drag-handle" title="Arrastrar para reordenar en la lista"></i>
           ${hasChildren ? `
           <button type="button" class="map-toggle-caret" title="${isExpanded ? 'Contraer submapas' : 'Desplegar submapas'}">
             <i class="fas ${isExpanded ? 'fa-chevron-down' : 'fa-chevron-right'}"></i>
           </button>` : ''}
-          <i class="fas ${iconClass} map-card-icon ${iconExtraClass}"></i>
           <span class="map-card-name">${mapObj.name}</span>
-          ${hasChildren ? `<span class="map-child-count-pill">${children.length} submapas</span>` : ''}
+          ${mapObj.is_site_retired ? '<span class="map-retired-badge" title="El sitio correspondiente en NetBox se encuentra RETIRADO"><i class="fas fa-archive"></i> Retirado</span>' : ''}
         </div>
         ${isActive ? '<span class="map-active-badge"><i class="fas fa-check"></i> Activo</span>' : ''}
-      </div>
-
-      <div class="map-card-meta">
-        <div class="map-card-stats">
-          ${(mapObj.access_count && mapObj.access_count > 1) ? `<span class="map-child-count-pill" style="background: rgba(168, 85, 247, 0.2); border: 1px solid rgba(168, 85, 247, 0.4); color: #c084fc;" title="Este mapa fuente tiene ${mapObj.access_count} accesos en distintas carpetas"><i class="fas fa-link"></i> ${mapObj.access_count} accesos</span>` : ''}
-          ${mapObj.site_name ? `<span class="map-card-site-tag linked" title="Vinculado al sitio NetBox: ${mapObj.site_name}"><i class="fas fa-building"></i> ${mapObj.site_name}</span>` : `<span class="map-card-site-tag unlinked" title="Este mapa no tiene relación con NetBox"><i class="fas fa-unlink"></i> Sin sitio NetBox</span>`}
-          <span><i class="fas fa-server"></i> ${mapObj.nodes_count || 0} nodos</span>
-          <span><i class="fas fa-project-diagram"></i> ${mapObj.links_count || 0} enlaces</span>
-        </div>
       </div>
     `;
 
@@ -6481,60 +7897,90 @@ async function refreshMapsTabList(filterText = '') {
       if (hasChildren) toggleExpand(e);
     });
 
-    // ─── Drag & Drop Eventos para reordenar ───
+    // ─── Drag & Drop Eventos para reordenar y mover (Estilo Windows Explorer) ───
     wrapper.addEventListener('dragstart', (e) => {
-      if (e.target.closest('.map-toggle-caret')) {
+      // Bloquear arrastre si el clic fue en el caret o si es el mapa raíz principal
+      if (e.target.closest('.map-toggle-caret') || mapObj.id === 'default-map') {
         e.preventDefault();
         return;
       }
+
+      // CRUCIAL: Detener propagación para que los contenedores wrapper padre no capturen ni sobreescriban el arrastre
+      e.stopPropagation();
+
       draggedMapNode = wrapper;
       draggedMapData = mapObj;
       e.dataTransfer.effectAllowed = 'all';
       e.dataTransfer.setData('text/plain', mapObj.id);
+      document.body.classList.add('is-dragging-map');
       setTimeout(() => wrapper.classList.add('map-dragging'), 0);
+
+      // Mostrar zona de soltar a Nivel Raíz solo si el mapa tiene un padre o es submapa
+      const rootDropzone = document.getElementById('map-root-dropzone');
+      const isAlreadyRoot = !mapObj.parent_map_id || mapObj.parent_map_id === 'default-map';
+      if (rootDropzone && !isAlreadyRoot) {
+        rootDropzone.style.display = 'flex';
+      }
     });
 
-    wrapper.addEventListener('dragend', () => {
+    wrapper.addEventListener('dragend', (e) => {
+      e.stopPropagation();
       wrapper.classList.remove('map-dragging');
+      document.body.classList.remove('is-dragging-map');
+      stopTreeAutoScroll();
+      clearHoverTimer();
       document.querySelectorAll('.map-item-card').forEach(c => {
-        c.classList.remove('drag-target-top', 'drag-target-bottom', 'drag-target-inside');
+        c.classList.remove('drag-target-top', 'drag-target-bottom', 'drag-target-inside', 'drag-target-invalid');
       });
+      const rootDropzone = document.getElementById('map-root-dropzone');
+      if (rootDropzone) {
+        rootDropzone.style.display = 'none';
+        rootDropzone.classList.remove('drag-hover');
+      }
       draggedMapNode = null;
       draggedMapData = null;
     });
 
     card.addEventListener('dragover', (e) => {
-      if (!draggedMapNode || draggedMapNode === wrapper) return;
-      if (wrapper.closest(`.map-node-wrapper[data-map-id="${draggedMapData?.id}"]`)) return;
+      if (!draggedMapNode || !draggedMapData) return;
+      handleTreeDragAutoScroll(e.clientY, treeContainer);
+
+      // Si el cursor está sobre la misma tarjeta que se está arrastrando: no marcar ciclo ni resaltar nada
+      if (draggedMapNode === wrapper || draggedMapData.id === mapObj.id) {
+        card.classList.remove('drag-target-top', 'drag-target-bottom', 'drag-target-inside', 'drag-target-invalid');
+        e.dataTransfer.dropEffect = 'none';
+        return;
+      }
+
+      // Validar anti-ciclo: únicamente si mapObj ES un descendiente de draggedMapData
+      const isCycle = isMapDescendantOf(mapObj.id, draggedMapData.id);
+      if (isCycle) {
+        card.classList.remove('drag-target-top', 'drag-target-bottom', 'drag-target-inside');
+        card.classList.add('drag-target-invalid');
+        e.dataTransfer.dropEffect = 'none';
+        return;
+      }
 
       e.preventDefault();
       e.dataTransfer.dropEffect = (e.ctrlKey || e.metaKey) ? 'copy' : 'move';
-
-      // ── Auto-scroll vertical al acercarse a las orillas superior/inferior ──
-      const treeBox = treeContainer.getBoundingClientRect();
-      const edgeThreshold = 45;
-      if (e.clientY < treeBox.top + edgeThreshold) {
-        treeContainer.scrollTop -= 14;
-      } else if (e.clientY > treeBox.bottom - edgeThreshold) {
-        treeContainer.scrollTop += 14;
-      }
 
       const rect = card.getBoundingClientRect();
       const relY = e.clientY - rect.top;
       const height = rect.height;
 
-      card.classList.remove('drag-target-top', 'drag-target-bottom', 'drag-target-inside');
+      card.classList.remove('drag-target-top', 'drag-target-bottom', 'drag-target-inside', 'drag-target-invalid');
 
-      if (relY < height * 0.30) {
+      // Zona superior (22%), inferior (22%) e interior estilo carpeta (56% central)
+      if (relY < height * 0.22) {
         card.classList.add('drag-target-top');
         clearHoverTimer();
-      } else if (relY > height * 0.70) {
+      } else if (relY > height * 0.78) {
         card.classList.add('drag-target-bottom');
         clearHoverTimer();
       } else {
         card.classList.add('drag-target-inside');
 
-        // ── Auto-desplegar la carpeta si el usuario sostiene el arrastre encima durante 650ms ──
+        // Auto-desplegar la carpeta si el usuario sostiene el arrastre encima durante 500ms
         if (hasChildren && !expandedMapIds.has(mapObj.id)) {
           if (!hoverExpandTimer || hoverExpandTargetId !== mapObj.id) {
             clearHoverTimer();
@@ -6547,95 +7993,111 @@ async function refreshMapsTabList(filterText = '') {
               }
               const caretBtn = card.querySelector('.map-toggle-caret');
               if (caretBtn) {
-                caretBtn.innerHTML = `<i class="fas fa-chevron-down"></i>`;
+                caretBtn.innerHTML = '<i class="fas fa-chevron-down"></i>';
                 caretBtn.title = 'Contraer submapas';
               }
               const iconEl = card.querySelector('.map-card-icon');
               if (iconEl && isSubmap) {
                 iconEl.className = 'fas fa-folder-open map-card-icon submap open';
               }
-            }, 650);
+            }, 500);
           }
         }
       }
     });
 
     card.addEventListener('dragleave', (e) => {
-      // Evitar limpiar si se mueve entre elementos hijos de la misma tarjeta
       if (card.contains(e.relatedTarget)) return;
-      card.classList.remove('drag-target-top', 'drag-target-bottom', 'drag-target-inside');
+      card.classList.remove('drag-target-top', 'drag-target-bottom', 'drag-target-inside', 'drag-target-invalid');
       clearHoverTimer();
     });
 
     card.addEventListener('drop', async (e) => {
       e.preventDefault();
       e.stopPropagation();
+      stopTreeAutoScroll();
       clearHoverTimer();
 
-      if (!draggedMapNode || draggedMapNode === wrapper) return;
-      if (wrapper.closest(`.map-node-wrapper[data-map-id="${draggedMapData?.id}"]`)) return;
+      if (!draggedMapNode || !draggedMapData) return;
+      // Capturar referencias locales antes de cualquier await para evitar desincronización con dragend
+      const draggedId = draggedMapData.id;
+      const targetMapId = mapObj.id;
+
+      if (draggedMapNode === wrapper || draggedId === targetMapId) return;
+      if (isMapDescendantOf(targetMapId, draggedId)) {
+        alert('⚠️ No puedes mover una carpeta adentro de sus propios submapas (ciclo jerárquico detectado).');
+        return;
+      }
 
       const isTop = card.classList.contains('drag-target-top');
       const isBottom = card.classList.contains('drag-target-bottom');
       const isInside = card.classList.contains('drag-target-inside');
 
-      card.classList.remove('drag-target-top', 'drag-target-bottom', 'drag-target-inside');
+      card.classList.remove('drag-target-top', 'drag-target-bottom', 'drag-target-inside', 'drag-target-invalid');
 
-      let targetParentId = null;
+      const rootDropzone = document.getElementById('map-root-dropzone');
+      if (rootDropzone) rootDropzone.style.display = 'none';
 
+      // ── CASO 1: MOVER ADENTRO DE UNA CARPETA / SUBMAPA ──
       if (isInside) {
-        targetParentId = mapObj.id;
-        expandedMapIds.add(mapObj.id);
-        saveExpandedMapIds();
-
-        let targetChildContainer = wrapper.querySelector(':scope > .map-children-container');
-        if (!targetChildContainer) {
-          targetChildContainer = document.createElement('div');
-          targetChildContainer.className = 'map-children-container';
-          targetChildContainer.style.display = 'flex';
-          wrapper.appendChild(targetChildContainer);
-        } else {
-          targetChildContainer.style.display = 'flex';
-        }
         // Soporte de Ctrl + Soltar para CREAR ACCESO ADICIONAL (Copiar) sin mover el original
         if (e.ctrlKey || e.metaKey) {
           try {
             await API.createHierarchyAccess({
-              parent_map_id: mapObj.id,
-              child_map_id: draggedMapData.id,
+              parent_map_id: targetMapId,
+              child_map_id: draggedId,
               insert_submap_node: true
             });
+            expandedMapIds.add(targetMapId);
+            saveExpandedMapIds();
+            const inputSearchMaps = document.getElementById('input-search-maps');
             await refreshMapsTabList(inputSearchMaps ? inputSearchMaps.value : '');
             return;
           } catch (err) {
             console.warn('No se pudo crear acceso adicional con Ctrl:', err.message);
           }
         }
-        targetChildContainer.appendChild(draggedMapNode);
-      } else if (isTop) {
+
+        // Mover el mapa adentro del nuevo mapa padre y sincronizar con NetBox
+        try {
+          const moveRes = await API.moveMap(draggedId, targetMapId);
+          expandedMapIds.add(targetMapId);
+          autoExpandAncestors(targetMapId);
+          autoExpandAncestors(draggedId);
+          saveExpandedMapIds();
+
+          const inputSearchMaps = document.getElementById('input-search-maps');
+          await refreshMapsTabList(inputSearchMaps ? inputSearchMaps.value : '');
+          if (currentMap && (currentMap.id === targetMapId || currentMap.id === draggedId)) {
+            await loadMap(currentMap.id);
+          }
+          if (moveRes && moveRes.netbox_sync && moveRes.netbox_sync.message) {
+            console.log('Sincronización NetBox:', moveRes.netbox_sync.message);
+          }
+        } catch (err) {
+          alert('❌ Error al mover el submapa: ' + (err.message || err));
+          await refreshMapsTabList();
+        }
+        return;
+      }
+
+      // ── CASO 2: REORDENAR COMO HERMANOS (Arriba o Abajo) ──
+      let targetParentId = mapObj.parent_map_id || null;
+      if (isTop) {
         wrapper.parentNode.insertBefore(draggedMapNode, wrapper);
-        targetParentId = mapObj.parent_map_id || null;
       } else {
         wrapper.parentNode.insertBefore(draggedMapNode, wrapper.nextSibling);
-        targetParentId = mapObj.parent_map_id || null;
       }
 
       // Re-indexar los hermanos directos del contenedor receptor
-      const parentContainer = draggedMapNode.parentNode;
+      const parentContainer = wrapper.parentNode;
       const siblingWrappers = Array.from(parentContainer.children).filter(el => el.classList && el.classList.contains('map-node-wrapper'));
 
       const reorderItems = siblingWrappers.map((w, idx) => ({
         id: w.dataset.mapId,
         position: idx,
-        parent_map_id: (w === draggedMapNode && isInside) ? targetParentId : undefined
+        parent_map_id: (w.dataset.mapId === draggedId) ? (targetParentId || 'root') : undefined
       }));
-
-      if (isInside || targetParentId !== (draggedMapData.parent_map_id || null)) {
-        const draggedItem = reorderItems.find(it => it.id === draggedMapData.id);
-        if (draggedItem) {
-          draggedItem.parent_map_id = targetParentId || 'root';
-        }
-      }
 
       // Al arrastrar y soltar, conmutar automáticamente a Modo Libre para guardar y reflejar el orden manual
       treeSortOrder = 'custom';
@@ -6643,6 +8105,7 @@ async function refreshMapsTabList(filterText = '') {
 
       try {
         await API.reorderMaps(reorderItems);
+        const inputSearchMaps = document.getElementById('input-search-maps');
         await refreshMapsTabList(inputSearchMaps ? inputSearchMaps.value : '');
       } catch (err) {
         console.error('Error guardando reordenamiento de mapas:', err);
@@ -6656,15 +8119,7 @@ async function refreshMapsTabList(filterText = '') {
   // Soporte para arrastrar elementos al contenedor raíz (fuera de carpetas)
   treeContainer.ondragover = (e) => {
     if (!draggedMapNode) return;
-
-    // Auto-scroll en la lista al acercarse a las orillas
-    const treeBox = treeContainer.getBoundingClientRect();
-    const edgeThreshold = 45;
-    if (e.clientY < treeBox.top + edgeThreshold) {
-      treeContainer.scrollTop -= 14;
-    } else if (e.clientY > treeBox.bottom - edgeThreshold) {
-      treeContainer.scrollTop += 14;
-    }
+    handleTreeDragAutoScroll(e.clientY, treeContainer);
 
     if (e.target === treeContainer) {
       e.preventDefault();
@@ -6672,26 +8127,25 @@ async function refreshMapsTabList(filterText = '') {
     }
   };
 
+  treeContainer.ondragleave = (e) => {
+    if (treeContainer.contains(e.relatedTarget)) return;
+    stopTreeAutoScroll();
+  };
+
   treeContainer.ondrop = async (e) => {
-    if (e.target === treeContainer && draggedMapNode) {
+    stopTreeAutoScroll();
+    clearHoverTimer();
+    const rootDropzone = document.getElementById('map-root-dropzone');
+    if (rootDropzone) rootDropzone.style.display = 'none';
+
+    if (e.target === treeContainer && draggedMapNode && draggedMapData) {
       e.preventDefault();
-      treeContainer.appendChild(draggedMapNode);
-      const rootWrappers = Array.from(treeContainer.children).filter(el => el.classList && el.classList.contains('map-node-wrapper'));
-      const reorderItems = rootWrappers.map((w, idx) => ({
-        id: w.dataset.mapId,
-        position: idx,
-        parent_map_id: (w === draggedMapNode) ? 'root' : undefined
-      }));
-
-      // Conmutar a Modo Libre para guardar y reflejar el orden manual
-      treeSortOrder = 'custom';
-      localStorage.setItem('nexusdude_tree_sort', 'custom');
-
       try {
-        await API.reorderMaps(reorderItems);
+        await API.moveMap(draggedMapData.id, null);
+        const inputSearchMaps = document.getElementById('input-search-maps');
         await refreshMapsTabList(inputSearchMaps ? inputSearchMaps.value : '');
       } catch (err) {
-        console.error('Error reordenando mapas a nivel raíz:', err);
+        console.error('Error moviendo mapa a contenedor raíz:', err);
         await refreshMapsTabList();
       }
     }
@@ -6996,7 +8450,11 @@ async function renderAllMapsList() {
     });
   }
 
-  if (siteFilter === 'linked') {
+  if (siteFilter === 'active') {
+    list = list.filter(m => !m.is_site_retired);
+  } else if (siteFilter === 'retired') {
+    list = list.filter(m => Boolean(m.is_site_retired));
+  } else if (siteFilter === 'linked') {
     list = list.filter(m => Boolean(m.site_name || m.netbox_site_id));
   } else if (siteFilter === 'unlinked') {
     list = list.filter(m => !m.site_name && !m.netbox_site_id);
@@ -7049,30 +8507,17 @@ async function renderAllMapsList() {
 
     card.innerHTML = `
       <div class="map-card-head">
-        <div class="map-card-title-group" style="flex: 1; align-items: flex-start;">
-          <i class="fas ${isSubmap ? 'fa-folder' : 'fa-sitemap'} map-card-icon ${isSubmap ? 'submap' : ''}" style="margin-top: 3px;"></i>
-          <div style="display: flex; flex-direction: column; overflow: hidden; flex: 1;">
-            <div style="display: flex; align-items: center; justify-content: space-between; gap: 4px;">
-              <span class="map-card-name" style="font-size: 0.85rem;" title="${mapObj.name}">${mapObj.name}</span>
-            </div>
-            <div style="display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-top: 3px;">
-              ${isSubmap ? `<span class="map-parent-badge" title="Submapa de: ${parentName}"><i class="fas fa-level-up-alt"></i> ${parentName}</span>` : `<span class="map-root-badge"><i class="fas fa-globe"></i> Raíz</span>`}
-              ${mapObj.site_name ? `<span class="map-card-site-tag linked" title="Vinculado al sitio NetBox: ${mapObj.site_name}"><i class="fas fa-building"></i> ${mapObj.site_name}</span>` : `<span class="map-card-site-tag unlinked" title="Este mapa no tiene relación con NetBox"><i class="fas fa-unlink"></i> Sin sitio NetBox</span>`}
-            </div>
-          </div>
+        <div class="map-card-title-group" title="${mapObj.name} (Clic para abrir o arrastrar)">
+          <i class="fas fa-grip-vertical map-drag-handle" title="Arrastrar para insertar en lienzo"></i>
+          <span class="map-card-name" title="${mapObj.name}">${mapObj.name}</span>
+          ${mapObj.is_site_retired ? '<span class="map-retired-badge" title="El sitio correspondiente en NetBox se encuentra RETIRADO"><i class="fas fa-archive"></i> Retirado</span>' : ''}
         </div>
         ${isActive ? '<span class="map-active-badge"><i class="fas fa-check"></i> Activo</span>' : ''}
       </div>
-
-      <div class="map-card-meta" style="margin-top: 6px;">
-        <div class="map-card-stats">
-          <span><i class="fas fa-server"></i> ${mapObj.nodes_count || 0} nodos</span>
-          <span><i class="fas fa-project-diagram"></i> ${mapObj.links_count || 0} enlaces</span>
-        </div>
-      </div>
     `;
 
-    card.addEventListener('click', async () => {
+    card.addEventListener('click', async (e) => {
+      if (e.target.closest('.map-drag-handle')) return;
       await loadMap(mapObj.id);
       renderAllMapsList();
     });
@@ -7185,22 +8630,50 @@ function stopSpectrumPolling() {
   }
 }
 
-function populateSpectrumMapSelector() {
-  const selectMap = document.getElementById('select-spectrum-map');
-  if (!selectMap) return;
+async function populateSpectrumMapSelector(selectedMapId = null) {
+  if (!cachedMaps || cachedMaps.length === 0) {
+    try {
+      cachedMaps = await API.getMaps();
+      allMaps = cachedMaps;
+    } catch (e) {
+      console.warn('Error obteniendo mapas para selector de espectro:', e);
+    }
+  }
+  const mapsList = (Array.isArray(cachedMaps) && cachedMaps.length > 0) ? cachedMaps : (Array.isArray(allMaps) ? allMaps : []);
+  const sortedMaps = [...mapsList].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  const currentMapName = currentMap ? currentMap.name : 'Lienzo Actual';
 
-  const currentVal = selectMap.value || 'current';
-  const mapsOptions = allMaps.map(m => `<option value="${m.id}">${m.name} (${m.nodes_count || 0} nodos)</option>`).join('');
+  const mapsOptions = sortedMaps.map(m => `<option value="${m.id}">📁 ${m.name} (${m.nodes_count || 0} nodos)</option>`).join('');
 
-  selectMap.innerHTML = `
-    <option value="current">📍 Mapa Actual (${currentMap ? currentMap.name : 'Lienzo'})</option>
-    <option value="all">🌐 Todos los Mapas (Global)</option>
-    ${mapsOptions}
+  const html = `
+    <option value="current">📍 Mapa Actual: ${currentMapName}</option>
+    <option value="all">🌐 Todos los Sitios (Global - 830+ Radios)</option>
+    <optgroup label="── Sitios y Submapas ──">
+      ${mapsOptions}
+    </optgroup>
   `;
-  selectMap.value = currentVal;
+
+  const modalSelect = document.getElementById('modal-select-spectrum-map');
+  if (modalSelect) {
+    const curVal = selectedMapId || modalSelect.value || 'current';
+    modalSelect.innerHTML = html;
+    modalSelect.value = curVal;
+  }
+
+  const selectMap = document.getElementById('select-spectrum-map');
+  if (selectMap) {
+    const currentVal = selectedMapId || selectMap.value || 'current';
+    selectMap.innerHTML = html;
+    selectMap.value = currentVal;
+  }
 }
 
 async function loadSpectrumData(mapId = null, isBackground = false) {
+  const actualMapId = (!mapId || mapId === 'current') ? (currentMap ? currentMap.id : 'default-map') : mapId;
+
+  const refreshIcon = document.getElementById('modal-spectrum-refresh-icon');
+  if (refreshIcon && !isBackground) refreshIcon.classList.add('fa-spin');
+
   const listEl = document.getElementById('spectrum-devices-list');
   if (listEl && !isBackground && !spectrumData) {
     listEl.innerHTML = `
@@ -7210,8 +8683,6 @@ async function loadSpectrumData(mapId = null, isBackground = false) {
     `;
   }
 
-  const actualMapId = (!mapId || mapId === 'current') ? (currentMap ? currentMap.id : 'default-map') : mapId;
-
   try {
     const res = await API.getMapSpectrum(actualMapId);
     spectrumData = res;
@@ -7220,22 +8691,43 @@ async function loadSpectrumData(mapId = null, isBackground = false) {
     spectrumSelectedDeviceIds.clear();
     (spectrumData.devices || []).forEach(d => spectrumSelectedDeviceIds.add(d.node_id));
 
-    // Actualizar badges de resumen
+    // Actualizar badges en modal
+    const totalModalBadge = document.getElementById('modal-spec-total-badge');
+    if (totalModalBadge) totalModalBadge.textContent = (spectrumData.devices || []).length;
+
+    const bws = new Set((spectrumData.devices || []).map(d => `${d.bandwidth_mhz}M`));
+    const activeBwsModal = document.getElementById('modal-spec-active-bws');
+    if (activeBwsModal) activeBwsModal.textContent = bws.size;
+
+    const modalSiteName = document.getElementById('modal-table-site-name');
+    if (modalSiteName) {
+      if (actualMapId === 'all') {
+        modalSiteName.textContent = '🌐 Todos los Sitios (Global)';
+      } else {
+        const mapsList = (Array.isArray(cachedMaps) && cachedMaps.length > 0) ? cachedMaps : (Array.isArray(allMaps) ? allMaps : []);
+        const foundMap = mapsList.find(m => m.id === actualMapId);
+        modalSiteName.textContent = `📍 ${foundMap ? foundMap.name : (currentMap ? currentMap.name : 'Sitio')}`;
+      }
+    }
+
+    // Actualizar badges de resumen sidebar (si existen)
     const totalEl = document.getElementById('spec-stat-total');
     if (totalEl) totalEl.textContent = (spectrumData.devices || []).length;
 
-    const bws = new Set((spectrumData.devices || []).map(d => `${d.bandwidth_mhz}M`));
     const bwsEl = document.getElementById('spec-stat-active-bws');
     if (bwsEl) bwsEl.textContent = bws.size > 0 ? Array.from(bws).join(', ') : '0';
 
     const countLbl = document.getElementById('spectrum-device-count-lbl');
     if (countLbl) countLbl.textContent = (spectrumData.devices || []).length;
 
-    // Renderizar lista y regla
+    // Renderizar lista sidebar, tabla modal y reglas
     renderSpectrumDeviceList();
+    renderModalSpectrumTable();
     renderSpectrumRuler('spectrum-sidebar-ruler-canvas', false);
+    renderSpectrumRuler('spectrum-modal-ruler-canvas', true);
 
   } catch (err) {
+    console.error('Error cargando espectro:', err);
     if (listEl) {
       listEl.innerHTML = `
         <div style="text-align: center; color: #ef4444; font-size: 0.75rem; padding: 15px 0;">
@@ -7243,6 +8735,16 @@ async function loadSpectrumData(mapId = null, isBackground = false) {
         </div>
       `;
     }
+    const tableContainer = document.getElementById('modal-spectrum-table-container');
+    if (tableContainer) {
+      tableContainer.innerHTML = `
+        <div style="text-align: center; color: #ef4444; font-size: 0.78rem; padding: 20px 0;">
+          <i class="fas fa-exclamation-triangle"></i> Error al consultar telemetría de radio en Zabbix: ${err.message}
+        </div>
+      `;
+    }
+  } finally {
+    if (refreshIcon) refreshIcon.classList.remove('fa-spin');
   }
 }
 
@@ -7332,6 +8834,212 @@ function renderSpectrumDeviceList() {
   });
 }
 
+function renderModalSpectrumTable() {
+  const container = document.getElementById('modal-spectrum-table-container');
+  if (!container) return;
+
+  if (!spectrumData || !spectrumData.devices || spectrumData.devices.length === 0) {
+    const mapName = (currentMap && currentMap.name) ? currentMap.name : 'este sitio';
+    container.innerHTML = `
+      <div style="text-align: center; color: var(--text-muted); font-size: 0.8rem; padding: 25px 15px;">
+        <i class="fas fa-broadcast-tower" style="font-size: 1.5rem; color: #38bdf8; margin-bottom: 8px; display: block; opacity: 0.85;"></i>
+        <div>No se encontraron equipos inalámbricos en <strong>${mapName}</strong> con telemetría de radio en Zabbix (4850 - 7250 MHz).</div>
+        <div style="font-size: 0.73rem; color: #64748b; margin-top: 4px;">
+          (En la topología principal los radios se encuentran agrupados dentro de cada submapa/sitio o en 'Todos los Sitios').
+        </div>
+        <button type="button" class="btn btn-secondary" id="btn-modal-empty-to-all" style="margin-top: 10px; font-size: 0.74rem; padding: 5px 12px; gap: 6px;">
+          <i class="fas fa-globe"></i> Ver Todos los Sitios (Global - 830+ Radios)
+        </button>
+      </div>
+    `;
+    const btnEmptyAll = document.getElementById('btn-modal-empty-to-all');
+    if (btnEmptyAll) {
+      btnEmptyAll.addEventListener('click', () => {
+        const modalSelect = document.getElementById('modal-select-spectrum-map');
+        if (modalSelect) modalSelect.value = 'all';
+        loadSpectrumData('all', false);
+      });
+    }
+    const countBadge = document.getElementById('modal-table-radios-count');
+    if (countBadge) countBadge.textContent = '0';
+    return;
+  }
+
+  const q = (spectrumFilterText || '').toLowerCase().trim();
+  const roleF = spectrumRoleFilter || 'all';
+
+  const filtered = spectrumData.devices.filter(d => {
+    if (q) {
+      const matchName = (d.name || '').toLowerCase().includes(q);
+      const matchIp = (d.ip || '').toLowerCase().includes(q);
+      const matchFreq = String(d.frequency_mhz || '').includes(q);
+      const matchBw = (d.bandwidth_text || '').toLowerCase().includes(q);
+      const matchSite = (d.site_name || d.map_name || '').toLowerCase().includes(q);
+      if (!matchName && !matchIp && !matchFreq && !matchBw && !matchSite) return false;
+    }
+    if (roleF === 'ap') {
+      const isAp = (d.name || '').toLowerCase().startsWith('ap_') || (d.name || '').toLowerCase().startsWith('sec_') || d.device_type === 'ap' || d.device_type === 'radio' || (d.device_type || '').toLowerCase().includes('point');
+      if (!isAp) return false;
+    } else if (roleF === 'cpe') {
+      const isCpe = (d.name || '').toLowerCase().startsWith('cpe_') || d.device_type === 'cpe';
+      if (!isCpe) return false;
+    }
+    return true;
+  });
+
+  const countBadge = document.getElementById('modal-table-radios-count');
+  if (countBadge) countBadge.textContent = `${filtered.length} de ${spectrumData.devices.length}`;
+
+  if (filtered.length === 0) {
+    container.innerHTML = `
+      <div style="text-align: center; color: var(--text-muted); font-size: 0.78rem; padding: 25px 0;">
+        <i class="fas fa-filter" style="margin-bottom: 6px; display: block; color: #64748b;"></i>
+        No hay radios que coincidan con los filtros de búsqueda o rol seleccionados.
+      </div>
+    `;
+    return;
+  }
+
+  const rowsHtml = filtered.map(d => {
+    const isSelected = spectrumSelectedDeviceIds.has(d.node_id);
+    const isAp = (d.name || '').toLowerCase().startsWith('ap_') || (d.name || '').toLowerCase().startsWith('sec_') || d.device_type === 'ap' || (d.device_type || '').toLowerCase().includes('point');
+    const roleIcon = isAp ? '📡' : '📶';
+    const roleBadge = isAp ? '<span class="badge-role badge-ap">AP</span>' : '<span class="badge-role badge-cpe">CPE</span>';
+
+    const statusColor = d.status === 'down' ? '#ef4444' : (d.status === 'warning' ? '#f59e0b' : '#10b981');
+
+    let bwColor = '#94a3b8';
+    let bwBg = 'rgba(148, 163, 184, 0.15)';
+    if (d.bandwidth_mhz >= 80) {
+      bwColor = '#c084fc';
+      bwBg = 'rgba(192, 132, 252, 0.15)';
+    } else if (d.bandwidth_mhz >= 40) {
+      bwColor = '#38bdf8';
+      bwBg = 'rgba(56, 189, 248, 0.15)';
+    } else if (d.bandwidth_mhz >= 20) {
+      bwColor = '#34d399';
+      bwBg = 'rgba(52, 211, 153, 0.15)';
+    }
+
+    const sigParts = [];
+    if (d.rssi_dbm) sigParts.push(`${d.rssi_dbm} dBm`);
+    if (d.snr_db) sigParts.push(`${d.snr_db} dB`);
+    if (!d.rssi_dbm && d.tx_power_dbm) sigParts.push(`Tx ${d.tx_power_dbm} dBm`);
+    const sigText = sigParts.length > 0 ? sigParts.join(' / ') : '<span style="color: #64748b;">N/A</span>';
+
+    const staText = (d.connected_sta_count !== undefined && d.connected_sta_count !== null)
+      ? `<span style="font-weight: 700; color: #38bdf8;">${d.connected_sta_count}</span> <span style="color: #64748b; font-size: 0.7rem;">STAs</span>`
+      : '<span style="color: #64748b;">-</span>';
+
+    const rowOpacity = isSelected ? '1' : '0.45';
+
+    return `
+      <tr class="spectrum-table-row ${isSelected ? 'row-selected' : ''}" style="opacity: ${rowOpacity}; border-bottom: 1px solid rgba(255,255,255,0.04); transition: background 0.15s ease;" data-node-id="${d.node_id}">
+        <td style="padding: 6px 10px; text-align: center;">
+          <input type="checkbox" class="chk-modal-spec-device" data-node-id="${d.node_id}" ${isSelected ? 'checked' : ''} style="cursor: pointer; width: 14px; height: 14px;">
+        </td>
+        <td style="padding: 6px 10px;">
+          <div style="display: flex; align-items: center; gap: 7px;">
+            <span style="display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: ${statusColor}; flex-shrink: 0;" title="Estado: ${d.status || 'ok'}"></span>
+            <span style="font-size: 0.85rem;">${roleIcon}</span>
+            <div style="font-weight: 700; color: #f1f5f9; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 200px;" title="${d.name}">
+              ${d.name}
+            </div>
+          </div>
+        </td>
+        <td style="padding: 6px 10px; font-family: monospace; color: #cbd5e1; font-size: 0.74rem;">
+          ${d.ip || 'Sin IP'}
+        </td>
+        <td style="padding: 6px 10px; color: #94a3b8; font-size: 0.72rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 140px;" title="${d.site_name || d.map_name || ''}">
+          ${d.site_name || d.map_name || 'N/A'}
+        </td>
+        <td style="padding: 6px 10px; text-align: center;">
+          ${roleBadge}
+        </td>
+        <td style="padding: 6px 10px; text-align: right; font-family: monospace; font-weight: 800; color: #38bdf8; font-size: 0.82rem;">
+          ${d.frequency_mhz} MHz
+        </td>
+        <td style="padding: 6px 10px; text-align: center;">
+          <span style="padding: 2px 7px; border-radius: 4px; font-weight: 700; font-size: 0.72rem; color: ${bwColor}; background: ${bwBg}; border: 1px solid ${bwColor}40;">
+            ${d.bandwidth_text || (d.bandwidth_mhz + ' MHz')}
+          </span>
+        </td>
+        <td style="padding: 6px 10px; font-family: monospace; color: #64748b; font-size: 0.72rem;">
+          ${d.freq_start_mhz} - ${d.freq_end_mhz}
+        </td>
+        <td style="padding: 6px 10px; text-align: center; font-size: 0.72rem; color: #cbd5e1; font-family: monospace;">
+          ${sigText}
+        </td>
+        <td style="padding: 6px 10px; text-align: center; font-size: 0.74rem;">
+          ${staText}
+        </td>
+        <td style="padding: 6px 10px; text-align: center;">
+          <button type="button" class="btn btn-secondary btn-sm btn-modal-focus-radio" data-node-id="${d.node_id}" data-map-id="${d.map_id || ''}" style="padding: 2px 8px; font-size: 0.7rem; gap: 4px;" title="Centrar equipo en la topología">
+            <i class="fas fa-crosshairs"></i> Centrar
+          </button>
+        </td>
+      </tr>
+    `;
+  }).join('');
+
+  container.innerHTML = `
+    <table class="spectrum-table" style="width: 100%; border-collapse: collapse; font-size: 0.76rem; text-align: left;">
+      <thead>
+        <tr style="position: sticky; top: 0; background: #0f172a; border-bottom: 1px solid #334155; color: #94a3b8; font-size: 0.71rem; text-transform: uppercase; z-index: 5;">
+          <th style="padding: 8px 10px; width: 36px; text-align: center;">Ver</th>
+          <th style="padding: 8px 10px;">Equipo / Radio</th>
+          <th style="padding: 8px 10px;">IP Adm.</th>
+          <th style="padding: 8px 10px;">Sitio</th>
+          <th style="padding: 8px 10px; text-align: center;">Rol</th>
+          <th style="padding: 8px 10px; text-align: right;">Frecuencia</th>
+          <th style="padding: 8px 10px; text-align: center;">Ancho</th>
+          <th style="padding: 8px 10px;">Rango MHz</th>
+          <th style="padding: 8px 10px; text-align: center;">Señal / Tx</th>
+          <th style="padding: 8px 10px; text-align: center;">Clientes</th>
+          <th style="padding: 8px 10px; text-align: center;">Acción</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rowsHtml}
+      </tbody>
+    </table>
+  `;
+
+  // Eventos de checkboxes
+  container.querySelectorAll('.chk-modal-spec-device').forEach(chk => {
+    chk.addEventListener('change', () => {
+      const nid = chk.dataset.nodeId;
+      if (chk.checked) {
+        spectrumSelectedDeviceIds.add(nid);
+      } else {
+        spectrumSelectedDeviceIds.delete(nid);
+      }
+      const row = chk.closest('tr');
+      if (row) {
+        row.style.opacity = chk.checked ? '1' : '0.45';
+        row.classList.toggle('row-selected', chk.checked);
+      }
+      renderSpectrumRuler('spectrum-modal-ruler-canvas', true);
+      renderSpectrumRuler('spectrum-sidebar-ruler-canvas', false);
+    });
+  });
+
+  // Eventos de centrado
+  container.querySelectorAll('.btn-modal-focus-radio').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const nid = btn.dataset.nodeId;
+      const mid = btn.dataset.mapId;
+      if (!nid) return;
+
+      if (mid && currentMap && mid !== currentMap.id) {
+        await loadMap(mid);
+      }
+      focusNodeInMap(nid);
+      document.getElementById('modal-spectrum-fullscreen').style.display = 'none';
+    });
+  });
+}
+
 function renderSpectrumRuler(canvasContainerId, isModal = false) {
   const container = document.getElementById(canvasContainerId);
   if (!container || !spectrumData) return;
@@ -7400,10 +9108,10 @@ function renderSpectrumRuler(canvasContainerId, isModal = false) {
     deviceLanes.push({ dev, lane: assignedLane });
   });
 
-  const laneHeight = isModal ? 40 : 18;
-  const laneGap = isModal ? 9 : 4;
-  const rulerHeaderHeight = isModal ? 44 : 26;
-  const minCanvasHeight = isModal ? 520 : 115;
+  const laneHeight = isModal ? 28 : 18;
+  const laneGap = isModal ? 6 : 4;
+  const rulerHeaderHeight = isModal ? 38 : 26;
+  const minCanvasHeight = isModal ? 190 : 115;
   const totalCanvasHeight = Math.max(minCanvasHeight, rulerHeaderHeight + (lanes.length * (laneHeight + laneGap)) + 10);
   container.style.height = `${totalCanvasHeight}px`;
 
@@ -7465,6 +9173,22 @@ ${roleIcon} ${dev.name}
     blk.addEventListener('click', () => {
       const nid = blk.dataset.nodeId;
       if (nid) {
+        if (isModal) {
+          const row = document.querySelector(`#modal-spectrum-table-container .spectrum-table-row[data-node-id="${nid}"]`);
+          if (row) {
+            row.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            row.style.background = 'rgba(56, 189, 248, 0.35)';
+            setTimeout(() => { row.style.background = ''; }, 1200);
+          }
+        } else {
+          focusNodeInMap(nid);
+        }
+      }
+    });
+
+    blk.addEventListener('dblclick', () => {
+      const nid = blk.dataset.nodeId;
+      if (nid) {
         focusNodeInMap(nid);
         if (isModal) {
           document.getElementById('modal-spectrum-fullscreen').style.display = 'none';
@@ -7492,22 +9216,43 @@ function focusNodeInMap(nodeId) {
   }
 }
 
-function openSpectrumModal() {
+async function openSpectrumModal() {
   const modal = document.getElementById('modal-spectrum-fullscreen');
   if (!modal) return;
 
   modal.style.display = 'flex';
 
-  const selectMap = document.getElementById('select-spectrum-map');
-  const mapName = selectMap ? selectMap.options[selectMap.selectedIndex].text : 'Mapa';
-  const titleEl = document.getElementById('modal-spectrum-map-title');
-  if (titleEl) titleEl.textContent = `📍 Mapa: ${mapName}`;
+  // Sincronizar selectores con el mapa activo actual en lienzo
+  await populateSpectrumMapSelector('current');
 
-  const count = spectrumSelectedDeviceIds.size;
-  const totalBadge = document.getElementById('modal-spec-total-badge');
-  if (totalBadge) totalBadge.textContent = `${count} Equipos Visibles`;
+  const siteNameEl = document.getElementById('modal-table-site-name');
+  if (siteNameEl) {
+    siteNameEl.textContent = `📍 ${currentMap ? currentMap.name : 'Lienzo Actual'}`;
+  }
 
-  renderSpectrumRuler('spectrum-modal-ruler-canvas', true);
+  const rulerCanvas = document.getElementById('spectrum-modal-ruler-canvas');
+  if (rulerCanvas) {
+    rulerCanvas.innerHTML = `
+      <div style="display: flex; align-items: center; justify-content: center; height: 180px; color: #38bdf8; font-size: 0.9rem; gap: 8px;">
+        <i class="fas fa-spinner fa-spin"></i> Cargando telemetría de frecuencias desde Zabbix...
+      </div>
+    `;
+  }
+
+  const tableContainer = document.getElementById('modal-spectrum-table-container');
+  if (tableContainer) {
+    tableContainer.innerHTML = `
+      <div style="text-align: center; color: #38bdf8; font-size: 0.82rem; padding: 25px 0;">
+        <i class="fas fa-spinner fa-spin"></i> Consultando radios y frecuencias en Zabbix...
+      </div>
+    `;
+  }
+
+  try {
+    await loadSpectrumData('current', false);
+  } catch (e) {
+    console.warn('Error cargando espectro para modal:', e);
+  }
 
   setTimeout(() => {
     const scrollContainer = document.getElementById('spectrum-modal-ruler-scroll');
@@ -7516,7 +9261,7 @@ function openSpectrumModal() {
       const offset = firstBlock.offsetLeft - 150;
       scrollContainer.scrollTo({ left: Math.max(0, offset), behavior: 'smooth' });
     }
-  }, 100);
+  }, 150);
 }
 
 
@@ -8292,12 +10037,46 @@ window.addEventListener('DOMContentLoaded', async () => {
         // Cargar intervalo de polling configurado de Zabbix y estado de edición de aristas
         API.getIntegrationsConfig().then(cfg => {
           if (cfg?.zabbix?.poll_interval) {
-            window.currentPollIntervalSeconds = parseInt(cfg.zabbix.poll_interval, 10) || 30;
+            let pInt = parseInt(cfg.zabbix.poll_interval, 10) || 15;
+            if (![10, 15, 20, 30].includes(pInt)) {
+              pInt = pInt <= 12 ? 10 : (pInt <= 17 ? 15 : (pInt <= 25 ? 20 : 30));
+            }
+            window.currentPollIntervalSeconds = pInt;
+        if (window.updateSyncIntervalBadge) window.updateSyncIntervalBadge(pInt);
+            const qEl = document.getElementById('quick-poll-interval');
+            if (qEl) qEl.value = String(pInt);
+            const sEl = document.getElementById('select-zabbix-poll-interval');
+            if (sEl) sEl.value = String(pInt);
+            if (window.updateSyncIntervalBadge) window.updateSyncIntervalBadge(pInt);
           }
           if (cfg?.netbox && cfg.netbox.allow_edge_editing !== undefined) {
             window.allowEdgeEditing = cfg.netbox.allow_edge_editing !== false;
           }
         }).catch(() => {});
+
+        // Conectar selector rápido de actualización cronológica del lienzo
+        const quickPollEl = document.getElementById('quick-poll-interval');
+        if (quickPollEl && !quickPollEl._boundChange) {
+          quickPollEl._boundChange = true;
+          quickPollEl.addEventListener('change', async (e) => {
+            const val = parseInt(e.target.value, 10) || 15;
+            window.currentPollIntervalSeconds = val;
+            const sEl = document.getElementById('select-zabbix-poll-interval');
+            if (sEl) sEl.value = String(val);
+            if (currentMap) {
+              startRealtimePolling(currentMap.id);
+            }
+            const activeTabEl = document.querySelector('.sidebar-tab.active');
+            if (activeTabEl && activeTabEl.dataset.tab === 'tab-spectrum') {
+              startSpectrumPolling();
+            }
+            try {
+              await API.saveZabbixConfig({ poll_interval: val });
+            } catch (err) {
+              console.warn('Error guardando intervalo de actualización:', err);
+            }
+          });
+        }
 
         // Cargar mapas y restaurar estado de navegación persistente
         const maps = await API.getMaps();
@@ -8309,6 +10088,7 @@ window.addEventListener('DOMContentLoaded', async () => {
           const hashNodeId = hashParams.get('node');
 
           const savedTab = hashTab || localStorage.getItem('nexusdude_active_tab') || 'tab-maps';
+          const effectiveTab = (savedTab === 'tab-spectrum' || (savedTab === 'tab-properties' && !hashNodeId)) ? 'tab-maps' : savedTab;
           const savedMapId = hashMapId || localStorage.getItem('nexusdude_last_map_id');
 
           let targetMapId = maps[0].id;
@@ -8320,8 +10100,8 @@ window.addEventListener('DOMContentLoaded', async () => {
           await refreshMapsTabList();
           await renderAllMapsList();
 
-          // Restaurar pestaña activa (por defecto: Mapas)
-          switchTab(savedTab);
+          // Restaurar pestaña activa (por defecto: Jerarquía)
+          switchTab(effectiveTab);
 
           // Si venía un nodo específico seleccionado en el hash
           if (hashNodeId && currentMap && currentMap.nodes) {
@@ -8340,8 +10120,10 @@ window.addEventListener('DOMContentLoaded', async () => {
       }
     } catch (e) {
       console.error('Error de autenticación o inicio:', e);
-      const authOverlay = document.getElementById('auth-overlay');
-      if (authOverlay) authOverlay.style.display = 'flex';
+      if (!currentUser || !currentUser.authenticated) {
+        const authOverlay = document.getElementById('auth-overlay');
+        if (authOverlay) authOverlay.style.display = 'flex';
+      }
     }
   }
 
@@ -8631,6 +10413,71 @@ window.addEventListener('DOMContentLoaded', async () => {
   const btnRefreshMaps = document.getElementById('btn-refresh-maps-tab');
   if (btnRefreshMaps) {
     btnRefreshMaps.addEventListener('click', () => refreshMapsTabList());
+  }
+
+  // Botón Sincronizar Jerarquía con Grupos de Sitios de NetBox en el toolbar de Jerarquía
+  const btnTreeSyncNetbox = document.getElementById('btn-tree-sync-netbox-hierarchy');
+  if (btnTreeSyncNetbox) {
+    btnTreeSyncNetbox.addEventListener('click', async () => {
+      const origHtml = btnTreeSyncNetbox.innerHTML;
+      btnTreeSyncNetbox.style.pointerEvents = 'none';
+      btnTreeSyncNetbox.innerHTML = '<i class="fas fa-spinner fa-spin"></i> NetBox...';
+
+      try {
+        const res = await API.syncNetboxHierarchy();
+        await refreshMapsTabList();
+        if (currentMap) await loadMap(currentMap.id);
+        alert(`🌳 Sincronización con NetBox completada:\n\n${res.message || 'Jerarquía y Grupos de Sitios sincronizados.'}`);
+      } catch (err) {
+        alert('❌ Error sincronizando jerarquía con NetBox: ' + err.message);
+      } finally {
+        btnTreeSyncNetbox.style.pointerEvents = '';
+        btnTreeSyncNetbox.innerHTML = origHtml;
+      }
+    });
+  }
+
+  // Zona de Soltar a Nivel Raíz (Windows Explorer)
+  const mapRootDropzone = document.getElementById('map-root-dropzone');
+  if (mapRootDropzone) {
+    mapRootDropzone.addEventListener('dragover', (e) => {
+      if (!draggedMapNode || !draggedMapData) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      mapRootDropzone.classList.add('drag-hover');
+    });
+
+    mapRootDropzone.addEventListener('dragleave', (e) => {
+      if (mapRootDropzone.contains(e.relatedTarget)) return;
+      mapRootDropzone.classList.remove('drag-hover');
+    });
+
+    mapRootDropzone.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      mapRootDropzone.classList.remove('drag-hover');
+      mapRootDropzone.style.display = 'none';
+      stopTreeAutoScroll();
+      clearHoverTimer();
+
+      if (!draggedMapNode || !draggedMapData) return;
+      const draggedId = draggedMapData.id;
+      try {
+        const moveRes = await API.moveMap(draggedId, null);
+        autoExpandAncestors(draggedId);
+        const inputSearchMaps = document.getElementById('input-search-maps');
+        await refreshMapsTabList(inputSearchMaps ? inputSearchMaps.value : '');
+        if (currentMap && currentMap.id === draggedId) {
+          await loadMap(currentMap.id);
+        }
+        if (moveRes && moveRes.netbox_sync && moveRes.netbox_sync.message) {
+          console.log('Sincronización NetBox a nivel raíz:', moveRes.netbox_sync.message);
+        }
+      } catch (err) {
+        alert('❌ Error al mover mapa a nivel raíz: ' + (err.message || err));
+        await refreshMapsTabList();
+      }
+    });
   }
 
   // Botón Nuevo Submapa en la pestaña
@@ -9205,6 +11052,68 @@ window.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
+  // Controles dentro del Modal de Espectro
+  const modalSelectSpecMap = document.getElementById('modal-select-spectrum-map');
+  if (modalSelectSpecMap) {
+    modalSelectSpecMap.addEventListener('change', (e) => {
+      loadSpectrumData(e.target.value);
+    });
+  }
+
+  const btnModalRefreshSpec = document.getElementById('btn-modal-refresh-spectrum');
+  if (btnModalRefreshSpec) {
+    btnModalRefreshSpec.addEventListener('click', () => {
+      const val = modalSelectSpecMap ? modalSelectSpecMap.value : 'current';
+      loadSpectrumData(val);
+    });
+  }
+
+  const modalInputSearchSpec = document.getElementById('modal-input-search-spectrum');
+  if (modalInputSearchSpec) {
+    modalInputSearchSpec.addEventListener('input', (e) => {
+      spectrumFilterText = e.target.value;
+      renderModalSpectrumTable();
+      renderSpectrumDeviceList();
+      renderSpectrumRuler('spectrum-modal-ruler-canvas', true);
+      renderSpectrumRuler('spectrum-sidebar-ruler-canvas', false);
+    });
+  }
+
+  const modalSelectRoleFilter = document.getElementById('modal-select-spectrum-role');
+  if (modalSelectRoleFilter) {
+    modalSelectRoleFilter.addEventListener('change', (e) => {
+      spectrumRoleFilter = e.target.value;
+      renderModalSpectrumTable();
+      renderSpectrumDeviceList();
+      renderSpectrumRuler('spectrum-modal-ruler-canvas', true);
+      renderSpectrumRuler('spectrum-sidebar-ruler-canvas', false);
+    });
+  }
+
+  const btnModalSpecSelectAll = document.getElementById('btn-modal-select-all');
+  if (btnModalSpecSelectAll) {
+    btnModalSpecSelectAll.addEventListener('click', () => {
+      if (spectrumData && spectrumData.devices) {
+        spectrumData.devices.forEach(d => spectrumSelectedDeviceIds.add(d.node_id));
+        renderModalSpectrumTable();
+        renderSpectrumDeviceList();
+        renderSpectrumRuler('spectrum-modal-ruler-canvas', true);
+        renderSpectrumRuler('spectrum-sidebar-ruler-canvas', false);
+      }
+    });
+  }
+
+  const btnModalSpecDeselectAll = document.getElementById('btn-modal-deselect-all');
+  if (btnModalSpecDeselectAll) {
+    btnModalSpecDeselectAll.addEventListener('click', () => {
+      spectrumSelectedDeviceIds.clear();
+      renderModalSpectrumTable();
+      renderSpectrumDeviceList();
+      renderSpectrumRuler('spectrum-modal-ruler-canvas', true);
+      renderSpectrumRuler('spectrum-sidebar-ruler-canvas', false);
+    });
+  }
+
   const inputSearchSpec = document.getElementById('input-search-spectrum-devices');
   if (inputSearchSpec) {
     inputSearchSpec.addEventListener('input', (e) => {
@@ -9288,6 +11197,11 @@ window.addEventListener('DOMContentLoaded', async () => {
   const btnOpenSpecModal = document.getElementById('btn-open-spectrum-modal');
   if (btnOpenSpecModal) {
     btnOpenSpecModal.addEventListener('click', openSpectrumModal);
+  }
+
+  const btnToolbarSpectrum = document.getElementById('btn-toolbar-spectrum');
+  if (btnToolbarSpectrum) {
+    btnToolbarSpectrum.addEventListener('click', openSpectrumModal);
   }
 
   const btnCloseSpecModalX = document.getElementById('btn-close-spectrum-modal-x');
@@ -9378,14 +11292,40 @@ window.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
+  // ─── 21.b Menú Desplegable de Insertar en Toolbar ───────────────────────────
+  const btnToggleInsertMenu = document.getElementById('btn-toggle-insert-menu');
+  const dropdownInsertContainer = document.getElementById('dropdown-insert-container');
+  const dropdownSyncContainer = document.getElementById('dropdown-sync-container');
+
+  if (btnToggleInsertMenu && dropdownInsertContainer) {
+    btnToggleInsertMenu.addEventListener('click', (e) => {
+      e.stopPropagation();
+      dropdownInsertContainer.classList.toggle('open');
+      if (dropdownSyncContainer) dropdownSyncContainer.classList.remove('open');
+    });
+
+    const insertItems = dropdownInsertContainer.querySelectorAll('.dropdown-item');
+    insertItems.forEach(item => {
+      item.addEventListener('click', () => {
+        dropdownInsertContainer.classList.remove('open');
+      });
+    });
+
+    document.addEventListener('click', (e) => {
+      if (!dropdownInsertContainer.contains(e.target)) {
+        dropdownInsertContainer.classList.remove('open');
+      }
+    });
+  }
+
   // ─── 22. Menú Desplegable de Sincronización en Toolbar ─────────────────────
   const btnToggleSyncMenu = document.getElementById('btn-toggle-sync-menu');
-  const dropdownSyncContainer = document.getElementById('dropdown-sync-container');
 
   if (btnToggleSyncMenu && dropdownSyncContainer) {
     btnToggleSyncMenu.addEventListener('click', (e) => {
       e.stopPropagation();
       dropdownSyncContainer.classList.toggle('open');
+      if (dropdownInsertContainer) dropdownInsertContainer.classList.remove('open');
     });
 
     // Cerrar el menú desplegable al hacer clic en cualquier opción interna (excepto triggers de submenú)
@@ -9408,6 +11348,37 @@ window.addEventListener('DOMContentLoaded', async () => {
       }
     });
   }
+
+  // Opciones de Intervalo de Sincronización en Submenú
+  window.updateSyncIntervalBadge = function(sec) {
+    const badge = document.getElementById('sync-menu-interval-badge');
+    if (badge) badge.textContent = `${sec}s`;
+    document.querySelectorAll('.sync-interval-opt').forEach(opt => {
+      const isSel = opt.dataset.seconds === String(sec);
+      opt.style.fontWeight = isSel ? '700' : '400';
+      opt.style.color = isSel ? '#38bdf8' : 'var(--text-primary)';
+    });
+  };
+
+  document.querySelectorAll('.sync-interval-opt').forEach(opt => {
+    opt.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const val = parseInt(opt.dataset.seconds, 10) || 15;
+      window.currentPollIntervalSeconds = val;
+      if (window.updateSyncIntervalBadge) window.updateSyncIntervalBadge(val);
+      const sEl = document.getElementById('select-zabbix-poll-interval');
+      if (sEl) sEl.value = String(val);
+      if (currentMap) {
+        startRealtimePolling(currentMap.id);
+      }
+      if (dropdownSyncContainer) dropdownSyncContainer.classList.remove('open');
+      try {
+        await API.saveZabbixConfig({ poll_interval: val });
+      } catch (err) {
+        console.warn('Error guardando intervalo:', err);
+      }
+    });
+  });
 
   // ─── 23. Modal de Configuración e Integración i-WISP ───────────────────────
   // ─── Modal de Configuración General (NetBox y Zabbix) ─────────────────────
@@ -9579,12 +11550,17 @@ window.addEventListener('DOMContentLoaded', async () => {
       if (data.zabbix) {
         if (inputZabbixUrl && data.zabbix.url) inputZabbixUrl.value = data.zabbix.url;
         if (inputZabbixToken && data.zabbix.token) inputZabbixToken.value = data.zabbix.token;
-        if (selectZabbixPollInterval && data.zabbix.poll_interval) {
-          selectZabbixPollInterval.value = String(data.zabbix.poll_interval);
+        let pInt = parseInt(data.zabbix.poll_interval, 10) || 15;
+        if (![10, 15, 20, 30].includes(pInt)) {
+          pInt = pInt <= 12 ? 10 : (pInt <= 17 ? 15 : (pInt <= 25 ? 20 : 30));
         }
-        if (data.zabbix.poll_interval) {
-          window.currentPollIntervalSeconds = parseInt(data.zabbix.poll_interval, 10) || 30;
+        if (selectZabbixPollInterval) {
+          selectZabbixPollInterval.value = String(pInt);
         }
+        window.currentPollIntervalSeconds = pInt;
+        if (window.updateSyncIntervalBadge) window.updateSyncIntervalBadge(pInt);
+        const quickPollEl = document.getElementById('quick-poll-interval');
+        if (quickPollEl) quickPollEl.value = String(pInt);
       }
     } catch (err) {
       console.error('Error cargando configuraciones de integraciones:', err);
@@ -9695,7 +11671,7 @@ window.addEventListener('DOMContentLoaded', async () => {
           window.allowEdgeEditing = chkNetboxAllowEdgeEditing.checked;
         }
 
-        const pollInt = selectZabbixPollInterval ? (parseInt(selectZabbixPollInterval.value, 10) || 30) : 30;
+        const pollInt = selectZabbixPollInterval ? (parseInt(selectZabbixPollInterval.value, 10) || 15) : 15;
         const zabbixPayload = {
           url: inputZabbixUrl ? inputZabbixUrl.value.trim() : '',
           token: inputZabbixToken ? inputZabbixToken.value.trim() : '',
@@ -9708,6 +11684,9 @@ window.addEventListener('DOMContentLoaded', async () => {
         ]);
 
         window.currentPollIntervalSeconds = pollInt;
+        if (window.updateSyncIntervalBadge) window.updateSyncIntervalBadge(pollInt);
+        const quickPollEl = document.getElementById('quick-poll-interval');
+        if (quickPollEl) quickPollEl.value = String(pollInt);
         if (currentMap) {
           startRealtimePolling(currentMap.id);
         }
@@ -9736,9 +11715,10 @@ window.addEventListener('DOMContentLoaded', async () => {
       await loadMap(hashMapId);
     }
     if (hashTab) {
+      const validHashTab = hashTab === 'tab-spectrum' ? 'tab-maps' : hashTab;
       const activeTabEl = document.querySelector('.sidebar-tab.active');
-      if (!activeTabEl || activeTabEl.dataset.tab !== hashTab) {
-        switchTab(hashTab);
+      if (!activeTabEl || activeTabEl.dataset.tab !== validHashTab) {
+        switchTab(validHashTab);
       }
     }
   });

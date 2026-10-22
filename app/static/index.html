@@ -4,8 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>NexusDude - The Modern Network Dude</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=5.3">
-  <link rel="stylesheet" href="/static/css/docs.css?v=5.3">
+  <link rel="stylesheet" href="/static/css/style.css?v=5.6.1">
+  <link rel="stylesheet" href="/static/css/docs.css?v=5.5.0">
   <!-- FontAwesome Icons -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <!-- Konva Canvas Library -->
@@ -69,29 +69,47 @@
 
     <!-- Canvas Actions Toolbar -->
     <div class="toolbar">
-      <button class="btn btn-purple" id="btn-new-submap" title="Crear un nuevo submapa dependiente">
-        <i class="fas fa-folder-plus"></i>
-        <span>Nuevo Submapa</span>
-      </button>
+      <!-- Menú Desplegable: Insertar -->
+      <div class="dropdown" id="dropdown-insert-container">
+        <button class="btn btn-purple" id="btn-toggle-insert-menu" title="Insertar elementos y herramientas en el lienzo">
+          <i class="fas fa-plus-circle"></i>
+          <span>Insertar <i class="fas fa-chevron-down" style="font-size: 0.65rem; margin-left: 2px;"></i></span>
+        </button>
+        <div class="dropdown-menu" id="insert-dropdown-menu" style="min-width: 210px;">
+          <div class="dropdown-header">
+            <i class="fas fa-layer-group" style="color: #a855f7;"></i> Elementos y Mapas
+          </div>
+          <div class="dropdown-item" id="btn-new-submap" title="Crear un nuevo submapa dependiente">
+            <i class="fas fa-folder-plus" style="color: #c084fc;"></i>
+            <span>Nuevo Submapa</span>
+          </div>
+          <div class="dropdown-item" id="btn-add-note" title="Añadir Nota/Anotación al lienzo">
+            <i class="fas fa-sticky-note" style="color: #fde047;"></i>
+            <span>Añadir Nota</span>
+          </div>
+          <div class="dropdown-item" id="btn-add-ftth-branch" title="Añadir Brazo FTTH / Ramal GPON al lienzo">
+            <i class="fas fa-code-branch" style="color: #38bdf8;"></i>
+            <span>+ Brazo FTTH</span>
+          </div>
+          <div class="dropdown-divider"></div>
+          <div class="dropdown-header">
+            <i class="fas fa-tools" style="color: #94a3b8;"></i> Conexión y Cuadrícula
+          </div>
+          <div class="dropdown-item" id="btn-toggle-link-mode" title="Activar modo para trazar enlaces entre nodos">
+            <i class="fas fa-link" style="color: #38bdf8;"></i>
+            <span>Conectar Enlace</span>
+          </div>
+          <div class="dropdown-item btn-active" id="btn-toggle-grid" title="Activar/Desactivar imantado a cuadrícula">
+            <i class="fas fa-border-all" style="color: #10b981;"></i>
+            <span>Imantar (20px)</span>
+          </div>
+        </div>
+      </div>
 
-      <button class="btn" id="btn-toggle-link-mode" title="Activar modo para trazar enlaces entre nodos">
-        <i class="fas fa-link"></i>
-        <span>Conectar Enlace</span>
-      </button>
-
-      <button class="btn btn-active" id="btn-toggle-grid" title="Activar/Desactivar imantado a cuadrícula">
-        <i class="fas fa-border-all"></i>
-        <span>Imantar (20px)</span>
-      </button>
-
-      <button class="btn" id="btn-add-note" title="Añadir Nota/Anotación al lienzo" style="background: rgba(234,179,8,0.15); border-color: #ca8a04; color: #fde047;">
-        <i class="fas fa-sticky-note"></i>
-        <span>Añadir Nota</span>
-      </button>
-
-      <button class="btn" id="btn-add-ftth-branch" title="Añadir Brazo FTTH / Ramal GPON al lienzo" style="background: rgba(14, 165, 233, 0.15); border-color: #0284c7; color: #38bdf8;">
-        <i class="fas fa-code-branch"></i>
-        <span>+ Brazo FTTH</span>
+      <!-- Botón Espectro RF -->
+      <button class="btn" id="btn-toolbar-spectrum" title="Analizador de Espectro RF y Anchos de Canal (4850 - 7250 MHz)" style="background: rgba(56, 189, 248, 0.12); border-color: rgba(56, 189, 248, 0.35); color: #38bdf8;">
+        <i class="fas fa-wave-square"></i>
+        <span>Espectro RF</span>
       </button>
 
       <!-- Menú Desplegable: Sincronizaciones -->
@@ -181,12 +199,55 @@
 
           <div class="dropdown-divider"></div>
 
+          <!-- Submenú Cascada: Intervalo de Sincronización Telemetría -->
+          <div class="dropdown-submenu" id="submenu-sync-interval">
+            <div class="dropdown-item" title="Cambiar frecuencia de sincronización y telemetría cronológica">
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <i class="fas fa-clock" style="color: #38bdf8;"></i>
+                <span style="font-weight: 600;">Intervalo de Sincronización</span>
+              </div>
+              <div style="display: flex; align-items: center; gap: 6px;">
+                <span id="sync-menu-interval-badge" style="font-size: 0.68rem; background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3); padding: 1px 6px; border-radius: 8px; font-weight: 700;">15s</span>
+                <i class="fas fa-chevron-right" style="font-size: 0.65rem; color: #94a3b8;"></i>
+              </div>
+            </div>
+            <div class="dropdown-submenu-menu">
+              <div class="dropdown-header">
+                <i class="fas fa-clock" style="color: #38bdf8;"></i> Frecuencia de Refresco
+              </div>
+              <div class="dropdown-item sync-interval-opt" data-seconds="10" title="Actualización cada 10 segundos">
+                <i class="fas fa-bolt" style="color: #38bdf8;"></i>
+                <span>10 segundos (Rápido)</span>
+              </div>
+              <div class="dropdown-item sync-interval-opt" data-seconds="15" title="Actualización cada 15 segundos">
+                <i class="fas fa-tachometer-alt" style="color: #10b981;"></i>
+                <span>15 segundos (Recomendado)</span>
+              </div>
+              <div class="dropdown-item sync-interval-opt" data-seconds="20" title="Actualización cada 20 segundos">
+                <i class="fas fa-hourglass-half" style="color: #fbbf24;"></i>
+                <span>20 segundos (Estándar)</span>
+              </div>
+              <div class="dropdown-item sync-interval-opt" data-seconds="30" title="Actualización cada 30 segundos">
+                <i class="fas fa-stopwatch" style="color: #a855f7;"></i>
+                <span>30 segundos (Bajo consumo)</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="dropdown-divider"></div>
+
           <!-- Navegación -->
           <div class="dropdown-item" id="btn-ensure-parent-node" style="display: none;" title="Insertar o verificar nodo de navegación para subir al mapa padre">
             <i class="fas fa-level-up-alt" style="color: #38bdf8;"></i>
             <span>Insertar Acceso a Padre</span>
           </div>
         </div>
+      </div>
+
+      <!-- Control de Refresco Cronológico del Lienzo -->
+      <div class="poll-interval-control" id="poll-interval-control" title="Actualización cronológica en tiempo real">
+        <i class="fas fa-sync-alt" id="icon-poll-pulse" style="color: #38bdf8;"></i>
+        <span id="canvas-last-sync-time" title="Hora de la última actualización cronológica">—</span>
       </div>
 
       <!-- Botón Configuración General -->
@@ -221,20 +282,17 @@
     <!-- Left Sidebar: Tabs (Inventario / Mapas / Propiedades) -->
     <aside class="sidebar">
       <div class="sidebar-tabs">
-        <div class="sidebar-tab" data-tab="tab-inventory">
-          <i class="fas fa-search"></i> Inventario
-        </div>
         <div class="sidebar-tab active" data-tab="tab-maps">
           <i class="fas fa-project-diagram"></i> Jerarquía
         </div>
         <div class="sidebar-tab" data-tab="tab-all-maps" id="tab-btn-all-maps" title="Lista de la totalidad de mapas con orden alfabético A-Z / Z-A">
           <i class="fas fa-list-ul"></i> Lista Mapas
         </div>
+        <div class="sidebar-tab" data-tab="tab-inventory">
+          <i class="fas fa-search"></i> Inventario
+        </div>
         <div class="sidebar-tab" data-tab="tab-properties">
           <i class="fas fa-sliders-h"></i> Propiedades
-        </div>
-        <div class="sidebar-tab" data-tab="tab-spectrum" id="tab-btn-spectrum" title="Analizador de Espectro RF y Anchos de Canal (4850 - 7250 MHz)">
-          <i class="fas fa-wave-square"></i> Espectro RF
         </div>
       </div>
 
@@ -303,49 +361,41 @@
             <button id="btn-clear-search-maps" style="display: none; position: absolute; right: 8px; top: 50%; transform: translateY(-50%); background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 0.85rem;" title="Limpiar búsqueda">&times;</button>
           </div>
           <div class="maps-actions-row">
-            <button class="btn btn-primary" id="btn-new-root-map" style="flex: 1; justify-content: center; font-size: 0.72rem; padding: 5px 3px;" title="Crear un nuevo mapa raíz (sin relación a NetBox por defecto)">
-              <i class="fas fa-plus"></i> Raíz
-            </button>
-            <button class="btn btn-purple" id="btn-new-submap-tab" style="flex: 1.1; justify-content: center; font-size: 0.72rem; padding: 5px 3px;" title="Crear submapa en el mapa actual (sin relación a NetBox por defecto)">
-              <i class="fas fa-folder-plus"></i> + Submapa
-            </button>
-            <!-- Selector de 3 Modos: A-Z (Azul), Z-A (Ámbar), Libre (Púrpura) -->
-            <button class="btn" id="btn-tree-sort-az" style="padding: 5px 6px; font-size: 0.68rem; font-weight: 700;" title="Modo Alfabético: A ➔ Z">
+            <button class="btn" id="btn-tree-sort-az" style="flex: 1; justify-content: center; padding: 5px 6px; font-size: 0.68rem; font-weight: 700;" title="Modo Alfabético: A ➔ Z">
               <i class="fas fa-sort-alpha-down"></i> A-Z
             </button>
-            <button class="btn" id="btn-tree-sort-za" style="padding: 5px 6px; font-size: 0.68rem; font-weight: 700;" title="Modo Alfabético: Z ➔ A">
+            <button class="btn" id="btn-tree-sort-za" style="flex: 1; justify-content: center; padding: 5px 6px; font-size: 0.68rem; font-weight: 700;" title="Modo Alfabético: Z ➔ A">
               <i class="fas fa-sort-alpha-up-alt"></i> Z-A
             </button>
-            <button class="btn" id="btn-tree-sort-free" style="padding: 5px 6px; font-size: 0.68rem; font-weight: 700;" title="Modo Libre: Arrastre manual guardado (Ficheros de escritorio)">
-              <i class="fas fa-arrows-alt"></i> Libre
-            </button>
-            <button class="btn" id="btn-collapse-all-maps" style="padding: 5px 6px; font-size: 0.68rem;" title="Contraer todas las carpetas">
+            <button class="btn" id="btn-collapse-all-maps" style="padding: 5px 8px; font-size: 0.68rem;" title="Contraer todas las carpetas">
               <i class="fas fa-compress-alt"></i>
             </button>
-            <button class="btn" id="btn-expand-all-maps" style="padding: 5px 6px; font-size: 0.68rem;" title="Expandir todas las carpetas">
+            <button class="btn" id="btn-expand-all-maps" style="padding: 5px 8px; font-size: 0.68rem;" title="Expandir todas las carpetas">
               <i class="fas fa-expand-alt"></i>
             </button>
-            <button class="btn" id="btn-refresh-maps-tab" title="Refrescar árbol de mapas" style="padding: 5px 6px; font-size: 0.68rem;">
+            <button class="btn btn-secondary" id="btn-tree-sync-netbox-hierarchy" title="Sincronizar jerarquía con Grupos de Sitios de NetBox" style="padding: 5px 7px; font-size: 0.68rem; display: inline-flex; align-items: center; gap: 4px;">
+              <i class="fas fa-network-wired" id="icon-sync-netbox-hierarchy"></i> NetBox
+            </button>
+            <button class="btn" id="btn-refresh-maps-tab" title="Refrescar árbol de mapas" style="padding: 5px 8px; font-size: 0.68rem;">
               <i class="fas fa-sync-alt"></i>
-            </button>
-          </div>
-          <div style="display: flex; gap: 6px; margin-top: 4px;">
-            <button class="btn btn-purple" id="btn-open-bulk-sites-modal" style="flex: 1; justify-content: center; font-size: 0.72rem; padding: 4px 6px; background: rgba(168, 85, 247, 0.12); border: 1px dashed #a855f7; color: #c084fc; font-weight: 600;" title="Generar automáticamente mapas para todos los sitios de NetBox">
-              <i class="fas fa-layer-group"></i> ⚡ Auto-generar Sitios
-            </button>
-            <button class="btn" id="btn-go-to-all-maps-tab" style="justify-content: center; font-size: 0.72rem; padding: 4px 8px; color: #38bdf8;" title="Ver la lista completa de todos los mapas ordenables alfabéticamente">
-              <i class="fas fa-list-ul"></i> Lista Total
             </button>
           </div>
           <!-- Filtro por vinculación a NetBox en Jerarquía -->
           <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 4px; font-size: 0.70rem;">
             <select class="select-filter" id="select-filter-tree-site" style="font-size: 0.72rem; padding: 4px 6px; flex: 1;">
               <option value="all">🌐 Todos los Mapas</option>
+              <option value="active">🟢 Solo Sitios Activos</option>
+              <option value="retired">🔴 Sitios Retirados</option>
               <option value="linked">🏢 Vinculados a Sitio NetBox</option>
               <option value="unlinked">⚡ Sin vincular a NetBox</option>
             </select>
             <span id="tree-maps-counter-badge" style="color: #38bdf8; font-weight: 700; margin-left: 8px; white-space: nowrap;">0 mapas</span>
           </div>
+        </div>
+        <!-- Zona de Soltar a Nivel Raíz (Windows Explorer) -->
+        <div class="map-root-dropzone" id="map-root-dropzone" style="display: none;">
+          <i class="fas fa-level-up-alt" style="color: #10b981;"></i>
+          <span>Mover a Nivel Raíz (Topología Principal)</span>
         </div>
         <div class="maps-tree-container" id="maps-tree">
           <!-- Árbol de navegación estilo gestor de archivos -->
@@ -378,6 +428,8 @@
           <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 4px; font-size: 0.70rem;">
             <select class="select-filter" id="select-filter-all-maps-site" style="font-size: 0.72rem; padding: 4px 6px; flex: 1;">
               <option value="all">🌐 Todos los Mapas</option>
+              <option value="active">🟢 Solo Sitios Activos</option>
+              <option value="retired">🔴 Sitios Retirados</option>
               <option value="linked">🏢 Vinculados a Sitio NetBox</option>
               <option value="unlinked">⚡ Sin vincular a NetBox</option>
             </select>
@@ -394,7 +446,7 @@
           </div>
         </div>
 
-        <div class="all-maps-scroll-container" id="all-maps-list" style="overflow-y: auto; flex: 1; padding: 6px 10px; display: flex; flex-direction: column; gap: 6px;">
+        <div class="all-maps-scroll-container" id="all-maps-list">
           <!-- Listado plano completo generado dinámicamente -->
         </div>
       </div>
@@ -491,10 +543,18 @@
               </div>
             </div>
 
-            <!-- Aviso de Fuente de Verdad NetBox -->
-            <div class="netbox-sync-notice">
-              <i class="fas fa-shield-alt"></i>
-              <span><strong>Fuente Única de Verdad:</strong> Nombres, IPs e interfaces son gestionados en NetBox para mantener integridad de registro.</span>
+            <!-- Conexiones de Interfaz y Equipos Involucrados (Compacto) -->
+            <div id="prop-node-connections-box" class="node-connections-compact-box">
+              <div class="connections-box-header">
+                <div style="display: flex; align-items: center; gap: 6px;">
+                  <i class="fas fa-plug" style="color: #38bdf8; font-size: 0.70rem;"></i>
+                  <span style="font-weight: 700; color: #cbd5e1; font-size: 0.70rem;">Conexiones de Interfaz</span>
+                </div>
+                <span id="prop-node-conn-count" style="font-size: 0.62rem; color: #38bdf8; background: rgba(56, 189, 248, 0.15); padding: 1px 5px; border-radius: 4px; font-weight: 700;">0</span>
+              </div>
+              <div id="prop-node-connections-list" class="connections-box-list">
+                <!-- Se pobla dinámicamente con las interfaces y equipos conectados -->
+              </div>
             </div>
 
             <!-- Botón enlace directo a Administración Web del Equipo -->
@@ -1713,55 +1773,113 @@
           <div>
             <h2 class="modal-title" style="margin: 0; font-size: 1.1rem;">Analizador de Espectro RF & Regla de Frecuencias</h2>
             <p style="margin: 0; font-size: 0.75rem; color: var(--text-muted);">
-              Visualización y Ocupación del Espectro (4850 MHz a 7250 MHz) · Anchos de Canal
+              Visualización y Ocupación del Espectro (4850 MHz a 7250 MHz) · Anchos de Canal y Telemetría Zabbix
             </p>
           </div>
         </div>
         <button class="modal-close" id="btn-close-spectrum-modal-x">&times;</button>
       </div>
 
-      <div class="modal-body" style="padding: 14px; display: flex; flex-direction: column; gap: 10px; overflow-y: auto;">
+      <div class="modal-body" style="padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; overflow-y: auto;">
         <!-- Barra de herramientas del modal -->
-        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; background: rgba(15,23,42,0.8); border: 1px solid var(--border-color); border-radius: 8px; padding: 8px 12px;">
-          <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
-            <span style="font-size: 0.78rem; font-weight: 700; color: #f8fafc;" id="modal-spectrum-map-title">
-              📍 Mapa: Topología Principal
-            </span>
-            <span style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3); font-size: 0.72rem; font-weight: 700; padding: 2px 8px; border-radius: 12px;" id="modal-spec-total-badge">
-              0 Equipos
-            </span>
-          </div>
-
-          <!-- Controles de Zoom del Modal -->
-          <div style="display: flex; align-items: center; gap: 8px;">
-            <span style="font-size: 0.72rem; color: var(--text-muted);">Escala de Regla:</span>
-            <div class="spectrum-zoom-controls">
-              <button type="button" class="btn-zoom-tiny" id="btn-modal-spec-zoom-out" style="width: 26px; height: 26px;">-</button>
-              <span id="modal-spec-zoom-label" style="font-size: 0.75rem; font-weight: 700; color: #cbd5e1; min-width: 45px; text-align: center;">100%</span>
-              <button type="button" class="btn-zoom-tiny" id="btn-modal-spec-zoom-in" style="width: 26px; height: 26px;">+</button>
-            </div>
-            <button type="button" class="btn btn-secondary" id="btn-modal-spec-zoom-reset" style="padding: 3px 8px; font-size: 0.72rem;">
-              Restablecer
+        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; background: rgba(15,23,42,0.85); border: 1px solid var(--border-color); border-radius: 8px; padding: 8px 12px;">
+          <!-- Selector de Sitio y Botón Actualizar -->
+          <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+            <label style="font-size: 0.76rem; font-weight: 700; color: #94a3b8; display: flex; align-items: center; gap: 5px;">
+              <i class="fas fa-map-marker-alt" style="color: #38bdf8;"></i> Sitio:
+            </label>
+            <select class="select-filter" id="modal-select-spectrum-map" style="font-size: 0.8rem; font-weight: 600; min-width: 220px; max-width: 320px; padding: 5px 8px; background: #1e293b; color: #f8fafc; border: 1px solid #334155; border-radius: 6px;">
+              <option value="current">📍 Mapa Actual en Lienzo</option>
+              <option value="all">🌐 Todos los Sitios (Global)</option>
+            </select>
+            <button type="button" class="btn btn-primary" id="btn-modal-refresh-spectrum" title="Recargar telemetría en tiempo real desde Zabbix" style="padding: 5px 12px; font-size: 0.78rem; font-weight: 600; display: inline-flex; align-items: center; gap: 6px;">
+              <i class="fas fa-sync-alt" id="modal-spectrum-refresh-icon"></i> Actualizar
             </button>
           </div>
-        </div>
 
-        <!-- Contenedor Scrollable de la Regla Ampliada -->
-        <div class="spectrum-horizontal-scroll-container" id="spectrum-modal-ruler-scroll" style="height: 480px; overflow-y: auto;">
-          <div class="spectrum-ruler-canvas-area" id="spectrum-modal-ruler-canvas" style="width: 100%; min-width: 2000px; height: 460px;">
-            <!-- Renderizado dinámico de la regla ampliada -->
+          <!-- Filtros de Búsqueda y Roles -->
+          <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+            <div style="position: relative;">
+              <input type="text" class="input-text" id="modal-input-search-spectrum" placeholder="Buscar radio, IP, MHz..." style="font-size: 0.78rem; padding: 5px 10px 5px 28px; width: 180px; border-radius: 6px;">
+              <i class="fas fa-search" style="position: absolute; left: 9px; top: 50%; transform: translateY(-50%); font-size: 0.72rem; color: #64748b; pointer-events: none;"></i>
+            </div>
+            <select class="select-filter" id="modal-select-spectrum-role" style="font-size: 0.78rem; padding: 5px 8px; border-radius: 6px; background: #1e293b; color: #cbd5e1; border: 1px solid #334155;">
+              <option value="all">📻 Todos los Roles</option>
+              <option value="ap">📡 Solo APs / Sectores</option>
+              <option value="cpe">📶 Solo CPEs / Clientes</option>
+            </select>
+          </div>
+
+          <!-- Badges de Resumen y Zoom -->
+          <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+            <div style="display: flex; gap: 6px; align-items: center;">
+              <span class="spectrum-stat-badge-mini" title="Total de radios con frecuencia detectada">
+                <span id="modal-spec-total-badge">0</span> Radios
+              </span>
+              <span class="spectrum-stat-badge-mini" title="Canales activos en el sitio">
+                <span id="modal-spec-active-bws">0</span> Canales
+              </span>
+            </div>
+
+            <div style="display: flex; align-items: center; gap: 6px; border-left: 1px solid #334155; padding-left: 10px;">
+              <span style="font-size: 0.72rem; color: var(--text-muted);">Zoom:</span>
+              <div class="spectrum-zoom-controls">
+                <button type="button" class="btn-zoom-tiny" id="btn-modal-spec-zoom-out" style="width: 24px; height: 24px;">-</button>
+                <span id="modal-spec-zoom-label" style="font-size: 0.74rem; font-weight: 700; color: #cbd5e1; min-width: 42px; text-align: center;">100%</span>
+                <button type="button" class="btn-zoom-tiny" id="btn-modal-spec-zoom-in" style="width: 24px; height: 24px;">+</button>
+              </div>
+              <button type="button" class="btn btn-secondary" id="btn-modal-spec-zoom-reset" style="padding: 2px 7px; font-size: 0.7rem;">
+                100%
+              </button>
+            </div>
           </div>
         </div>
 
-        <!-- Leyenda de Bandas y Anchos de Canal -->
-        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 0.72rem; padding: 4px 6px;">
-          <div class="spectrum-band-legend" style="margin: 0;">
-            <span class="band-tag band-5ghz">5 GHz (5150 - 5850 MHz)</span>
-            <span class="band-tag band-unii4">UNII-4 (5850 - 5925 MHz)</span>
-            <span class="band-tag band-6ghz">6 GHz Wi-Fi 6E (5925 - 7125 MHz)</span>
+        <!-- Contenedor Scrollable de la Regla Horizontal -->
+        <div style="background: rgba(15,23,42,0.6); border: 1px solid var(--border-color); border-radius: 8px; overflow: hidden; flex-shrink: 0;">
+          <div class="spectrum-horizontal-scroll-container" id="spectrum-modal-ruler-scroll" style="height: 220px; overflow-y: auto;">
+            <div class="spectrum-ruler-canvas-area" id="spectrum-modal-ruler-canvas" style="width: 100%; min-width: 2200px; height: 200px;">
+              <!-- Renderizado dinámico de la regla ampliada -->
+            </div>
           </div>
-          <div style="color: var(--text-muted); font-size: 0.7rem;">
-            💡 Haz clic en cualquier bloque de canal para seleccionarlo en la topología. Desplaza horizontalmente para ver todo el rango.
+          <!-- Leyenda de Bandas y Anchos de Canal -->
+          <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 0.72rem; padding: 6px 12px; background: rgba(15,23,42,0.95); border-top: 1px solid rgba(255,255,255,0.06);">
+            <div class="spectrum-band-legend" style="margin: 0;">
+              <span class="band-tag band-5ghz">5 GHz (5150 - 5850 MHz)</span>
+              <span class="band-tag band-unii4">UNII-4 (5850 - 5925 MHz)</span>
+              <span class="band-tag band-6ghz">6 GHz Wi-Fi 6E (5925 - 7125 MHz)</span>
+            </div>
+            <div style="color: var(--text-muted); font-size: 0.7rem;">
+              💡 Haz clic en cualquier canal para seleccionarlo en la tabla. Doble clic para enfocar en el lienzo. Desplaza horizontalmente para ver todo el rango.
+            </div>
+          </div>
+        </div>
+
+        <!-- SECCIÓN: TABLA DETALLADA DE EQUIPOS DE RADIO -->
+        <div style="background: rgba(15,23,42,0.7); border: 1px solid var(--border-color); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; min-height: 200px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span style="font-size: 0.82rem; font-weight: 700; color: #f1f5f9; display: flex; align-items: center; gap: 6px;">
+                <i class="fas fa-broadcast-tower" style="color: #38bdf8;"></i> Radios del Sitio (<span id="modal-table-radios-count">0</span>)
+              </span>
+              <span id="modal-table-site-name" style="font-size: 0.74rem; color: #94a3b8;">
+                📍 Sitio actual
+              </span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px; font-size: 0.74rem;">
+              <button type="button" class="btn-link-action" id="btn-modal-select-all" style="color: #38bdf8; background: none; border: none; cursor: pointer; text-decoration: underline; font-weight: 600;">
+                Marcar Todos
+              </button>
+              <span style="color: #64748b;">|</span>
+              <button type="button" class="btn-link-action" id="btn-modal-deselect-all" style="color: #94a3b8; background: none; border: none; cursor: pointer; text-decoration: underline; font-weight: 600;">
+                Desmarcar Todos
+              </button>
+            </div>
+          </div>
+
+          <!-- Tabla responsiva -->
+          <div id="modal-spectrum-table-container" style="max-height: 250px; overflow-y: auto; border: 1px solid rgba(255,255,255,0.06); border-radius: 6px;">
+            <!-- Renderizado dinámico de la tabla de radios -->
           </div>
         </div>
       </div>
@@ -2048,7 +2166,7 @@
           <i class="fas fa-cubes" style="color: #10b981; margin-right: 6px;"></i> NetBox DCIM
         </button>
         <button type="button" class="btn btn-sm btn-settings-tab" id="tab-btn-zabbix" data-tab="zabbix" style="padding: 8px 16px; border-bottom-left-radius: 0; border-bottom-right-radius: 0; font-weight: 600; border-bottom: 2px solid transparent; background: transparent; color: var(--text-muted);">
-          <i class="fas fa-chart-line" style="color: #ef4444; margin-right: 6px;"></i> Zabbix Telemetría
+          <i class="fas fa-sync-alt" style="color: #38bdf8; margin-right: 6px;"></i> Zabbix & Sincronización
         </button>
       </div>
 
@@ -2143,13 +2261,13 @@
           <div class="prop-row" style="margin-bottom: 12px;">
             <label class="prop-label"><i class="fas fa-clock"></i> Intervalo de Actualización de Telemetría</label>
             <select id="select-zabbix-poll-interval" class="input-text" style="width: 100%; cursor: pointer;">
-              <option value="12">12s (12 segundos)</option>
+              <option value="10">10s (10 segundos)</option>
+              <option value="15" selected>15s (15 segundos)</option>
               <option value="20">20s (20 segundos)</option>
-              <option value="30" selected>30s (30 segundos)</option>
-              <option value="60">1m (1 minuto)</option>
+              <option value="30">30s (30 segundos)</option>
             </select>
             <div style="font-size: 0.70rem; color: var(--text-muted); margin-top: 4px;">
-              Frecuencia de consulta en tiempo real para el estado Ping ICMP, aristas y espectro RF.
+              Frecuencia de actualización cronológica del lienzo (Ping ICMP, aristas y telemetría Zabbix).
             </div>
           </div>
 
@@ -2175,9 +2293,9 @@
   </div>
 
   <!-- Scripts -->
-  <script src="/static/js/api.js?v=5.3.2"></script>
-  <script src="/static/js/app.js?v=5.3.2"></script>
-  <script src="/static/js/docs.js?v=5.3.2"></script>
+  <script src="/static/js/api.js?v=5.6.1"></script>
+  <script src="/static/js/app.js?v=5.6.1"></script>
+  <script src="/static/js/docs.js?v=5.5.0"></script>
 </body>
 </html>
 

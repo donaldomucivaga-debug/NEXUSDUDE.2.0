@@ -129,6 +129,25 @@ const API = {
     throw new Error(await res.text());
   },
 
+  async moveMap(mapId, targetParentId, position = 0) {
+    const res = await this.fetch(`/api/maps/${mapId}/move`, {
+      method: 'POST',
+      body: JSON.stringify({ target_parent_id: targetParentId, position })
+    });
+    if (res.ok) return await res.json();
+    const errData = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(errData.detail || 'Error al mover mapa');
+  },
+
+  async syncNetboxHierarchy() {
+    const res = await this.fetch('/api/maps/sync-netbox-hierarchy', {
+      method: 'POST'
+    });
+    if (res.ok) return await res.json();
+    const errData = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(errData.detail || 'Error al sincronizar jerarquía con NetBox');
+  },
+
   async deleteMap(mapId) {
     const res = await this.fetch(`/api/maps/${mapId}`, {
       method: 'DELETE'

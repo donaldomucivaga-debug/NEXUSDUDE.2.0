@@ -11,7 +11,7 @@ from app.models import (
     LinkOut, LinkCreate, LinkUpdate,
     CreateMapFromSiteRequest, PopulateMapFromSiteRequest,
     BulkCreateMapsFromSitesRequest, BulkDeleteNodesRequest,
-    MapReorderRequest, MapOrderItem,
+    MapReorderRequest, MapOrderItem, MapMoveRequest,
     HierarchyItem, HierarchyCreate, HierarchyUpdate, MergeDuplicatesRequest
 )
 from app.services.inventory_service import inventory_service
@@ -55,7 +55,8 @@ async def list_maps(
                 updated_at=str(r["updated_at"]),
                 nodes_count=r["nodes_count"],
                 links_count=r["links_count"],
-                access_count=max(1, r["access_count"]) if "access_count" in r.keys() and r["access_count"] is not None else 1
+                access_count=max(1, r["access_count"]) if "access_count" in r.keys() and r["access_count"] is not None else 1,
+                is_site_retired=inventory_service.is_site_retired(r["netbox_site_id"] if "netbox_site_id" in r.keys() else None)
             )
             for r in rows
         ]
@@ -321,6 +322,7 @@ async def reorder_maps(
     user: Dict[str, Any] = Depends(get_current_user)
 ):
     """Actualiza la posición (orden en la lista) y opcionalmente el parent_map_id de los mapas/submapas."""
+    moved_pairs = []
     async with get_db_connection() as db:
         for item in payload.items:
             if item.parent_map_id is not None:
@@ -329,11 +331,26 @@ async def reorder_maps(
                     "UPDATE maps SET position = ?, parent_map_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                     (item.position, p_id, item.id)
                 )
-                # Actualizar también acceso primario en map_hierarchy
                 await db.execute("""
                     UPDATE map_hierarchy SET position = ?, parent_map_id = ?, updated_at = CURRENT_TIMESTAMP
                     WHERE child_map_id = ? AND is_primary = 1
                 """, (item.position, p_id, item.id))
+
+                # Obtener nombres para sincronización con NetBox
+                c_ch = await db.execute("SELECT name, netbox_site_id FROM maps WHERE id = ?", (item.id,))
+                r_ch = await c_ch.fetchone()
+                p_name = None
+                if p_id and p_id != "default-map":
+                    c_pr = await db.execute("SELECT name FROM maps WHERE id = ?", (p_id,))
+                    r_pr = await c_pr.fetchone()
+                    if r_pr:
+                        p_name = r_pr["name"]
+                if r_ch:
+                    moved_pairs.append({
+                        "child_name": r_ch["name"],
+                        "parent_name": p_name,
+                        "site_id": r_ch["netbox_site_id"]
+                    })
             else:
                 await db.execute(
                     "UPDATE maps SET position = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
@@ -344,7 +361,116 @@ async def reorder_maps(
                     WHERE child_map_id = ? AND is_primary = 1
                 """, (item.position, item.id))
         await db.commit()
+
+    # Sincronización asíncrona hacia NetBox para mapas cuyo padre cambió
+    for mp in moved_pairs:
+        try:
+            await inventory_service.sync_site_group_parent(
+                child_map_name=mp["child_name"],
+                parent_map_name=mp["parent_name"],
+                netbox_site_id=mp["site_id"]
+            )
+        except Exception as e:
+            logger.warning(f"Error sincronizando jerarquía en NetBox para {mp['child_name']}: {e}")
+
     return {"success": True, "message": f"{len(payload.items)} mapas reordenados correctamente."}
+
+@router.post("/{map_id}/move")
+async def move_map_hierarchy(
+    map_id: str,
+    payload: MapMoveRequest,
+    user: Dict[str, Any] = Depends(get_current_user)
+):
+    """
+    Coloca un mapa adentro de un submapa padre (o a nivel raíz si target_parent_id es null/'root'/'default-map').
+    Valida ciclos de jerarquía y sincroniza automáticamente con los Grupos de Sitios de NetBox.
+    """
+    if map_id == "default-map":
+        raise HTTPException(status_code=400, detail="El mapa principal 'default-map' no puede ser reubicado.")
+
+    raw_pid = payload.target_parent_id.strip() if payload.target_parent_id else None
+    new_pid = raw_pid if raw_pid and raw_pid not in ("root", "null", "none") else None
+
+    if new_pid == map_id:
+        raise HTTPException(status_code=400, detail="Un mapa no puede ser colocado adentro de sí mismo.")
+
+    async with get_db_connection() as db:
+        c_map = await db.execute("SELECT id, name, parent_map_id, netbox_site_id FROM maps WHERE id = ?", (map_id,))
+        map_row = await c_map.fetchone()
+        if not map_row:
+            raise HTTPException(status_code=404, detail="Mapa no encontrado.")
+
+        parent_name = None
+        if new_pid and new_pid != "default-map":
+            # Validar anti-ciclo: que new_pid no sea descendiente de map_id
+            visited = set()
+            curr = new_pid
+            while curr:
+                if curr == map_id:
+                    raise HTTPException(status_code=400, detail="No se puede mover un mapa adentro de sus propios submapas (ciclo jerárquico detectado).")
+                if curr in visited:
+                    break
+                visited.add(curr)
+                c_anc = await db.execute("SELECT parent_map_id FROM maps WHERE id = ?", (curr,))
+                r_anc = await c_anc.fetchone()
+                curr = r_anc["parent_map_id"] if r_anc else None
+
+            c_parent = await db.execute("SELECT id, name FROM maps WHERE id = ?", (new_pid,))
+            parent_row = await c_parent.fetchone()
+            if not parent_row:
+                raise HTTPException(status_code=404, detail="El mapa destino especificado no existe.")
+            parent_name = parent_row["name"]
+
+        final_pid = new_pid if new_pid else "default-map"
+        await db.execute("""
+            UPDATE maps SET parent_map_id = ?, position = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        """, (final_pid, payload.position or 0, map_id))
+
+        await db.execute("""
+            UPDATE map_hierarchy SET parent_map_id = ?, position = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE child_map_id = ? AND is_primary = 1
+        """, (final_pid, payload.position or 0, map_id))
+
+        # Asegurar portal de navegación submap en el mapa padre si aplica
+        if new_pid and new_pid != "default-map":
+            c_portal = await db.execute("SELECT id FROM nodes WHERE map_id = ? AND (device_type = 'submap' AND name = ?)", (new_pid, map_row["name"]))
+            if not await c_portal.fetchone():
+                node_id = f"node-{uuid.uuid4().hex[:8]}"
+                sub_meta = {
+                    "is_submap": True,
+                    "target_map_id": map_id,
+                    "target_map_name": map_row["name"]
+                }
+                await db.execute("""
+                    INSERT INTO nodes (id, map_id, name, device_type, x, y, extra_data)
+                    VALUES (?, ?, ?, 'submap', 100.0, 100.0, ?)
+                """, (node_id, new_pid, f"📁 {map_row['name']}", json.dumps(sub_meta)))
+
+        await db.commit()
+
+    # Sincronización automática con Grupos de Sitios de NetBox
+    netbox_sync_res = await inventory_service.sync_site_group_parent(
+        child_map_name=map_row["name"],
+        parent_map_name=parent_name,
+        netbox_site_id=map_row["netbox_site_id"]
+    )
+
+    return {
+        "success": True,
+        "message": f"Mapa '{map_row['name']}' colocado exitosamente en '{parent_name or 'Nivel Raíz'}'.",
+        "parent_map_id": final_pid,
+        "netbox_sync": netbox_sync_res
+    }
+
+@router.post("/sync-netbox-hierarchy")
+async def sync_netbox_hierarchy(user: Dict[str, Any] = Depends(get_current_user)):
+    """
+    Sincronización bidireccional completa entre los Grupos de Sitios (SiteGroup) de NetBox
+    y la Jerarquía de Mapas de NexusDude 2.0.
+    """
+    result = await inventory_service.sync_hierarchy_bidirectional()
+    return result
 
 @router.get("/sites-status")
 async def get_sites_mapping_status(user: Dict[str, Any] = Depends(get_current_user)):
@@ -397,73 +523,79 @@ async def get_sites_mapping_status(user: Dict[str, Any] = Depends(get_current_us
 async def ensure_map_navigation_nodes(db, map_id: str):
     """
     Garantiza automáticamente la presencia y sincronía de los nodos de navegación en el lienzo:
-    1. Si este mapa tiene parent_map_id válido, asegura el nodo de retorno hacia el mapa padre ('parent_map').
-       Si el mapa padre no existe o el mapa es raíz, elimina nodos 'parent_map' huérfanos.
-    2. Si este mapa tiene submapas hijos (maps con parent_map_id = map_id), asegura un nodo de navegación ('submap')
-       por cada submapa hijo.
-       Si existen nodos 'submap' que apuntan a submapas inexistentes o desvinculados, los limpia.
+    1. Para mapas con uno o más padres en map_hierarchy (o parent_map_id), asegura los nodos de retorno ('parent_map').
+       Preserva todos los portales de padres múltiples y nunca destruye enlaces existentes.
+    2. Para submapas hijos o accesos directos, asegura los nodos ('submap').
+       Si un submapa apunta a un mapa válido, lo conserva y valida en map_hierarchy sin destruir enlaces ni coordenadas.
     """
     c_map = await db.execute("SELECT id, name, parent_map_id FROM maps WHERE id = ?", (map_id,))
     m = await c_map.fetchone()
     if not m:
         return
 
-    # --- 1. Sincronizar Nodo de Retorno a Mapa Padre ---
-    parent_id = m["parent_map_id"]
-    if parent_id and parent_id != map_id:
-        c_parent = await db.execute("SELECT id, name FROM maps WHERE id = ?", (parent_id,))
-        p_row = await c_parent.fetchone()
+    # --- 1. Sincronizar Nodos de Retorno a Mapa(s) Padre(s) ---
+    c_parents = await db.execute("""
+        SELECT DISTINCT parent_map_id FROM map_hierarchy
+        WHERE child_map_id = ? AND parent_map_id IS NOT NULL AND parent_map_id != ?
+    """, (map_id, map_id))
+    parent_ids = {r["parent_map_id"] for r in await c_parents.fetchall()}
+    if m["parent_map_id"] and m["parent_map_id"] != map_id:
+        parent_ids.add(m["parent_map_id"])
+
+    # Obtener nombres de los padres válidos
+    valid_parents = {}
+    for pid in parent_ids:
+        cp = await db.execute("SELECT id, name FROM maps WHERE id = ?", (pid,))
+        p_row = await cp.fetchone()
         if p_row:
-            parent_name = p_row["name"]
-            c_existing = await db.execute("""
-                SELECT id, name, extra_data FROM nodes 
-                WHERE map_id = ? AND (device_type = 'parent_map' OR extra_data LIKE '%"is_parent_shortcut": true%')
-            """, (map_id,))
-            p_nodes = await c_existing.fetchall()
-            if p_nodes:
-                for pn in p_nodes:
-                    extra = json.loads(pn["extra_data"]) if pn["extra_data"] else {}
-                    if extra.get("target_map_id") != parent_id or pn["name"] != f"📁 ⬆ {parent_name}":
-                        extra["target_map_id"] = parent_id
-                        extra["is_parent_shortcut"] = True
-                        extra["parent_map_name"] = parent_name
-                        extra["role"] = "Mapa Superior"
-                        await db.execute("""
-                            UPDATE nodes SET name = ?, site_name = ?, extra_data = ?, updated_at = CURRENT_TIMESTAMP
-                            WHERE id = ?
-                        """, (f"📁 ⬆ {parent_name}", parent_name, json.dumps(extra), pn["id"]))
-            else:
-                pnode_id = f"node-{uuid.uuid4().hex[:8]}"
-                p_extra = json.dumps({
-                    "target_map_id": parent_id,
-                    "is_parent_shortcut": True,
-                    "parent_map_name": parent_name,
-                    "role": "Mapa Superior"
-                })
+            valid_parents[pid] = p_row["name"]
+
+    c_existing_p = await db.execute("""
+        SELECT id, name, extra_data FROM nodes 
+        WHERE map_id = ? AND (device_type = 'parent_map' OR extra_data LIKE '%"is_parent_shortcut": true%')
+    """, (map_id,))
+    p_nodes = await c_existing_p.fetchall()
+    covered_parent_ids = set()
+
+    for pn in p_nodes:
+        extra = json.loads(pn["extra_data"]) if pn["extra_data"] else {}
+        t_id = extra.get("target_map_id")
+        if t_id and t_id in valid_parents:
+            covered_parent_ids.add(t_id)
+            p_name = valid_parents[t_id]
+            expected_name = f"📁 ⬆ {p_name}"
+            if pn["name"] != expected_name or extra.get("parent_map_name") != p_name:
+                extra["parent_map_name"] = p_name
+                extra["is_parent_shortcut"] = True
+                extra["role"] = "Mapa Superior"
                 await db.execute("""
-                    INSERT INTO nodes (id, map_id, name, ip, device_type, site_name, x, y, status, extra_data)
-                    VALUES (?, ?, ?, ?, 'parent_map', ?, 80.0, 80.0, 'ok', ?)
-                """, (pnode_id, map_id, f"📁 ⬆ {parent_name}", "", parent_name, p_extra))
-        else:
-            await db.execute("UPDATE maps SET parent_map_id = NULL WHERE id = ?", (map_id,))
-            c_del = await db.execute("""
-                SELECT id FROM nodes 
-                WHERE map_id = ? AND (device_type = 'parent_map' OR extra_data LIKE '%"is_parent_shortcut": true%')
-            """, (map_id,))
-            for d in await c_del.fetchall():
-                await db.execute("DELETE FROM links WHERE source_node_id = ? OR target_node_id = ?", (d["id"], d["id"]))
-                await db.execute("DELETE FROM nodes WHERE id = ?", (d["id"],))
-    else:
-        c_del = await db.execute("""
-            SELECT id FROM nodes 
-            WHERE map_id = ? AND (device_type = 'parent_map' OR extra_data LIKE '%"is_parent_shortcut": true%')
-        """, (map_id,))
-        for d in await c_del.fetchall():
-            await db.execute("DELETE FROM links WHERE source_node_id = ? OR target_node_id = ?", (d["id"], d["id"]))
-            await db.execute("DELETE FROM nodes WHERE id = ?", (d["id"],))
+                    UPDATE nodes SET name = ?, site_name = ?, extra_data = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                """, (expected_name, p_name, json.dumps(extra), pn["id"]))
+        elif t_id and not t_id in valid_parents:
+            # Solo eliminar si no tiene enlaces conectados
+            c_links = await db.execute("SELECT id FROM links WHERE source_node_id = ? OR target_node_id = ?", (pn["id"], pn["id"]))
+            if not await c_links.fetchone():
+                await db.execute("DELETE FROM nodes WHERE id = ?", (pn["id"],))
+
+    # Crear portales faltantes para padres no cubiertos
+    uncovered_parents = [pid for pid in valid_parents if pid not in covered_parent_ids]
+    for idx, pid in enumerate(uncovered_parents):
+        p_name = valid_parents[pid]
+        pnode_id = f"node-{uuid.uuid4().hex[:8]}"
+        p_extra = json.dumps({
+            "target_map_id": pid,
+            "is_parent_shortcut": True,
+            "parent_map_name": p_name,
+            "role": "Mapa Superior"
+        })
+        py = 80.0 + (idx * 90.0)
+        await db.execute("""
+            INSERT INTO nodes (id, map_id, name, ip, device_type, site_name, x, y, status, extra_data)
+            VALUES (?, ?, ?, '', 'parent_map', ?, 80.0, ?, 'ok', ?)
+        """, (pnode_id, map_id, f"📁 ⬆ {p_name}", p_name, py, p_extra))
 
     # --- 2. Sincronizar Nodos de Submapas Hijos ---
-    # Considera tanto mapas con parent_map_id como accesos explícitos en map_hierarchy
     c_children = await db.execute("""
         SELECT DISTINCT m.id,
                COALESCE(h.alias, m.name) as name,
@@ -513,10 +645,28 @@ async def ensure_map_navigation_nodes(db, map_id: str):
                     UPDATE nodes SET name = ?, site_name = ?, extra_data = ?, updated_at = CURRENT_TIMESTAMP
                     WHERE id = ?
                 """, (expected_name, cm["description"] or cm["name"], json.dumps(extra), sn["id"]))
-        else:
-            # Submapa desvinculado o inexistente -> eliminar nodo y sus enlaces
-            await db.execute("DELETE FROM links WHERE source_node_id = ? OR target_node_id = ?", (sn["id"], sn["id"]))
-            await db.execute("DELETE FROM nodes WHERE id = ?", (sn["id"],))
+        elif t_id:
+            # default-map nunca es un submapa hijo de otro mapa
+            if t_id == "default-map":
+                c_links = await db.execute("SELECT id FROM links WHERE source_node_id = ? OR target_node_id = ?", (sn["id"], sn["id"]))
+                if not await c_links.fetchone():
+                    await db.execute("DELETE FROM nodes WHERE id = ?", (sn["id"],))
+                continue
+
+            # Verificar si apunta a un mapa válido en maps
+            c_vm = await db.execute("SELECT id, name, description FROM maps WHERE id = ?", (t_id,))
+            vm = await c_vm.fetchone()
+            if vm:
+                covered_child_ids.add(t_id)
+                # Registrar el acceso en map_hierarchy para mantener la consistencia
+                c_he = await db.execute("SELECT id FROM map_hierarchy WHERE parent_map_id = ? AND child_map_id = ?", (map_id, t_id))
+                if not await c_he.fetchone():
+                    await db.execute("INSERT INTO map_hierarchy (id, parent_map_id, child_map_id, is_primary) VALUES (?, ?, ?, 0)", (f"hier-{uuid.uuid4().hex[:8]}", map_id, t_id))
+            else:
+                # Mapa inexistente -> solo eliminar si no tiene enlaces
+                c_links = await db.execute("SELECT id FROM links WHERE source_node_id = ? OR target_node_id = ?", (sn["id"], sn["id"]))
+                if not await c_links.fetchone():
+                    await db.execute("DELETE FROM nodes WHERE id = ?", (sn["id"],))
 
     uncovered_children = [cm for cm in child_maps if cm["id"] not in covered_child_ids]
     if uncovered_children:
@@ -616,6 +766,7 @@ async def get_map_detail(map_id: str, user: Dict[str, Any] = Depends(get_current
             position=m["position"] if "position" in keys and m["position"] is not None else 0,
             netbox_site_id=m["netbox_site_id"] if "netbox_site_id" in keys else None,
             site_name=m["site_name"] if "site_name" in keys else None,
+            is_site_retired=inventory_service.is_site_retired(m["netbox_site_id"] if "netbox_site_id" in keys else None),
             created_at=str(m["created_at"]),
             updated_at=str(m["updated_at"]),
             nodes_count=len(nodes),
@@ -717,6 +868,7 @@ async def create_map(map_data: MapCreate, user: Dict[str, Any] = Depends(get_cur
             position=m["position"] if "position" in keys and m["position"] is not None else 0,
             netbox_site_id=m["netbox_site_id"] if "netbox_site_id" in keys else None,
             site_name=m["site_name"] if "site_name" in keys else None,
+            is_site_retired=inventory_service.is_site_retired(m["netbox_site_id"] if "netbox_site_id" in keys else None),
             created_at=str(m["created_at"]),
             updated_at=str(m["updated_at"]),
             nodes_count=m["nodes_count"] or 0,
@@ -1479,10 +1631,11 @@ async def sync_single_node_from_netbox(node_id: str, user: Dict[str, Any] = Depe
 
         did = nr["device_id"]
         matched_dev = None
+        synced_ifaces = []
         if did:
             matched_dev = await inventory_service.get_device_by_id(did, force_live=True)
             # Sincronizar interfaces y purgar huérfanas en NetBox
-            await inventory_service.get_device_interfaces(did)
+            synced_ifaces = await inventory_service.get_device_interfaces(did)
         elif nr["name"]:
             if not inventory_service._devices_cache:
                 await inventory_service.refresh_cache(force=True)
@@ -1490,7 +1643,7 @@ async def sync_single_node_from_netbox(node_id: str, user: Dict[str, Any] = Depe
                 if d["name"].strip().lower() == nr["name"].strip().lower():
                     matched_dev = await inventory_service.get_device_by_id(d["id"], force_live=True)
                     did = d["id"]
-                    await inventory_service.get_device_interfaces(did)
+                    synced_ifaces = await inventory_service.get_device_interfaces(did)
                     break
 
         if not matched_dev:
@@ -1514,6 +1667,11 @@ async def sync_single_node_from_netbox(node_id: str, user: Dict[str, Any] = Depe
             edata.pop("azimuth", None)
             edata.pop("tilt", None)
             edata.pop("height", None)
+
+        if "switch" in role_lower and synced_ifaces:
+            edata["switch_ports"] = inventory_service.build_switch_ports_from_interfaces(
+                synced_ifaces, edata.get("model", "")
+            )
 
         new_device_type = matched_dev.get("role") or nr["device_type"]
         new_name = matched_dev.get("name") or nr["name"]

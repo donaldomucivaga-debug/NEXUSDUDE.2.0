@@ -171,6 +171,33 @@ body {
   gap: 8px;
 }
 
+/* Control de actualización cronológica del lienzo */
+.poll-interval-control {
+  background-color: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 5px 9px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  user-select: none;
+  transition: all 0.15s ease;
+}
+
+.poll-interval-control:hover {
+  border-color: rgba(56, 189, 248, 0.45);
+}
+
+.poll-interval-control #canvas-last-sync-time {
+  font-size: 0.74rem;
+  font-family: monospace;
+  color: #38bdf8;
+  font-weight: 700;
+}
+
 .btn {
   background-color: var(--bg-tertiary);
   color: var(--text-primary);
@@ -570,7 +597,7 @@ body.sidebar-resizing-active * {
 .maps-tree-container {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 3px;
   overflow-y: auto;
   max-height: calc(100vh - 240px);
   padding-right: 2px;
@@ -585,11 +612,12 @@ body.sidebar-resizing-active * {
 .map-item-card {
   background: var(--bg-card);
   border: 1px solid var(--border-color);
-  border-radius: 8px;
-  padding: 10px 12px;
+  border-radius: 6px;
+  padding: 5px 8px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  justify-content: center;
+  min-height: 28px;
   transition: all 0.2s ease;
   position: relative;
 }
@@ -597,7 +625,7 @@ body.sidebar-resizing-active * {
 .map-item-card:hover {
   border-color: var(--accent);
   background-color: rgba(14, 165, 233, 0.04);
-  box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
 }
 
 .map-item-card.is-submap {
@@ -608,7 +636,7 @@ body.sidebar-resizing-active * {
 .map-item-card.active {
   border-color: var(--accent) !important;
   background-color: rgba(14, 165, 233, 0.12) !important;
-  box-shadow: 0 0 14px rgba(14, 165, 233, 0.25);
+  box-shadow: 0 0 10px rgba(14, 165, 233, 0.25);
 }
 
 .map-card-head {
@@ -616,13 +644,15 @@ body.sidebar-resizing-active * {
   justify-content: space-between;
   align-items: center;
   gap: 6px;
+  width: 100%;
 }
 
 .map-card-title-group {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   flex: 1;
+  min-width: 0;
   overflow: hidden;
   cursor: pointer;
 }
@@ -631,13 +661,13 @@ body.sidebar-resizing-active * {
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid rgba(255, 255, 255, 0.14);
   color: #38bdf8;
-  width: 22px;
-  height: 22px;
-  border-radius: 4px;
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 0.72rem;
+  font-size: 0.65rem;
   cursor: pointer;
   flex-shrink: 0;
   transition: all 0.15s ease;
@@ -686,13 +716,13 @@ body.sidebar-resizing-active * {
 }
 
 .map-active-badge {
-  font-size: 0.65rem;
+  font-size: 0.62rem;
   font-weight: 800;
   background: rgba(16, 185, 129, 0.2);
   color: var(--success);
   border: 1px solid rgba(16, 185, 129, 0.4);
-  padding: 2px 6px;
-  border-radius: 10px;
+  padding: 1px 5px;
+  border-radius: 6px;
   letter-spacing: 0.5px;
   text-transform: uppercase;
   flex-shrink: 0;
@@ -762,13 +792,13 @@ body.sidebar-resizing-active * {
 }
 
 .map-children-container {
-  margin-left: 14px;
-  padding-left: 8px;
+  margin-left: 12px;
+  padding-left: 6px;
   border-left: 2px solid rgba(168, 85, 247, 0.3);
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin-top: 6px;
+  gap: 3px;
+  margin-top: 3px;
 }
 
 .map-card-site-tag {
@@ -821,10 +851,10 @@ body.sidebar-resizing-active * {
 .all-maps-scroll-container {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 3px;
   overflow-y: auto;
   max-height: calc(100vh - 240px);
-  padding: 6px 10px;
+  padding-right: 2px;
 }
 
 /* Drag & Drop Reordering for Maps & Submaps */
@@ -854,73 +884,150 @@ body.sidebar-resizing-active * {
   opacity: 0.4;
 }
 
-.map-node-wrapper.map-dragging .map-item-card {
-  border: 1px dashed #a855f7 !important;
-  background: rgba(168, 85, 247, 0.05) !important;
+/* Windows Explorer Drag & Drop para Jerarquía de Mapas */
+body.is-dragging-map .map-item-card * {
+  pointer-events: none !important;
 }
 
+.map-node-wrapper.map-dragging {
+  opacity: 0.45;
+}
+
+.map-node-wrapper.map-dragging .map-item-card {
+  border: 1.5px dashed #38bdf8 !important;
+  background: rgba(56, 189, 248, 0.08) !important;
+}
+
+/* 1. Mover adentro de la carpeta (Target Inside) */
+.map-item-card.drag-target-inside {
+  border: 2px solid #38bdf8 !important;
+  background: rgba(56, 189, 248, 0.22) !important;
+  box-shadow: 0 0 16px rgba(56, 189, 248, 0.6) !important;
+  position: relative;
+  transform: scale(1.015);
+}
+.map-item-card.drag-target-inside::after {
+  content: "📁 Mover adentro";
+  position: absolute;
+  top: -10px;
+  right: 8px;
+  background: #0284c7;
+  color: #ffffff;
+  font-size: 0.62rem;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: 4px;
+  z-index: 25;
+  pointer-events: none;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+}
+
+/* 2. Reordenar antes o después */
 .map-item-card.drag-target-top {
   border-top: 3px solid #38bdf8 !important;
-  box-shadow: 0 -4px 14px rgba(56, 189, 248, 0.7) !important;
+  box-shadow: 0 -4px 12px rgba(56, 189, 248, 0.6) !important;
   position: relative;
 }
 .map-item-card.drag-target-top::before {
-  content: "⬆ Insertar antes";
+  content: "⬆ Colocar antes";
   position: absolute;
   top: -12px;
-  right: 10px;
+  right: 8px;
   background: #0284c7;
   color: #ffffff;
   font-size: 0.60rem;
   font-weight: 700;
   padding: 1px 6px;
   border-radius: 4px;
-  z-index: 20;
+  z-index: 25;
   pointer-events: none;
   box-shadow: 0 2px 6px rgba(0,0,0,0.4);
 }
 
 .map-item-card.drag-target-bottom {
   border-bottom: 3px solid #38bdf8 !important;
-  box-shadow: 0 4px 14px rgba(56, 189, 248, 0.7) !important;
+  box-shadow: 0 4px 12px rgba(56, 189, 248, 0.6) !important;
   position: relative;
 }
 .map-item-card.drag-target-bottom::after {
-  content: "⬇ Insertar después";
+  content: "⬇ Colocar después";
   position: absolute;
   bottom: -12px;
-  right: 10px;
+  right: 8px;
   background: #0284c7;
   color: #ffffff;
   font-size: 0.60rem;
   font-weight: 700;
   padding: 1px 6px;
   border-radius: 4px;
-  z-index: 20;
+  z-index: 25;
   pointer-events: none;
   box-shadow: 0 2px 6px rgba(0,0,0,0.4);
 }
 
-.map-item-card.drag-target-inside {
-  border: 2px dashed #a855f7 !important;
-  background: rgba(168, 85, 247, 0.16) !important;
-  box-shadow: 0 0 16px rgba(168, 85, 247, 0.5) !important;
+/* 3. Drop Inválido (Anti-ciclo) */
+.map-item-card.drag-target-invalid {
+  border: 2px dashed #ef4444 !important;
+  background: rgba(239, 68, 68, 0.15) !important;
+  box-shadow: 0 0 12px rgba(239, 68, 68, 0.4) !important;
   position: relative;
 }
-.map-item-card.drag-target-inside::after {
-  content: "📁 Asignar como subordinado (Hijo)";
+.map-item-card.drag-target-invalid::after {
+  content: "🚫 No permitido (Ciclo)";
   position: absolute;
   top: -10px;
-  right: 10px;
-  background: #9333ea;
+  right: 8px;
+  background: #dc2626;
   color: #ffffff;
   font-size: 0.60rem;
   font-weight: 700;
   padding: 1px 7px;
   border-radius: 4px;
-  z-index: 20;
+  z-index: 25;
   pointer-events: none;
-  box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+}
+
+/* Badge de Sitio Retirado en NetBox */
+.map-retired-badge {
+  font-size: 0.58rem;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(239, 68, 68, 0.2);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 6px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* Zona de soltar a Nivel Raíz */
+.map-root-dropzone {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 7px 10px;
+  margin: 6px 0 8px 0;
+  background: rgba(16, 185, 129, 0.08);
+  border: 1.5px dashed rgba(16, 185, 129, 0.4);
+  border-radius: 6px;
+  color: #34d399;
+  font-size: 0.74rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  user-select: none;
+}
+
+.map-root-dropzone.drag-hover {
+  background: rgba(16, 185, 129, 0.25) !important;
+  border-color: #10b981 !important;
+  box-shadow: 0 0 14px rgba(16, 185, 129, 0.5) !important;
+  transform: scale(1.02);
 }
 
 /* Property Inspector / Device Info Viewer */
@@ -1067,22 +1174,104 @@ body.sidebar-resizing-active * {
   box-shadow: 0 0 12px rgba(56, 189, 248, 0.35);
 }
 
-.netbox-sync-notice {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  background: rgba(14, 165, 233, 0.06);
-  border: 1px solid rgba(14, 165, 233, 0.2);
-  border-radius: 6px;
+.node-connections-compact-box {
+  background: rgba(14, 165, 233, 0.05);
+  border: 1px solid rgba(14, 165, 233, 0.22);
+  border-radius: 7px;
   padding: 8px 10px;
   font-size: 0.72rem;
-  color: #94a3b8;
-  line-height: 1.4;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
-.netbox-sync-notice i {
-  color: var(--accent);
-  margin-top: 2px;
+.connections-box-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid rgba(14, 165, 233, 0.12);
+  padding-bottom: 4px;
+}
+
+.connections-box-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.node-conn-item {
+  background: rgba(15, 23, 42, 0.65);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 5px;
+  padding: 4px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.node-conn-item:hover {
+  background: rgba(56, 189, 248, 0.14);
+  border-color: rgba(56, 189, 248, 0.4);
+}
+
+.node-conn-row-main {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.68rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-conn-badge-port {
+  font-family: monospace;
+  font-weight: 700;
+  font-size: 0.62rem;
+  padding: 1px 5px;
+  border-radius: 3px;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  max-width: 95px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-conn-badge-port.local {
+  background: rgba(56, 189, 248, 0.15);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.3);
+}
+
+.node-conn-badge-port.remote {
+  background: rgba(168, 85, 247, 0.15);
+  color: #c084fc;
+  border: 1px solid rgba(168, 85, 247, 0.3);
+}
+
+.node-conn-peer-name {
+  color: #f1f5f9;
+  font-weight: 600;
+  font-size: 0.68rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.node-conn-desc {
+  font-size: 0.60rem;
+  color: #94a3b8;
+  padding-left: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .btn-netbox {
@@ -1671,7 +1860,51 @@ body.sidebar-resizing-active * {
 }
 
 .modal-spectrum-large .spectrum-ruler-canvas-area {
-  height: 540px;
+  min-height: 180px;
+}
+
+/* Badges compactos y tabla del Analizador de Espectro */
+.spectrum-stat-badge-mini {
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(56, 189, 248, 0.12);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  font-size: 0.72rem;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.badge-role {
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  display: inline-block;
+}
+
+.badge-role.badge-ap {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.badge-role.badge-cpe {
+  background: rgba(56, 189, 248, 0.15);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.3);
+}
+
+.spectrum-table tbody tr:hover {
+  background: rgba(30, 41, 59, 0.8) !important;
+}
+
+.spectrum-table-row.row-selected {
+  background: rgba(15, 23, 42, 0.4);
 }
 
 /* ==========================================================================
@@ -1728,6 +1961,12 @@ body.sidebar-resizing-active * {
 .dropdown-item:hover {
   background-color: var(--bg-tertiary);
   color: var(--accent);
+}
+
+.dropdown-item.btn-active {
+  background-color: rgba(14, 165, 233, 0.15) !important;
+  color: #38bdf8 !important;
+  font-weight: 700;
 }
 
 .dropdown-header {

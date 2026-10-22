@@ -145,6 +145,7 @@ class MapBase(BaseModel):
     netbox_site_id: Optional[int] = None
     site_name: Optional[str] = None
     access_count: Optional[int] = 1
+    is_site_retired: Optional[bool] = False
 
 class MapCreate(MapBase):
     id: Optional[str] = None
@@ -168,6 +169,10 @@ class MapOrderItem(BaseModel):
 
 class MapReorderRequest(BaseModel):
     items: List[MapOrderItem]
+
+class MapMoveRequest(BaseModel):
+    target_parent_id: Optional[str] = None
+    position: Optional[int] = 0
 
 class HierarchyItem(BaseModel):
     id: str
