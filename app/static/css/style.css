@@ -620,6 +620,16 @@ body.sidebar-resizing-active * {
   min-height: 28px;
   transition: all 0.2s ease;
   position: relative;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.map-item-card[draggable="true"] {
+  cursor: grab;
+}
+
+.map-item-card[draggable="true"]:active {
+  cursor: grabbing;
 }
 
 .map-item-card:hover {
@@ -701,6 +711,8 @@ body.sidebar-resizing-active * {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .map-child-count-pill {

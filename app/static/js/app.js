@@ -7807,7 +7807,6 @@ async function refreshMapsTabList(filterText = '') {
     const wrapper = document.createElement('div');
     wrapper.className = 'map-node-wrapper';
     wrapper.dataset.mapId = mapObj.id;
-    wrapper.draggable = true;
 
     const children = (childrenMap.get(mapObj.id) || []).filter(c => visibleMapIds.has(c.id));
     const hasChildren = children.length > 0;
@@ -7818,6 +7817,7 @@ async function refreshMapsTabList(filterText = '') {
 
     const card = document.createElement('div');
     card.className = `map-item-card ${isSubmap ? 'is-submap' : ''} ${isActive ? 'active' : ''}`;
+    card.draggable = !isDefault;
 
     card.innerHTML = `
       <div class="map-card-head">
@@ -7898,48 +7898,50 @@ async function refreshMapsTabList(filterText = '') {
     });
 
     // ─── Drag & Drop Eventos para reordenar y mover (Estilo Windows Explorer) ───
-    wrapper.addEventListener('dragstart', (e) => {
-      // Bloquear arrastre si el clic fue en el caret o si es el mapa raíz principal
-      if (e.target.closest('.map-toggle-caret') || mapObj.id === 'default-map') {
-        e.preventDefault();
-        return;
-      }
+    if (!isDefault) {
+      card.addEventListener('dragstart', (e) => {
+        // Bloquear arrastre si el clic fue en el caret
+        if (e.target.closest('.map-toggle-caret')) {
+          e.preventDefault();
+          return;
+        }
 
-      // CRUCIAL: Detener propagación para que los contenedores wrapper padre no capturen ni sobreescriban el arrastre
-      e.stopPropagation();
+        // CRUCIAL: Detener propagación para que los contenedores padre no capturen ni sobreescriban el arrastre
+        e.stopPropagation();
 
-      draggedMapNode = wrapper;
-      draggedMapData = mapObj;
-      e.dataTransfer.effectAllowed = 'all';
-      e.dataTransfer.setData('text/plain', mapObj.id);
-      document.body.classList.add('is-dragging-map');
-      setTimeout(() => wrapper.classList.add('map-dragging'), 0);
+        draggedMapNode = wrapper;
+        draggedMapData = mapObj;
+        e.dataTransfer.effectAllowed = 'all';
+        e.dataTransfer.setData('text/plain', mapObj.id);
+        document.body.classList.add('is-dragging-map');
+        setTimeout(() => wrapper.classList.add('map-dragging'), 0);
 
-      // Mostrar zona de soltar a Nivel Raíz solo si el mapa tiene un padre o es submapa
-      const rootDropzone = document.getElementById('map-root-dropzone');
-      const isAlreadyRoot = !mapObj.parent_map_id || mapObj.parent_map_id === 'default-map';
-      if (rootDropzone && !isAlreadyRoot) {
-        rootDropzone.style.display = 'flex';
-      }
-    });
-
-    wrapper.addEventListener('dragend', (e) => {
-      e.stopPropagation();
-      wrapper.classList.remove('map-dragging');
-      document.body.classList.remove('is-dragging-map');
-      stopTreeAutoScroll();
-      clearHoverTimer();
-      document.querySelectorAll('.map-item-card').forEach(c => {
-        c.classList.remove('drag-target-top', 'drag-target-bottom', 'drag-target-inside', 'drag-target-invalid');
+        // Mostrar zona de soltar a Nivel Raíz solo si el mapa tiene un padre o es submapa
+        const rootDropzone = document.getElementById('map-root-dropzone');
+        const isAlreadyRoot = !mapObj.parent_map_id || mapObj.parent_map_id === 'default-map';
+        if (rootDropzone && !isAlreadyRoot) {
+          rootDropzone.style.display = 'flex';
+        }
       });
-      const rootDropzone = document.getElementById('map-root-dropzone');
-      if (rootDropzone) {
-        rootDropzone.style.display = 'none';
-        rootDropzone.classList.remove('drag-hover');
-      }
-      draggedMapNode = null;
-      draggedMapData = null;
-    });
+
+      card.addEventListener('dragend', (e) => {
+        e.stopPropagation();
+        wrapper.classList.remove('map-dragging');
+        document.body.classList.remove('is-dragging-map');
+        stopTreeAutoScroll();
+        clearHoverTimer();
+        document.querySelectorAll('.map-item-card').forEach(c => {
+          c.classList.remove('drag-target-top', 'drag-target-bottom', 'drag-target-inside', 'drag-target-invalid');
+        });
+        const rootDropzone = document.getElementById('map-root-dropzone');
+        if (rootDropzone) {
+          rootDropzone.style.display = 'none';
+          rootDropzone.classList.remove('drag-hover');
+        }
+        draggedMapNode = null;
+        draggedMapData = null;
+      });
+    }
 
     card.addEventListener('dragover', (e) => {
       if (!draggedMapNode || !draggedMapData) return;
