@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>NexusDude - The Modern Network Dude</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=5.8.8">
+  <link rel="stylesheet" href="/static/css/style.css?v=5.8.9">
   <link rel="stylesheet" href="/static/css/docs.css?v=5.5.0">
   <!-- FontAwesome Icons -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -540,6 +540,9 @@
                 <div style="display: flex; align-items: center; gap: 6px;">
                   <i class="fas fa-plug" style="color: #38bdf8; font-size: 0.70rem;"></i>
                   <span style="font-weight: 700; color: #cbd5e1; font-size: 0.70rem;">Conexiones de Interfaz</span>
+                  <button type="button" id="btn-open-conn-tree" class="btn-tree-graph" title="Abrir diagrama de árbol de conexiones (1 generación hacia arriba y hacia abajo)">
+                    <i class="fas fa-sitemap"></i> Diagrama
+                  </button>
                 </div>
                 <span id="prop-node-conn-count" style="font-size: 0.62rem; color: #38bdf8; background: rgba(56, 189, 248, 0.15); padding: 1px 5px; border-radius: 4px; font-weight: 700;">0</span>
               </div>
@@ -981,6 +984,44 @@
         <button type="button" class="btn btn-primary" id="btn-confirm-insert-submap-nav" style="background: #7c3aed; border-color: #6d28d9;">
           <i class="fas fa-folder-symlink"></i> Añadir Navegación
         </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal Diagrama de Árbol de Conexiones (1 Generación) -->
+  <div class="modal-overlay" id="modal-conn-tree" style="display: none;">
+    <div class="modal-card modal-conn-tree-card">
+      <div class="modal-header">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <div class="conn-tree-header-icon">
+            <i class="fas fa-sitemap"></i>
+          </div>
+          <div>
+            <h3 class="modal-title" style="font-size: 1.05rem; margin: 0; color: #f8fafc; display: flex; align-items: center; gap: 8px;">
+              <span>Árbol de Conexiones</span>
+              <span class="badge" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; font-size: 0.65rem; border: 1px solid rgba(56, 189, 248, 0.3);">1 Generación</span>
+            </h3>
+            <div id="conn-tree-subtitle" style="font-size: 0.70rem; color: #94a3b8; margin-top: 2px;">
+              Relaciones de topología hacia arriba (uplink) y hacia abajo (downlink)
+            </div>
+          </div>
+        </div>
+        <button class="modal-close" id="btn-close-conn-tree" title="Cerrar">&times;</button>
+      </div>
+
+      <div class="modal-body" id="modal-conn-tree-body" style="padding: 16px 20px; overflow-y: auto; max-height: calc(85vh - 120px);">
+        <!-- Contenido generado dinámicamente -->
+        <div id="conn-tree-diagram-container"></div>
+      </div>
+
+      <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center; padding: 10px 18px; border-top: 1px solid var(--border-color); background: rgba(15, 23, 42, 0.6);">
+        <div style="display: flex; align-items: center; gap: 12px; font-size: 0.68rem; color: #94a3b8; flex-wrap: wrap;">
+          <span style="display: inline-flex; align-items: center; gap: 4px;"><i class="fas fa-ethernet" style="color: #38bdf8;"></i> Cat6</span>
+          <span style="display: inline-flex; align-items: center; gap: 4px;"><i class="fas fa-bolt" style="color: #c084fc;"></i> Fibra</span>
+          <span style="display: inline-flex; align-items: center; gap: 4px;"><i class="fas fa-broadcast-tower" style="color: #fbbf24;"></i> Radio</span>
+          <span style="display: inline-flex; align-items: center; gap: 4px;"><i class="fas fa-folder-symlink" style="color: #a855f7;"></i> Submapa</span>
+        </div>
+        <button type="button" class="btn" id="btn-done-conn-tree">Cerrar</button>
       </div>
     </div>
   </div>
@@ -2200,9 +2241,9 @@
   </div>
 
   <!-- Scripts -->
-  <script src="/static/js/api.js?v=5.8.8"></script>
-  <script src="/static/js/app.js?v=5.8.8"></script>
-  <script src="/static/js/docs.js?v=5.8.8"></script>
+  <script src="/static/js/api.js?v=5.8.9"></script>
+  <script src="/static/js/app.js?v=5.8.9"></script>
+  <script src="/static/js/docs.js?v=5.8.9"></script>
 </body>
 </html>
 

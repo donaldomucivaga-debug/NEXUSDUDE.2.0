@@ -5997,11 +5997,16 @@ async function openFtthBranchEditorModal(node) {
 function renderNodeConnectionsSummary(node) {
   const container = document.getElementById('prop-node-connections-list');
   const countBadge = document.getElementById('prop-node-conn-count');
+  const btnTree = document.getElementById('btn-open-conn-tree');
   if (!container) return;
 
   if (!node || !currentMap) {
     container.innerHTML = '<div style="color: #64748b; font-size: 0.68rem; font-style: italic; padding: 4px 0;"><i class="fas fa-info-circle"></i> Ningún dispositivo seleccionado.</div>';
     if (countBadge) countBadge.textContent = '0';
+    if (btnTree) {
+      btnTree.style.opacity = '0.5';
+      btnTree.title = 'Selecciona un equipo para ver su diagrama de árbol';
+    }
     return;
   }
 
@@ -6009,6 +6014,10 @@ function renderNodeConnectionsSummary(node) {
   const attached = allLinks.filter(l => l.source_node_id === node.id || l.target_node_id === node.id);
 
   if (countBadge) countBadge.textContent = `${attached.length}`;
+  if (btnTree) {
+    btnTree.style.opacity = '1';
+    btnTree.title = `Abrir diagrama de conexiones de ${node.name} (${attached.length} conexiones)`;
+  }
 
   if (attached.length === 0) {
     container.innerHTML = '<div style="color: #64748b; font-size: 0.68rem; font-style: italic; padding: 4px 0;"><i class="fas fa-info-circle"></i> Sin conexiones de interfaz en este mapa.</div>';
@@ -6092,6 +6101,400 @@ function renderNodeConnectionsSummary(node) {
       if (l) selectLink(l);
     });
   });
+}
+
+// ─── Diagrama de Árbol Gráfico de Conexiones (1 Generación: Upstream / Downstream) ───
+function getNodeHierarchyRank(n) {
+  if (!n) return 2;
+  const dt = (n.device_type || '').toLowerCase();
+  const name = (n.name || '').toUpperCase();
+  const role = ((n.extra_data && n.extra_data.role) || '').toLowerCase();
+
+  // Nivel 5: Portales padre / acceso superior
+  if (dt === 'parent_map' || n.extra_data?.is_parent_shortcut) return 5;
+  // Nivel 0: Submapas / accesos hijos
+  if (dt === 'submap' || n.extra_data?.is_submap_shortcut) return 0;
+  // Nivel 1: CPEs, terminales, ramas FTTH
+  if (dt === 'ftth_branch' || dt === 'cpe' || dt === 'station' || name.startsWith('CPE_') || name.startsWith('STA_') || name.startsWith('HP_')) return 1;
+
+  // Nivel 4: Core Routers, Gateways, Concentradores
+  if (dt.includes('router') || name.startsWith('RB_') || name.startsWith('CCR') || name.startsWith('HEX') || name.includes('GATEWAY') || role.includes('router') || role.includes('core')) {
+    return 4;
+  }
+  // Nivel 3: Switches, OLTs
+  if (dt.includes('switch') || dt.includes('olt') || name.startsWith('SW_') || name.includes('SWITCH') || name.includes('OLT') || role.includes('switch')) {
+    return 3;
+  }
+  // Nivel 2: Access Points, Sectores, Antenas Base
+  if (dt.includes('point') || dt.includes('sector') || dt.includes('ap') || name.startsWith('AP_') || name.startsWith('SECTOR_') || name.startsWith('AIRMAX_') || role.includes('access point')) {
+    return 2;
+  }
+
+  return 2;
+}
+
+function classifyConnDirection(centerNode, link, peerNode) {
+  if (peerNode?.device_type === 'parent_map' || peerNode?.extra_data?.is_parent_shortcut) return 'upstream';
+  if (peerNode?.device_type === 'submap' || link?.extra_data?.is_submap_link) return 'downstream';
+  if (centerNode?.device_type === 'parent_map') return 'downstream';
+  if (centerNode?.device_type === 'submap') return 'upstream';
+
+  const centerRank = getNodeHierarchyRank(centerNode);
+  const peerRank = getNodeHierarchyRank(peerNode);
+
+  if (peerRank > centerRank) return 'upstream';
+  if (peerRank < centerRank) return 'downstream';
+
+  return (link.target_node_id === centerNode.id) ? 'upstream' : 'downstream';
+}
+
+function getDeviceFaIcon(deviceType, name) {
+  const dt = (deviceType || '').toLowerCase();
+  const n = (name || '').toUpperCase();
+  if (dt === 'parent_map') return 'fa-arrow-circle-up';
+  if (dt === 'submap') return 'fa-folder-symlink';
+  if (dt === 'note') return 'fa-sticky-note';
+  if (dt === 'ftth_branch') return 'fa-network-wired';
+  if (dt.includes('router') || n.startsWith('RB_') || n.startsWith('HEX') || n.startsWith('CCR') || n.includes('GATEWAY')) return 'fa-server';
+  if (dt.includes('switch') || n.startsWith('SW_') || n.includes('SWITCH')) return 'fa-random';
+  if (dt.includes('olt') || n.includes('OLT')) return 'fa-microchip';
+  if (dt.includes('point') || dt.includes('sector') || n.startsWith('AP_') || n.startsWith('SECTOR_')) return 'fa-broadcast-tower';
+  if (dt.includes('cpe') || dt.includes('station') || n.startsWith('CPE_') || n.startsWith('STA_') || n.startsWith('HP_')) return 'fa-satellite-dish';
+  return 'fa-hdd';
+}
+
+function renderConnTreeCard(item, tier) {
+  const safeStr = (s) => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  
+  let statusBg = '#64748b';
+  if (item.status === 'online') statusBg = '#10b981';
+  else if (item.status === 'offline') statusBg = '#ef4444';
+  else if (item.status === 'warning') statusBg = '#f59e0b';
+  else if (item.isSubmap) statusBg = '#c084fc';
+
+  const cardIcon = item.isSubmap ? 'fa-folder-symlink' : (item.isParentMap ? 'fa-arrow-circle-up' : getDeviceFaIcon(item.role, item.peerName));
+  const iconColor = item.isSubmap ? '#c084fc' : (item.isParentMap ? '#38bdf8' : '#e2e8f0');
+
+  return `
+    <div class="conn-tree-card" data-peer-id="${item.peerId || ''}" data-target-map-id="${item.targetMapId || ''}" data-link-id="${item.link.id}">
+      <div class="conn-tree-card-top">
+        <div class="conn-tree-card-name" title="${safeStr(item.peerName)}">
+          <i class="fas ${cardIcon}" style="color: ${iconColor}; font-size: 0.78rem;"></i>
+          <span>${safeStr(item.peerName)}</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 4px; flex-shrink: 0;">
+          <span style="display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: ${statusBg}; box-shadow: 0 0 5px ${statusBg};" title="Estado: ${item.status}"></span>
+        </div>
+      </div>
+
+      <div class="conn-tree-card-meta">
+        <span style="font-family: monospace; color: #38bdf8;">${safeStr(item.ip)}</span>
+        <span>•</span>
+        <span style="background: rgba(255, 255, 255, 0.06); padding: 1px 5px; border-radius: 3px; font-size: 0.63rem;">${safeStr(item.role)}</span>
+      </div>
+
+      <div class="conn-tree-card-conninfo">
+        <span style="font-family: monospace; color: #cbd5e1; display: inline-flex; align-items: center; gap: 3px;" title="Interfaz Local ➔ Remota">
+          <i class="fas fa-plug" style="color: #64748b; font-size: 0.58rem;"></i>
+          <span style="color: #93c5fd;">${safeStr(item.localIf)}</span>
+          <i class="fas fa-long-arrow-alt-right" style="color: #64748b; font-size: 0.58rem;"></i>
+          <span style="color: #cbd5e1;">${safeStr(item.peerIf || '—')}</span>
+        </span>
+        <span class="badge" style="background: rgba(255, 255, 255, 0.05); color: ${item.mediaColor}; font-size: 0.60rem; border: 1px solid rgba(255, 255, 255, 0.08); display: inline-flex; align-items: center; gap: 3px;">
+          <i class="fas ${item.mediaIcon}" style="font-size: 0.56rem;"></i> ${item.mediaLabel}
+        </span>
+      </div>
+
+      ${item.desc ? `
+        <div style="font-size: 0.62rem; color: #94a3b8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+          <i class="fas fa-info-circle" style="font-size: 0.55rem; color: #64748b;"></i> ${safeStr(item.desc)}
+        </div>
+      ` : ''}
+
+      <div class="conn-tree-card-actions">
+        ${item.peerNode ? `
+          <button type="button" class="btn-tree-card-action btn-tree-focus" title="Cerrar y enfocar este equipo en el mapa">
+            <i class="fas fa-crosshairs"></i> Enfocar
+          </button>
+          <button type="button" class="btn-tree-card-action btn-tree-explore" title="Centrar el árbol en este equipo para ver sus conexiones">
+            <i class="fas fa-sitemap"></i> Explorar
+          </button>
+        ` : ''}
+        ${item.isSubmap && item.targetMapId ? `
+          <button type="button" class="btn-tree-card-action btn-tree-enter-map" style="background: rgba(168, 85, 247, 0.2); border-color: #a855f7; color: #e9d5ff;" title="Ir al mapa de este submapa">
+            <i class="fas fa-folder-open"></i> Entrar
+          </button>
+        ` : ''}
+        ${item.isParentMap && item.targetMapId ? `
+          <button type="button" class="btn-tree-card-action btn-tree-enter-map" style="background: rgba(56, 189, 248, 0.2); border-color: #38bdf8; color: #bae6fd;" title="Ir al mapa superior">
+            <i class="fas fa-arrow-up"></i> Ir a Superior
+          </button>
+        ` : ''}
+      </div>
+    </div>
+  `;
+}
+
+function attachConnTreeInteractions(modal, nodesDict) {
+  const container = document.getElementById('conn-tree-diagram-container');
+  if (!container) return;
+
+  // 1. Botón "Enfocar" en el lienzo
+  container.querySelectorAll('.btn-tree-focus').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const card = btn.closest('.conn-tree-card');
+      const peerId = card?.dataset?.peerId;
+      if (peerId) {
+        modal.style.display = 'none';
+        focusNodeInMap(peerId);
+      }
+    });
+  });
+
+  // 2. Botón "Explorar Árbol"
+  container.querySelectorAll('.btn-tree-explore').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const card = btn.closest('.conn-tree-card');
+      const peerId = card?.dataset?.peerId;
+      const peerNode = nodesDict.get(peerId);
+      if (peerNode) {
+        openNodeConnectionTree(peerNode);
+      }
+    });
+  });
+
+  // 3. Botón "Entrar al Submapa" o "Ir a Superior"
+  container.querySelectorAll('.btn-tree-enter-map').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const card = btn.closest('.conn-tree-card');
+      const targetMapId = card?.dataset?.targetMapId;
+      if (targetMapId) {
+        modal.style.display = 'none';
+        await loadMap(targetMapId);
+      }
+    });
+  });
+
+  // 4. Clic directo en cualquier parte de la tarjeta
+  container.querySelectorAll('.conn-tree-card').forEach(card => {
+    card.addEventListener('click', (e) => {
+      if (e.target.closest('button')) return;
+      const peerId = card.dataset.peerId;
+      const targetMapId = card.dataset.targetMapId;
+      if (peerId && nodesDict.has(peerId)) {
+        modal.style.display = 'none';
+        focusNodeInMap(peerId);
+      } else if (targetMapId) {
+        modal.style.display = 'none';
+        loadMap(targetMapId);
+      }
+    });
+  });
+}
+
+function openNodeConnectionTree(node) {
+  if (!node || !currentMap) {
+    alert('Por favor selecciona primero un equipo en el lienzo.');
+    return;
+  }
+
+  const modal = document.getElementById('modal-conn-tree');
+  const container = document.getElementById('conn-tree-diagram-container');
+  const subtitleEl = document.getElementById('conn-tree-subtitle');
+  if (!modal || !container) return;
+
+  const safeStr = (s) => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+  if (subtitleEl) {
+    subtitleEl.innerHTML = `Topología de: <strong style="color: #38bdf8;">${safeStr(node.name)}</strong> · IP: <span style="font-family: monospace; color: #a5f3fc;">${safeStr(node.ip || 'Sin IP')}</span> · Sitio: <span style="color: #cbd5e1;">${safeStr(node.site_name || currentMap.name)}</span>`;
+  }
+
+  const allLinks = currentMap.links || [];
+  const attached = allLinks.filter(l => l.source_node_id === node.id || l.target_node_id === node.id);
+  const nodesDict = new Map((currentMap.nodes || []).map(n => [n.id, n]));
+
+  const upstreamItems = [];
+  const downstreamItems = [];
+
+  attached.forEach(link => {
+    const isSrc = (link.source_node_id === node.id);
+    const peerId = isSrc ? link.target_node_id : link.source_node_id;
+    const peerNode = nodesDict.get(peerId);
+    const peerName = peerNode ? peerNode.name : (link.extra_data?.peer_name || link.extra_data?.target_map_name || 'Extremo Remoto');
+
+    const localIf = isSrc 
+      ? (link.source_interface || link.extra_data?.source_interface || link.extra_data?.gpon_port || 'Local')
+      : (link.target_interface || link.extra_data?.target_interface || 'Local');
+
+    const peerIf = isSrc 
+      ? (link.target_interface || link.extra_data?.target_interface || '')
+      : (link.source_interface || link.extra_data?.source_interface || link.extra_data?.gpon_port || '');
+
+    const isFiber = link.cable_type === 'fiber' || link.cable_type === 'fibra' || !!link.extra_data?.gpon_port;
+    const isWireless = link.cable_type === 'wireless' || !!link.netbox_wirelesslink_id || !!link.extra_data?.wireless_link_id;
+
+    let mediaIcon = 'fa-ethernet';
+    let mediaColor = '#38bdf8';
+    let mediaLabel = 'Cat6';
+    if (isFiber) {
+      mediaIcon = 'fa-bolt';
+      mediaColor = '#c084fc';
+      mediaLabel = 'Fibra';
+    } else if (isWireless) {
+      mediaIcon = 'fa-broadcast-tower';
+      mediaColor = '#fbbf24';
+      mediaLabel = 'Radio';
+    }
+
+    const desc = link.description || link.extra_data?.description || link.extra_data?.name || (isWireless ? (link.extra_data?.ssid ? `SSID: ${link.extra_data.ssid}` : '') : '');
+
+    const isSubmap = peerNode?.device_type === 'submap' || link.extra_data?.is_submap_link;
+    const isParentMap = peerNode?.device_type === 'parent_map' || peerNode?.extra_data?.is_parent_shortcut;
+    const targetMapId = peerNode?.extra_data?.target_map_id || peerNode?.extra_data?.submap_id || link.extra_data?.target_map_id;
+
+    const dir = classifyConnDirection(node, link, peerNode);
+
+    const itemData = {
+      link,
+      peerId,
+      peerNode,
+      peerName,
+      localIf,
+      peerIf,
+      mediaIcon,
+      mediaColor,
+      mediaLabel,
+      desc,
+      isSubmap,
+      isParentMap,
+      targetMapId,
+      status: peerNode?.status || (isSubmap ? 'submap' : 'unknown'),
+      role: peerNode?.device_type || (peerNode?.extra_data?.role) || (isSubmap ? 'Submapa' : 'Dispositivo'),
+      ip: peerNode?.ip || '—'
+    };
+
+    if (dir === 'upstream') {
+      upstreamItems.push(itemData);
+    } else {
+      downstreamItems.push(itemData);
+    }
+  });
+
+  // Render HTML
+  let html = `<div class="conn-tree-diagram">`;
+
+  // ── 1. TIER UPSTREAM (HACIA ARRIBA / UPLINK) ──
+  html += `
+    <div class="conn-tree-tier upstream">
+      <div class="conn-tree-tier-header">
+        <span class="conn-tree-tier-title" style="color: #38bdf8;">
+          <i class="fas fa-arrow-up"></i> Hacia Arriba (Uplink / Padres)
+        </span>
+        <span class="badge" style="background: rgba(56, 189, 248, 0.2); color: #38bdf8; font-weight: 700; font-size: 0.65rem;">
+          ${upstreamItems.length} ${upstreamItems.length === 1 ? 'conexión' : 'conexiones'}
+        </span>
+      </div>
+  `;
+
+  if (upstreamItems.length === 0) {
+    html += `
+      <div class="conn-tree-empty-state">
+        <i class="fas fa-level-up-alt" style="margin-right: 5px;"></i> Sin conexiones hacia arriba (Nodo raíz o portal principal del sitio).
+      </div>
+    `;
+  } else {
+    html += `<div class="conn-tree-grid">`;
+    upstreamItems.forEach(item => {
+      html += renderConnTreeCard(item, 'upstream');
+    });
+    html += `</div>`;
+  }
+  html += `</div>`; // fin tier upstream
+
+  // ── Conector de Flujo Arriba ➔ Centro ──
+  html += `
+    <div class="conn-tree-flow-connector">
+      <div class="conn-tree-stem"></div>
+      <div class="conn-tree-arrow-indicator"><i class="fas fa-chevron-down"></i></div>
+    </div>
+  `;
+
+  // ── 2. TIER CENTRAL (EQUIPO SELECCIONADO) ──
+  const centerStatusColor = (node.status === 'online') ? '#10b981' : (node.status === 'offline' ? '#ef4444' : '#f59e0b');
+  const centerIcon = getDeviceFaIcon(node.device_type, node.name);
+
+  html += `
+    <div class="conn-tree-center-node">
+      <div style="display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0;">
+        <div style="width: 44px; height: 44px; border-radius: 10px; background: rgba(56, 189, 248, 0.15); border: 1px solid #38bdf8; display: flex; align-items: center; justify-content: center; font-size: 1.35rem; color: #38bdf8; flex-shrink: 0; box-shadow: 0 0 10px rgba(56, 189, 248, 0.3);">
+          <i class="fas ${centerIcon}"></i>
+        </div>
+        <div style="min-width: 0; flex: 1;">
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: ${centerStatusColor}; box-shadow: 0 0 6px ${centerStatusColor};"></span>
+            <strong style="font-size: 0.95rem; color: #f8fafc; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block;" title="${safeStr(node.name)}">
+              ${safeStr(node.name)}
+            </strong>
+          </div>
+          <div style="font-size: 0.70rem; color: #94a3b8; margin-top: 2px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+            <span style="font-family: monospace; color: #38bdf8;">${safeStr(node.ip || 'Sin IP')}</span>
+            <span>•</span>
+            <span style="background: rgba(255, 255, 255, 0.08); padding: 1px 6px; border-radius: 4px; color: #cbd5e1;">${safeStr(node.device_type || 'Dispositivo')}</span>
+          </div>
+        </div>
+      </div>
+      <div style="text-align: right; flex-shrink: 0; border-left: 1px solid rgba(255, 255, 255, 0.1); padding-left: 14px;">
+        <div style="font-size: 0.60rem; color: #94a3b8; text-transform: uppercase;">Total Conexiones</div>
+        <div style="font-size: 1.15rem; font-weight: 800; color: #38bdf8; font-family: monospace;">${attached.length}</div>
+      </div>
+    </div>
+  `;
+
+  // ── Conector de Flujo Centro ➔ Abajo ──
+  html += `
+    <div class="conn-tree-flow-connector">
+      <div class="conn-tree-stem" style="background: linear-gradient(to bottom, #38bdf8, #a855f7);"></div>
+      <div class="conn-tree-arrow-indicator" style="color: #a855f7;"><i class="fas fa-chevron-down"></i></div>
+    </div>
+  `;
+
+  // ── 3. TIER DOWNSTREAM (HACIA ABAJO / DOWNLINK / HIJOS) ──
+  html += `
+    <div class="conn-tree-tier downstream">
+      <div class="conn-tree-tier-header">
+        <span class="conn-tree-tier-title" style="color: #c084fc;">
+          <i class="fas fa-arrow-down"></i> Hacia Abajo (Downlink / Hijos / Submapas)
+        </span>
+        <span class="badge" style="background: rgba(168, 85, 247, 0.2); color: #c084fc; font-weight: 700; font-size: 0.65rem;">
+          ${downstreamItems.length} ${downstreamItems.length === 1 ? 'conexión' : 'conexiones'}
+        </span>
+      </div>
+  `;
+
+  if (downstreamItems.length === 0) {
+    html += `
+      <div class="conn-tree-empty-state">
+        <i class="fas fa-level-down-alt" style="margin-right: 5px;"></i> Sin conexiones hacia abajo (Dispositivo terminal o CPE).
+      </div>
+    `;
+  } else {
+    html += `<div class="conn-tree-grid">`;
+    downstreamItems.forEach(item => {
+      html += renderConnTreeCard(item, 'downstream');
+    });
+    html += `</div>`;
+  }
+  html += `</div>`; // fin tier downstream
+
+  html += `</div>`; // fin conn-tree-diagram
+
+  container.innerHTML = html;
+  modal.style.display = 'flex';
+
+  attachConnTreeInteractions(modal, nodesDict);
 }
 
 function selectNode(node) {
@@ -10728,6 +11131,41 @@ window.addEventListener('DOMContentLoaded', async () => {
   if (btnCancelSubmapNav) {
     btnCancelSubmapNav.addEventListener('click', () => {
       document.getElementById('modal-insert-submap-nav').style.display = 'none';
+    });
+  }
+
+  // ── Modal Diagrama de Árbol de Conexiones (1 Generación) ──
+  const btnOpenConnTree = document.getElementById('btn-open-conn-tree');
+  if (btnOpenConnTree) {
+    btnOpenConnTree.addEventListener('click', () => {
+      if (selectedNode) {
+        openNodeConnectionTree(selectedNode);
+      } else {
+        alert('Por favor selecciona primero un equipo en el lienzo.');
+      }
+    });
+  }
+
+  const btnCloseConnTree = document.getElementById('btn-close-conn-tree');
+  if (btnCloseConnTree) {
+    btnCloseConnTree.addEventListener('click', () => {
+      document.getElementById('modal-conn-tree').style.display = 'none';
+    });
+  }
+
+  const btnDoneConnTree = document.getElementById('btn-done-conn-tree');
+  if (btnDoneConnTree) {
+    btnDoneConnTree.addEventListener('click', () => {
+      document.getElementById('modal-conn-tree').style.display = 'none';
+    });
+  }
+
+  const modalConnTree = document.getElementById('modal-conn-tree');
+  if (modalConnTree) {
+    modalConnTree.addEventListener('click', (e) => {
+      if (e.target === modalConnTree) {
+        modalConnTree.style.display = 'none';
+      }
     });
   }
 
