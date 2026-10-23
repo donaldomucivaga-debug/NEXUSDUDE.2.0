@@ -1992,6 +1992,7 @@ function _renderSwitchNode(node) {
   group.on('mouseleave', () => {
     document.body.style.cursor = 'default';
     _hideSwitchBayTooltip();
+    if (box._linkHoverActive) return;
     if (!box.isHighlighted) {
       if (linkMode && linkSourceNode && linkSourceNode.id === node.id) {
         box.stroke('#10b981');
@@ -2355,6 +2356,7 @@ function renderNode(node) {
   });
   group.on('mouseleave', () => {
     document.body.style.cursor = 'default';
+    if (box._linkHoverActive) return;
     if (!box.isHighlighted) {
       if (linkMode && linkSourceNode && linkSourceNode.id === node.id) {
         box.stroke('#10b981');
@@ -3606,25 +3608,20 @@ function renderLink(link, nodesDict) {
         standardTooltip.style.top = `${evt.clientY + 14}px`;
       }
 
-      if (isDraftOrUndocumented) {
-        const sBadge = document.getElementById('tooltip-link-status-badge');
-        if (sBadge) sBadge.innerHTML = '<span class="status-badge" style="background: rgba(234, 179, 8, 0.2); color: #facc15; border: 1px dashed #eab308;"><i class="fas fa-exclamation-triangle"></i> Sin Doc NetBox</span>';
-        const sName = document.getElementById('tooltip-link-src-name');
-        if (sName) sName.textContent = source.name || 'Nodo A';
-        const tName = document.getElementById('tooltip-link-tgt-name');
-        if (tName) tName.textContent = target.name || 'Nodo B';
-        const srcPortEl = document.getElementById('tooltip-link-src-port');
-        if (srcPortEl) srcPortEl.textContent = '[Pendiente]';
-        const tgtPortEl = document.getElementById('tooltip-link-tgt-port');
-        if (tgtPortEl) tgtPortEl.textContent = '[Pendiente]';
-        const cableEl = document.getElementById('tooltip-link-cable');
-        if (cableEl) cableEl.textContent = 'LÍNEA PUNTEADA (BORRADOR)';
-        const cableBadge = document.getElementById('tooltip-link-cable-badge');
-        if (cableBadge) cableBadge.textContent = 'Clic para abrir NetBox y validar';
-        const telemBox = document.getElementById('tooltip-link-telemetry-box');
-        if (telemBox) telemBox.style.display = 'none';
-        standardTooltip.style.display = 'block';
-        return;
+      const isFiber = link.cable_type === 'fiber' || link.cable_type === 'fibra' || link.cable_type === 'smf' || link.cable_type === 'mmf' || !!link.extra_data?.gpon_port;
+      const isWireless = link.cable_type === 'wireless' || !!link.netbox_wirelesslink_id || !!link.extra_data?.wireless_link_id;
+      const titleEl = document.getElementById('tooltip-link-title');
+      if (titleEl) {
+        if (isWireless) {
+          titleEl.innerHTML = '<i class="fas fa-broadcast-tower" style="color: #fbbf24;"></i> Radioenlace Inalámbrico (NetBox)';
+          titleEl.style.color = '#fbbf24';
+        } else if (isFiber) {
+          titleEl.innerHTML = '<i class="fas fa-bolt" style="color: #c084fc;"></i> Enlace Fibra Óptica (NetBox)';
+          titleEl.style.color = '#c084fc';
+        } else {
+          titleEl.innerHTML = '<i class="fas fa-network-wired" style="color: #38bdf8;"></i> Cable de Red / Cobre (NetBox)';
+          titleEl.style.color = '#38bdf8';
+        }
       }
 
       const sNodeName = source.name || 'Nodo A';
@@ -3650,8 +3647,8 @@ function renderLink(link, nodesDict) {
           cableBadge.textContent = `NetBox Wireless #${wId}`;
           cableBadge.style.color = '#10b981';
         } else {
-          cableBadge.textContent = 'Lógico / Visual';
-          cableBadge.style.color = '#94a3b8';
+          cableBadge.textContent = 'NetBox SSoT';
+          cableBadge.style.color = '#38bdf8';
         }
       }
 
@@ -3728,16 +3725,11 @@ function renderLink(link, nodesDict) {
     if (gponTooltip) gponTooltip.style.display = 'none';
 
     selectLink(link);
-
-    if (isDraftOrUndocumented) {
-      openNetboxLinkAssistant(link, source, target);
-    } else {
-      openLinkPropertiesModal(link, source, target);
-    }
+    openLinkPropertiesModal(link, source, target);
   });
 
-  // Permitir que las etiquetas de interfaz de la arista también iluminen el circuito completo
-  [srcBadge, tgtBadge, draftBadge].forEach(b => {
+  // Permitir que las etiquetas de interfaz de la arista también iluminen el circuito completo y respondan a clic
+  [srcBadge, tgtBadge].forEach(b => {
     if (b) {
       b.on('mouseenter', () => {
         document.body.style.cursor = 'pointer';
@@ -3747,10 +3739,15 @@ function renderLink(link, nodesDict) {
         document.body.style.cursor = 'default';
         unhighlightLinkAndEndpoints(link);
       });
+      b.on('click tap', (e) => {
+        e.cancelBubble = true;
+        selectLink(link);
+        openLinkPropertiesModal(link, source, target);
+      });
     }
   });
 
-  const linkObj = { line, srcBadge, tgtBadge, draftBadge, updateBadgesPos, sourceId: source.id, targetId: target.id, link, sourceNode: source, targetNode: target };
+  const linkObj = { line, srcBadge, tgtBadge, updateBadgesPos, sourceId: source.id, targetId: target.id, link, sourceNode: source, targetNode: target };
   linkLines.set(link.id, linkObj);
   registerAttachedLink(link.id, source.id, target.id, linkObj);
 }
@@ -3969,9 +3966,6 @@ async function openNetboxLinkAssistant(link, sourceNode, targetNode, autoOpenBot
 }
 
 function openLinkPropertiesModal(link, sourceNode, targetNode) {
-  if (window.allowEdgeEditing === false) {
-    return;
-  }
   const modal = document.getElementById('modal-link-properties');
   if (!modal) return;
 
