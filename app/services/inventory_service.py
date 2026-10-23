@@ -1309,19 +1309,34 @@ class InventoryService:
                         """, (new_link_id, child_map, parent_portal["id"], child_node["id"], parent_if, child_if, parent_if_id, child_if_id, conn_id, cable_type, cable_status, json.dumps(extra_link_child)))
 
                 # 2.E: JERARQUÍA Y SANEO DE NODOS HUÉRFANOS
-                await db.execute("UPDATE maps SET parent_map_id = ? WHERE id = ?", (parent_map, child_map))
+                if child_map != parent_map:
+                    curr_p = parent_map
+                    visited_p = set([child_map])
+                    is_cycle = False
+                    while curr_p:
+                        if curr_p in visited_p:
+                            is_cycle = True
+                            break
+                        visited_p.add(curr_p)
+                        c_pcheck = await db.execute("SELECT parent_map_id FROM maps WHERE id = ?", (curr_p,))
+                        r_pcheck = await c_pcheck.fetchone()
+                        curr_p = r_pcheck["parent_map_id"] if r_pcheck else None
 
-                c_he = await db.execute("SELECT id FROM map_hierarchy WHERE parent_map_id = ? AND child_map_id = ?", (parent_map, child_map))
-                he_row = await c_he.fetchone()
-                if he_row:
-                    await db.execute("UPDATE map_hierarchy SET is_primary = 1 WHERE id = ?", (he_row["id"],))
-                else:
-                    await db.execute("""
-                        INSERT INTO map_hierarchy (id, parent_map_id, child_map_id, position, is_primary)
-                        VALUES (?, ?, ?, 0, 1)
-                    """, (f"hier-{uuid.uuid4().hex[:8]}", parent_map, child_map))
+                    if not is_cycle:
+                        await db.execute("UPDATE maps SET parent_map_id = ? WHERE id = ?", (parent_map, child_map))
+                        c_he = await db.execute("SELECT id FROM map_hierarchy WHERE parent_map_id = ? AND child_map_id = ?", (parent_map, child_map))
+                        he_row = await c_he.fetchone()
+                        if he_row:
+                            await db.execute("UPDATE map_hierarchy SET is_primary = 1 WHERE id = ?", (he_row["id"],))
+                        else:
+                            await db.execute("""
+                                INSERT INTO map_hierarchy (id, parent_map_id, child_map_id, position, is_primary)
+                                VALUES (?, ?, ?, 0, 1)
+                            """, (f"hier-{uuid.uuid4().hex[:8]}", parent_map, child_map))
 
-                await db.execute("UPDATE map_hierarchy SET is_primary = 0 WHERE child_map_id = ? AND parent_map_id != ?", (child_map, parent_map))
+                        await db.execute("UPDATE map_hierarchy SET is_primary = 0 WHERE child_map_id = ? AND parent_map_id != ?", (child_map, parent_map))
+                    else:
+                        logger.warning(f"Omitiendo asignación de parent_map_id en '{child_map_name}' hacia '{parent_map_name}' para evitar ciclo jerárquico.")
 
                 c_ghosts = await db.execute("""
                     SELECT id, name FROM nodes

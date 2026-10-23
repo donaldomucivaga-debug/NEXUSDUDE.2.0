@@ -7622,7 +7622,10 @@ async function refreshMapsTabList(filterText = '') {
   const mapById = new Map((cachedMaps || []).map(m => [m.id, m]));
   matchingMapIds.forEach(id => {
     let cur = mapById.get(id);
+    const visitedAncestors = new Set([id]);
     while (cur && cur.parent_map_id) {
+      if (visitedAncestors.has(cur.parent_map_id)) break;
+      visitedAncestors.add(cur.parent_map_id);
       visibleMapIds.add(cur.parent_map_id);
       if (isSearching || treeSiteFilter !== 'all') {
         expandedMapIds.add(cur.parent_map_id);
