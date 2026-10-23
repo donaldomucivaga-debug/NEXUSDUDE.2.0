@@ -7362,6 +7362,49 @@ function startRealtimePolling(mapId) {
         updateAllLinkColors();
       }
 
+      // ── Sincronización Reactiva de Enlaces en el Cron de Lienzo ──
+      if (Array.isArray(data.links) && currentMap && currentMap.id === mapId) {
+        const currentLinksMap = new Map((currentMap.links || []).map(l => [l.id, l]));
+        let linksChanged = false;
+
+        // 1. Detectar enlaces nuevos creados en NetBox o por webhook
+        data.links.forEach(serverLink => {
+          const localLink = currentLinksMap.get(serverLink.id);
+          if (!localLink) {
+            currentMap.links.push(serverLink);
+            renderLink(serverLink, currentMap._nodeMap);
+            linksChanged = true;
+          }
+        });
+
+        // 2. Detectar enlaces eliminados
+        const serverLinkIds = new Set(data.links.map(l => l.id));
+        const filteredLinks = [];
+        (currentMap.links || []).forEach(localLink => {
+          if (!serverLinkIds.has(localLink.id)) {
+            const linkObj = linkLines.get(localLink.id);
+            if (linkObj) {
+              if (linkObj.line) linkObj.line.destroy();
+              if (linkObj.portBadgeA) linkObj.portBadgeA.destroy();
+              if (linkObj.portBadgeB) linkObj.portBadgeB.destroy();
+              linkLines.delete(localLink.id);
+            }
+            linksChanged = true;
+          } else {
+            filteredLinks.push(localLink);
+          }
+        });
+        currentMap.links = filteredLinks;
+
+        if (linksChanged) {
+          updateAllLinks();
+          linksLayer.batchDraw();
+          if (selectedNode) {
+            renderNodeConnectionsSummary(selectedNode);
+          }
+        }
+      }
+
       // Redibujado en lote único al finalizar actualización
       nodesLayer.batchDraw();
     } catch (e) {

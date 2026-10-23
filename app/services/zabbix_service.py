@@ -1165,6 +1165,29 @@ class ZabbixService:
         warn_count = sum(1 for n in nodes_result.values() if n["status"] == "warning")
         unknown_count = total_count - (online_count + offline_count + warn_count)
 
+        # 5. ENLACES ACTIVOS DEL MAPA (para sincronización reactiva en el cron de lienzo)
+        active_links = []
+        async with get_db_connection() as db:
+            c_links = await db.execute("""
+                SELECT id, source_node_id, target_node_id, source_interface, target_interface,
+                       cable_type, extra_data, netbox_cable_id, netbox_wirelesslink_id
+                FROM links WHERE map_id = ?
+            """, (map_id,))
+            links_rows = await c_links.fetchall()
+            for lr in links_rows:
+                extra = json.loads(lr["extra_data"]) if lr["extra_data"] else None
+                active_links.append({
+                    "id": lr["id"],
+                    "source_node_id": lr["source_node_id"],
+                    "target_node_id": lr["target_node_id"],
+                    "source_interface": lr["source_interface"],
+                    "target_interface": lr["target_interface"],
+                    "cable_type": lr["cable_type"],
+                    "netbox_cable_id": lr["netbox_cable_id"],
+                    "netbox_wirelesslink_id": lr["netbox_wirelesslink_id"],
+                    "extra_data": extra
+                })
+
         return {
             "map_id": map_id,
             "timestamp": time.time(),
@@ -1176,7 +1199,8 @@ class ZabbixService:
                 "warning": warn_count,
                 "unknown": unknown_count
             },
-            "nodes": nodes_result
+            "nodes": nodes_result,
+            "links": active_links
         }
 
     async def get_node_telemetry(self, node_id: str) -> Dict[str, Any]:

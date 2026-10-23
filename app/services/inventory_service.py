@@ -649,6 +649,21 @@ class InventoryService:
                 return self._cables_cache
         return cables
 
+    async def get_cables_for_devices(self, dev_ids: List[int]) -> List[Dict[str, Any]]:
+        """Consulta directamente a NetBox únicamente los cables que involucran a una lista de dispositivos."""
+        if not dev_ids:
+            return []
+        headers = await self.get_headers()
+        params = [("device_id", did) for did in dev_ids]
+        try:
+            async with httpx.AsyncClient(verify=False, timeout=12.0) as client:
+                res = await client.get(f"{settings.NETBOX_URL}/api/dcim/cables/?limit=200", params=params, headers=headers)
+                if res.status_code == 200:
+                    return res.json().get("results", [])
+        except Exception as e:
+            logger.warning(f"Error consultando cables dirigidos de NetBox para dispositivos {dev_ids}: {e}")
+        return []
+
     async def get_wireless_links(self, force: bool = False) -> List[Dict[str, Any]]:
         """Obtiene todos los enlaces inalámbricos registrados en NetBox con caché ligera."""
         if not force and self._wireless_links_cache is not None and self._wireless_links_last_fetch:
@@ -1517,7 +1532,7 @@ class InventoryService:
                 if_a_name=ob_a.get("name") or "eth",
                 if_b_name=ob_b.get("name") or "eth",
                 if_a_id=a_terms[0].get("object_id"),
-                if_b_id=bt[0].get("object_id"),
+                if_b_id=b_terms[0].get("object_id"),
                 cable_type=c_type,
                 cable_status=c_status
             )
@@ -1583,7 +1598,8 @@ class InventoryService:
                     cable_status="connected"
                 )
 
-        cables = await self.get_all_cables()
+        # 2. Consultar únicamente cables de los dispositivos de este mapa (ultrarrápido, ~100ms)
+        cables = await self.get_cables_for_devices(list(dev_ids))
         for cb in cables:
             cid = cb.get("id")
             at = cb.get("a_terminations", [])

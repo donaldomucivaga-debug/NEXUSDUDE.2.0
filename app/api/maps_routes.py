@@ -694,8 +694,10 @@ async def ensure_map_navigation_nodes(db, map_id: str):
 
 @router.get("/{map_id}", response_model=MapDetailOut)
 async def get_map_detail(map_id: str, user: Dict[str, Any] = Depends(get_current_user)):
-    """Obtiene el mapa con todos sus nodos y enlaces de manera ultra-rápida desde la base de datos local."""
+    """Obtiene el mapa con todos sus nodos y enlaces, sincronizando de forma dirigida y ultrarrápida las conexiones NetBox de sus equipos."""
     async with get_db_connection() as db:
+        # Sincronización dirigida ultrarrápida de cables NetBox para los equipos de este mapa
+        await inventory_service.sync_map_connections_from_netbox(db, map_id)
         # Asegurar y sincronizar portal de navegación superior (padre) para este mapa
         await ensure_map_navigation_nodes(db, map_id)
         await db.commit()
