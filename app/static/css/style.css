@@ -1504,11 +1504,11 @@ body.is-dragging-map .map-item-card * {
 /* --- Panel de Selección Múltiple --- */
 .multi-select-card {
   background: rgba(15, 23, 42, 0.85);
-  border: 1px solid rgba(234, 255, 0, 0.35);
+  border: 1px solid rgba(56, 189, 248, 0.35);
   border-radius: 10px;
   padding: 14px 12px;
   text-align: left;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35), 0 0 10px rgba(234, 255, 0, 0.12);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35), 0 0 10px rgba(56, 189, 248, 0.12);
 }
 
 .multi-select-node-item {
@@ -1525,7 +1525,7 @@ body.is-dragging-map .map-item-card * {
 
 .multi-select-node-item:hover {
   background: rgba(30, 41, 59, 0.9);
-  border-color: rgba(234, 255, 0, 0.45);
+  border-color: rgba(56, 189, 248, 0.45);
 }
 
 /* Campos de contraseña protegidos contra gestor de contraseñas de Google/Navegador */

@@ -159,11 +159,11 @@ function initCanvas() {
 
   // Rectángulo visual de selección múltiple (Marquee Selection) en uiLayer
   selectionRect = new Konva.Rect({
-    fill: 'rgba(234, 255, 0, 0.15)',
-    stroke: '#eaff00',
+    fill: 'rgba(56, 189, 248, 0.18)',
+    stroke: '#38bdf8',
     strokeWidth: 2,
     dash: [6, 4],
-    shadowColor: 'rgba(234, 255, 0, 0.5)',
+    shadowColor: 'rgba(56, 189, 248, 0.5)',
     shadowBlur: 8,
     visible: false,
     listening: false
@@ -2123,8 +2123,8 @@ function highlightNodeConnections(node) {
     if (line) {
       if (line._origStroke === undefined) line._origStroke = line.stroke();
       if (line._origStrokeWidth === undefined) line._origStrokeWidth = line.strokeWidth();
-      line.stroke('#38bdf8');
-      line.fill('#38bdf8');
+      line.stroke('#eaff00');
+      line.fill('#eaff00');
       line.strokeWidth(2.8);
       line.shadowBlur(0);
       line.shadowOpacity(0);
@@ -2143,7 +2143,7 @@ function highlightNodeConnections(node) {
           if (pBox._origShadowColor === undefined) pBox._origShadowColor = pBox.shadowColor();
           if (pBox._origShadowOpacity === undefined) pBox._origShadowOpacity = pBox.shadowOpacity();
 
-          pBox.stroke('#38bdf8');
+          pBox.stroke('#eaff00');
           pBox.strokeWidth(2.2);
           pBox.shadowBlur(0);
           pBox.shadowOpacity(0);
@@ -2226,9 +2226,9 @@ function applyNodeHover(group, node, isHovered) {
 
   if (isHovered) {
     if (!isCurrentSelection && !box._linkHoverActive) {
-      box.stroke('#38bdf8');
+      box.stroke('#eaff00');
       box.strokeWidth(2.0);
-      box.shadowColor('rgba(56, 189, 248, 0.75)');
+      box.shadowColor('rgba(234, 255, 0, 0.75)');
       box.shadowBlur(14);
       box.shadowOpacity(0.85);
       box.shadowOffset({ x: 0, y: 0 });
@@ -2256,8 +2256,8 @@ function applyNodeHover(group, node, isHovered) {
 function showNodeSelection(group, isMulti = false) {
   if (!group) return;
   const box = group.findOne('.box');
-  const selColor = isMulti ? '#eaff00' : '#38bdf8';
-  const selGlow = isMulti ? 'rgba(234, 255, 0, 0.85)' : 'rgba(56, 189, 248, 0.85)';
+  const selColor = isMulti ? '#38bdf8' : '#eaff00';
+  const selGlow = isMulti ? 'rgba(56, 189, 248, 0.85)' : 'rgba(234, 255, 0, 0.85)';
 
   if (box) {
     box.stroke(selColor);
@@ -3531,9 +3531,9 @@ function _applySwitchBayHighlight(nodeId, bay, highlight) {
       if (bayRect._origShadowColor === undefined) bayRect._origShadowColor = bayRect.shadowColor();
       if (bayRect._origShadowOpacity === undefined) bayRect._origShadowOpacity = bayRect.shadowOpacity();
 
-      bayRect.stroke('#38bdf8');
+      bayRect.stroke('#eaff00');
       bayRect.strokeWidth(1.8);
-      bayRect.fill('rgba(56, 189, 248, 0.35)');
+      bayRect.fill('rgba(234, 255, 0, 0.35)');
       bayRect.shadowBlur(0);
       bayRect.shadowOpacity(0);
     }
@@ -3542,12 +3542,12 @@ function _applySwitchBayHighlight(nodeId, bay, highlight) {
       if (bayLed._origShadowBlur === undefined) bayLed._origShadowBlur = bayLed.shadowBlur();
       if (bayLed._origShadowColor === undefined) bayLed._origShadowColor = bayLed.shadowColor();
 
-      bayLed.fill('#38bdf8');
+      bayLed.fill('#eaff00');
       bayLed.shadowBlur(0);
     }
     if (bayNotch) {
       if (bayNotch._origFill === undefined) bayNotch._origFill = bayNotch.fill();
-      bayNotch.fill('#38bdf8');
+      bayNotch.fill('#eaff00');
     }
     if (bayTxt) {
       if (bayTxt._origFill === undefined) bayTxt._origFill = bayTxt.fill();
@@ -3611,10 +3611,10 @@ function highlightLinkAndEndpoints(link) {
 
   const { line, sourceNode, targetNode } = linkObj;
 
-  // 1. Iluminar la arista (Línea) - Simple y limpia sin efecto neón
+  // 1. Iluminar la arista (Línea)
   if (line) {
-    line.stroke('#38bdf8');
-    line.fill('#38bdf8');
+    line.stroke('#eaff00');
+    line.fill('#eaff00');
     line.strokeWidth(2.8);
     line.shadowBlur(0);
     line.shadowOpacity(0);
@@ -3634,7 +3634,7 @@ function highlightLinkAndEndpoints(link) {
       if (box._origShadowColor === undefined) box._origShadowColor = box.shadowColor();
       if (box._origShadowOpacity === undefined) box._origShadowOpacity = box.shadowOpacity();
 
-      box.stroke('#38bdf8');
+      box.stroke('#eaff00');
       box.strokeWidth(2.2);
       box.shadowBlur(0);
       box.shadowOpacity(0);
@@ -6427,9 +6427,9 @@ function showMultiSelectionNotice(count) {
       <div class="multi-select-card">
         
         <!-- Cabecera de Selección Múltiple -->
-        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid rgba(234, 255, 0, 0.25);">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid rgba(56, 189, 248, 0.25);">
           <div style="display: flex; align-items: center; gap: 8px;">
-            <div style="width: 28px; height: 28px; border-radius: 6px; background: rgba(234, 255, 0, 0.15); display: flex; align-items: center; justify-content: center; color: #eaff00; font-size: 0.9rem;">
+            <div style="width: 28px; height: 28px; border-radius: 6px; background: rgba(56, 189, 248, 0.15); display: flex; align-items: center; justify-content: center; color: #38bdf8; font-size: 0.9rem;">
               <i class="fas fa-object-group"></i>
             </div>
             <div>
@@ -6437,14 +6437,14 @@ function showMultiSelectionNotice(count) {
               <div style="font-size: 0.68rem; color: #94a3b8;">${count} nodos marcados en el lienzo</div>
             </div>
           </div>
-          <span style="background: rgba(234, 255, 0, 0.15); color: #eaff00; border: 1px solid rgba(234, 255, 0, 0.4); font-size: 0.7rem; font-weight: 700; padding: 2px 7px; border-radius: 12px;">
+          <span style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.4); font-size: 0.7rem; font-weight: 700; padding: 2px 7px; border-radius: 12px;">
             ${count}
           </span>
         </div>
 
         <!-- Indicador de reacomodo -->
         <p style="font-size: 0.73rem; color: #94a3b8; margin: 0 0 10px 0; line-height: 1.4;">
-          <i class="fas fa-arrows-alt" style="color: #eaff00; margin-right: 4px;"></i> Arrastra cualquier nodo marcado en el lienzo para mover el grupo en bloque.
+          <i class="fas fa-arrows-alt" style="color: #38bdf8; margin-right: 4px;"></i> Arrastra cualquier nodo marcado en el lienzo para mover el grupo en bloque.
         </p>
 
         <!-- Lista de nodos seleccionados -->
