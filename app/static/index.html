@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>NexusDude - The Modern Network Dude</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=5.8.1">
+  <link rel="stylesheet" href="/static/css/style.css?v=5.8.2">
   <link rel="stylesheet" href="/static/css/docs.css?v=5.5.0">
   <!-- FontAwesome Icons -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -135,11 +135,6 @@
               <div class="dropdown-item" id="btn-sync-netbox-links-all" title="Sincronizar todos los cables y enlaces de NetBox en todos los mapas (Intra e Intermapa)">
                 <i class="fas fa-network-wired" style="color: #a855f7;"></i>
                 <span>Sincronizar Aristas Globales</span>
-              </div>
-              <div class="dropdown-divider"></div>
-              <div class="dropdown-item" id="btn-export-netbox-cables" title="Exportar todas las conexiones y cables del mapa actual a NetBox">
-                <i class="fas fa-file-export" style="color: #10b981;"></i>
-                <span>Exportar Conexiones a NetBox</span>
               </div>
               <div class="dropdown-item" id="btn-import-netbox-cables" title="Importar cables y conexiones físicas desde NetBox hacia el mapa actual">
                 <i class="fas fa-file-import" style="color: #38bdf8;"></i>
@@ -757,11 +752,8 @@
               </button>
             </div>
 
-            <!-- Acciones sobre Enlaces y Nodo -->
+            <!-- Acciones sobre Nodo -->
             <div style="margin-top: 6px; display: flex; flex-direction: column; gap: 4px;">
-              <button class="btn" id="btn-delete-node-links" style="width: 100%; justify-content: center; padding: 7px; font-size: 0.76rem; background: rgba(239, 68, 68, 0.1); border: 1px dashed #ef4444; color: #f87171;" title="Eliminar todas las conexiones vinculadas a este nodo">
-                <i class="fas fa-project-diagram"></i> Eliminar Conexiones del Nodo
-              </button>
               <button class="btn btn-danger" id="btn-delete-node" style="width: 100%; justify-content: center; padding: 8px; font-size: 0.78rem;" title="Quitar este equipo de la topología">
                 <i class="fas fa-times-circle"></i> Quitar del Mapa
               </button>
@@ -1246,21 +1238,78 @@
 
   <!-- Modal Propiedades de Arista de Servicio (Dirección de Flujo / Padre-Hijo) -->
   <div class="modal-overlay" id="modal-link-properties" style="display: none;">
-    <div class="modal-card" style="width: 520px;">
+    <div class="modal-card" style="width: 530px; max-width: 95vw;">
       <div class="modal-header">
         <div style="display: flex; align-items: center; gap: 8px;">
-          <i class="fas fa-route" style="color: #38bdf8; font-size: 1.2rem;"></i>
-          <h3 class="modal-title" style="font-size: 1rem;">Propiedades de Arista de Servicio</h3>
+          <i class="fas fa-network-wired" style="color: #38bdf8; font-size: 1.15rem;"></i>
+          <div>
+            <h3 class="modal-title" style="font-size: 0.98rem; margin: 0;">Propiedades de Arista de Servicio</h3>
+            <div style="font-size: 0.68rem; color: #94a3b8;">Documentación física NetBox &amp; Flujo de Servicio Zabbix</div>
+          </div>
         </div>
         <button class="modal-close" id="btn-close-link-modal">&times;</button>
       </div>
+
       <div class="modal-form" style="padding: 14px 18px; gap: 12px;">
         <input type="hidden" id="link-modal-id">
 
-        <!-- Selector de Dirección / Flujo de Servicio -->
+        <!-- Ficha de Conexión Física (NetBox SSoT) -->
+        <div style="background: rgba(15, 23, 42, 0.85); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px;">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <span id="link-netbox-cable-badge" class="badge" style="font-size: 0.72rem; padding: 3px 8px; font-weight: 700; background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3);">
+                <i class="fas fa-link"></i> NetBox SSoT
+              </span>
+              <span id="link-cable-status-badge" class="badge" style="font-size: 0.68rem; padding: 2px 6px; background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3);">
+                Conectado
+              </span>
+            </div>
+            <a id="link-open-netbox-btn" href="#" target="_blank" class="btn" style="font-size: 0.72rem; padding: 4px 8px; background: rgba(56, 189, 248, 0.12); border: 1px solid #38bdf8; color: #38bdf8; text-decoration: none; display: inline-flex; align-items: center; gap: 4px;" title="Abrir conexión en NetBox">
+              <i class="fas fa-external-link-alt"></i> Ver en NetBox
+            </a>
+          </div>
+
+          <!-- Endpoints Origen y Destino -->
+          <div style="display: grid; grid-template-columns: 1fr auto 1fr; gap: 8px; align-items: center; background: rgba(30, 41, 59, 0.6); padding: 10px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.05);">
+            <!-- Origen -->
+            <div style="overflow: hidden;">
+              <div style="font-size: 0.65rem; color: #94a3b8; text-transform: uppercase; font-weight: 700; margin-bottom: 2px;">Extremo A</div>
+              <div id="link-card-src-name" style="font-size: 0.85rem; font-weight: 700; color: #38bdf8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Nodo A</div>
+              <div style="margin-top: 4px;">
+                <span id="link-card-src-iface" class="badge" style="font-size: 0.72rem; background: rgba(56, 189, 248, 0.15); color: #7dd3fc; border: 1px solid rgba(56, 189, 248, 0.3); font-family: monospace;">
+                  Ethernet
+                </span>
+              </div>
+            </div>
+
+            <!-- Medio / Icono Central -->
+            <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 0 4px;">
+              <i id="link-card-medium-icon" class="fas fa-arrows-alt-h" style="color: #64748b; font-size: 1.1rem;"></i>
+              <span id="link-card-medium-label" style="font-size: 0.65rem; color: #94a3b8; margin-top: 4px; text-align: center; white-space: nowrap;">Cat6</span>
+            </div>
+
+            <!-- Destino -->
+            <div style="overflow: hidden; text-align: right;">
+              <div style="font-size: 0.65rem; color: #94a3b8; text-transform: uppercase; font-weight: 700; margin-bottom: 2px;">Extremo B</div>
+              <div id="link-card-tgt-name" style="font-size: 0.85rem; font-weight: 700; color: #a855f7; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Nodo B</div>
+              <div style="margin-top: 4px; display: flex; justify-content: flex-end;">
+                <span id="link-card-tgt-iface" class="badge" style="font-size: 0.72rem; background: rgba(168, 85, 247, 0.15); color: #d8b4fe; border: 1px solid rgba(168, 85, 247, 0.3); font-family: monospace;">
+                  Ethernet
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Indicador Inter-Mapa (si aplica) -->
+          <div id="link-card-intermap-box" style="display: none; font-size: 0.72rem; padding: 6px 10px; border-radius: 6px; background: rgba(168, 85, 247, 0.1); border: 1px dashed rgba(168, 85, 247, 0.35); color: #c084fc;">
+            <i class="fas fa-layer-group"></i> <strong>Arista Inter-Mapa:</strong> Enlaza con <span id="link-card-intermap-dest" style="font-weight: 700;">—</span>
+          </div>
+        </div>
+
+        <!-- Selector de Dirección / Flujo de Servicio (Padre ➔ Hijo) -->
         <div>
           <label style="font-size: 0.75rem; font-weight: 700; color: #f8fafc; margin-bottom: 6px; display: block;">
-            <i class="fas fa-arrows-alt-h" style="color: #38bdf8;"></i> Flujo del Servicio (Quién le da servicio a quién):
+            <i class="fas fa-arrows-alt-h" style="color: #38bdf8;"></i> Flujo de Servicio (Jerarquía Zabbix BSM):
           </label>
           <div style="display: flex; flex-direction: column; gap: 8px;">
             <label id="lbl-dir-source-to-target" style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: rgba(15, 23, 42, 0.7); border: 1px solid var(--border-color); border-radius: 8px; cursor: pointer;">
@@ -1294,210 +1343,16 @@
           </label>
         </div>
 
-        <!-- Sincronización NetBox & Selección de Puertos / Interfaces -->
-        <div style="background: rgba(15, 23, 42, 0.7); border: 1px solid var(--border-color); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 10px;">
-          <div style="display: flex; justify-content: space-between; align-items: center;">
-            <label style="font-size: 0.75rem; font-weight: 700; color: #f8fafc; margin: 0; display: flex; align-items: center; gap: 6px;">
-              <i class="fas fa-network-wired" style="color: #38bdf8;"></i> Puertos y Conexión Física (NetBox):
-            </label>
-            <span id="link-netbox-cable-badge" class="badge" style="font-size: 0.68rem; background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3);">
-              NetBox Sync
-            </span>
-          </div>
-
-          <!-- Selectores de Puertos de Origen y Destino -->
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
-            <div>
-              <div id="link-src-submap-container" style="display: none; margin-bottom: 6px; background: rgba(56, 189, 248, 0.08); border: 1px dashed rgba(56, 189, 248, 0.4); border-radius: 6px; padding: 6px;">
-                <label style="font-size: 0.7rem; color: #38bdf8; font-weight: 700; display: block; margin-bottom: 3px;">🎯 Dispositivo en Submapa (Origen):</label>
-                <select class="input-text" id="select-link-src-submap-dev" style="width: 100%; font-size: 0.76rem; padding: 4px 6px; background: #0f172a; color: #f8fafc;">
-                  <option value="">-- Seleccionar Equipo del Submapa --</option>
-                </select>
-              </div>
-              <label style="font-size: 0.72rem; color: var(--text-muted); font-weight: 600; display: block; margin-bottom: 4px;" id="link-lbl-src-iface">Puerto en Nodo A:</label>
-              <div style="display: flex; gap: 4px;">
-                <select class="input-text" id="select-link-src-iface" style="width: 100%; font-size: 0.78rem; padding: 6px 8px; background: #0f172a; color: #f8fafc;">
-                  <option value="">-- Seleccionar Puerto --</option>
-                </select>
-              </div>
-              <input type="text" class="input-text" id="input-link-src-iface" placeholder="O escribir puerto manual..." style="width: 100%; font-size: 0.74rem; padding: 4px 8px; margin-top: 4px; display: none;">
-            </div>
-
-            <div>
-              <div id="link-tgt-submap-container" style="display: none; margin-bottom: 6px; background: rgba(168, 85, 247, 0.08); border: 1px dashed rgba(168, 85, 247, 0.4); border-radius: 6px; padding: 6px;">
-                <label style="font-size: 0.7rem; color: #c084fc; font-weight: 700; display: block; margin-bottom: 3px;">🎯 Dispositivo en Submapa (Destino):</label>
-                <select class="input-text" id="select-link-tgt-submap-dev" style="width: 100%; font-size: 0.76rem; padding: 4px 6px; background: #0f172a; color: #f8fafc;">
-                  <option value="">-- Seleccionar Equipo del Submapa --</option>
-                </select>
-              </div>
-              <label style="font-size: 0.72rem; color: var(--text-muted); font-weight: 600; display: block; margin-bottom: 4px;" id="link-lbl-tgt-iface">Puerto en Nodo B:</label>
-              <div style="display: flex; gap: 4px;">
-                <select class="input-text" id="select-link-tgt-iface" style="width: 100%; font-size: 0.78rem; padding: 6px 8px; background: #0f172a; color: #f8fafc;">
-                  <option value="">-- Seleccionar Puerto --</option>
-                </select>
-              </div>
-              <input type="text" class="input-text" id="input-link-tgt-iface" placeholder="O escribir puerto manual..." style="width: 100%; font-size: 0.74rem; padding: 4px 8px; margin-top: 4px; display: none;">
-            </div>
-          </div>
-
-          <!-- Tipo de Cable & Estado -->
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
-            <div>
-              <label style="font-size: 0.7rem; color: var(--text-muted); font-weight: 600; display: block; margin-bottom: 2px;">Tipo de Cable:</label>
-              <select class="input-text" id="select-link-cable-type" style="width: 100%; font-size: 0.76rem; padding: 5px 8px; background: #0f172a; color: #f8fafc;">
-                <option value="cat6">UTP Cat 6 (Cobre)</option>
-                <option value="cat5e">UTP Cat 5e (Cobre)</option>
-                <option value="smf">Fibra Óptica Single-Mode (SMF)</option>
-                <option value="mmf">Fibra Óptica Multi-Mode (MMF)</option>
-                <option value="dac">Direct Attach Copper (DAC 10G/25G)</option>
-              </select>
-            </div>
-            <div>
-              <label style="font-size: 0.7rem; color: var(--text-muted); font-weight: 600; display: block; margin-bottom: 2px;">Estado del Cable:</label>
-              <select class="input-text" id="select-link-cable-status" style="width: 100%; font-size: 0.76rem; padding: 5px 8px; background: #0f172a; color: #f8fafc;">
-                <option value="connected">Conectado (Active)</option>
-                <option value="planned">Planificado (Planned)</option>
-                <option value="decommissioned">Desconectado</option>
-              </select>
-            </div>
-          </div>
-
-          <!-- Acciones Individuales NetBox (Exportar / Importar Conexión) -->
-          <div style="display: flex; gap: 8px; margin-top: 4px;">
-            <button type="button" class="btn" id="btn-export-link-netbox" style="flex: 1; font-size: 0.74rem; padding: 6px 10px; background: rgba(16, 185, 129, 0.15); border: 1px solid #10b981; color: #34d399; justify-content: center;" title="Crear o actualizar este cable físico en NetBox">
-              <i class="fas fa-file-export"></i> Exportar a NetBox
-            </button>
-            <button type="button" class="btn" id="btn-import-link-netbox" style="flex: 1; font-size: 0.74rem; padding: 6px 10px; background: rgba(56, 189, 248, 0.15); border: 1px solid #38bdf8; color: #38bdf8; justify-content: center;" title="Importar o sincronizar estado del cable desde NetBox">
-              <i class="fas fa-file-import"></i> Importar de NetBox
-            </button>
-          </div>
-          <div id="link-netbox-sync-msg" style="display: none; font-size: 0.72rem; padding: 6px 10px; border-radius: 6px; line-height: 1.3;"></div>
-        </div>
-
-
-
         <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px;">
-          <button type="button" class="btn btn-danger" id="btn-delete-link-modal" style="font-size: 0.78rem; padding: 6px 12px;">
-            <i class="fas fa-trash-alt"></i> Eliminar Enlace
-          </button>
+          <div style="font-size: 0.7rem; color: #64748b; display: flex; align-items: center; gap: 5px;">
+            <i class="fas fa-shield-alt" style="color: #10b981;"></i> NetBox SSoT
+          </div>
           <div style="display: flex; gap: 8px;">
-            <button type="button" class="btn" id="btn-cancel-link-modal">Cancelar</button>
+            <button type="button" class="btn" id="btn-cancel-link-modal">Cerrar</button>
             <button type="button" class="btn btn-primary" id="btn-save-link-modal">
-              <i class="fas fa-save"></i> Guardar Enlace
+              <i class="fas fa-save"></i> Guardar Flujo
             </button>
           </div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Modal Interactivo de Conexión de Puertos Físicos (NetBox Cable Link) -->
-  <div class="modal-overlay" id="modal-port-connect" style="display: none;">
-    <div class="modal-card" style="width: 620px;">
-      <div class="modal-header">
-        <div style="display: flex; align-items: center; gap: 8px;">
-          <i class="fas fa-plug" style="color: #38bdf8; font-size: 1.2rem;"></i>
-          <h3 class="modal-title" style="font-size: 1rem;">Conectar Puertos Físicos (NetBox Sync)</h3>
-        </div>
-        <button class="modal-close" id="btn-close-port-connect">&times;</button>
-      </div>
-      <div class="modal-form" style="padding: 14px 18px; gap: 12px;">
-        <!-- Banner de Nodos -->
-        <div style="display: flex; align-items: center; justify-content: space-between; background: rgba(15, 23, 42, 0.8); border: 1px solid var(--border-color); border-radius: 8px; padding: 10px 14px;">
-          <div style="text-align: left; max-width: 45%;">
-            <div style="font-size: 0.68rem; color: #94a3b8; text-transform: uppercase; font-weight: 700;">Origen (Puerto)</div>
-            <div id="port-connect-src-name" style="font-size: 0.88rem; font-weight: 700; color: #38bdf8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Nodo A</div>
-            <div id="port-connect-src-model" style="font-size: 0.7rem; color: #64748b;">—</div>
-          </div>
-          <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 0 10px;">
-            <i class="fas fa-arrows-alt-h" style="color: #38bdf8; font-size: 1.2rem;"></i>
-            <span id="port-connect-cable-badge" class="badge" style="font-size: 0.65rem; background: rgba(56, 189, 248, 0.15); color: #38bdf8; margin-top: 4px;">Cat 6</span>
-          </div>
-          <div style="text-align: right; max-width: 45%;">
-            <div style="font-size: 0.68rem; color: #94a3b8; text-transform: uppercase; font-weight: 700;">Destino (Puerto)</div>
-            <div id="port-connect-tgt-name" style="font-size: 0.88rem; font-weight: 700; color: #a855f7; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Nodo B</div>
-            <div id="port-connect-tgt-model" style="font-size: 0.7rem; color: #64748b;">—</div>
-          </div>
-        </div>
-
-        <!-- Matriz de Selección Visual de Puertos -->
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
-          <!-- Panel de Puertos Origen -->
-          <div style="background: rgba(15, 23, 42, 0.6); border: 1px solid var(--border-color); border-radius: 8px; padding: 10px;">
-            <div id="port-connect-src-submap-container" style="display: none; margin-bottom: 8px; background: rgba(56, 189, 248, 0.08); border: 1px dashed rgba(56, 189, 248, 0.4); border-radius: 6px; padding: 6px;">
-              <label style="font-size: 0.7rem; color: #38bdf8; font-weight: 700; display: block; margin-bottom: 3px;">🎯 Dispositivo en Submapa:</label>
-              <select class="input-text" id="port-connect-src-submap-dev" style="width: 100%; font-size: 0.76rem; padding: 4px 6px; background: #0f172a; color: #f8fafc;">
-                <option value="">-- Seleccionar Equipo del Submapa --</option>
-              </select>
-            </div>
-            <div style="font-size: 0.74rem; font-weight: 700; color: #38bdf8; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center;">
-              <span>Puerto Origen:</span>
-              <span id="port-connect-src-badge" style="font-size: 0.65rem; color: #94a3b8;">Selecciona...</span>
-            </div>
-            <select class="input-text" id="port-connect-select-src" style="width: 100%; font-size: 0.78rem; padding: 6px 8px; background: #0f172a; color: #f8fafc; margin-bottom: 6px;">
-              <option value="">-- Seleccionar Puerto --</option>
-            </select>
-            <input type="text" class="input-text" id="port-connect-input-src" placeholder="Puerto personalizado..." style="width: 100%; font-size: 0.74rem; padding: 4px 8px; display: none;">
-            <div id="port-connect-src-chips" style="display: flex; flex-wrap: wrap; gap: 4px; max-height: 110px; overflow-y: auto; margin-top: 6px;">
-              <!-- Chips rápidos de puertos -->
-            </div>
-          </div>
-
-          <!-- Panel de Puertos Destino -->
-          <div style="background: rgba(15, 23, 42, 0.6); border: 1px solid var(--border-color); border-radius: 8px; padding: 10px;">
-            <div id="port-connect-tgt-submap-container" style="display: none; margin-bottom: 8px; background: rgba(168, 85, 247, 0.08); border: 1px dashed rgba(168, 85, 247, 0.4); border-radius: 6px; padding: 6px;">
-              <label style="font-size: 0.7rem; color: #c084fc; font-weight: 700; display: block; margin-bottom: 3px;">🎯 Dispositivo en Submapa:</label>
-              <select class="input-text" id="port-connect-tgt-submap-dev" style="width: 100%; font-size: 0.76rem; padding: 4px 6px; background: #0f172a; color: #f8fafc;">
-                <option value="">-- Seleccionar Equipo del Submapa --</option>
-              </select>
-            </div>
-            <div style="font-size: 0.74rem; font-weight: 700; color: #a855f7; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center;">
-              <span>Puerto Destino:</span>
-              <span id="port-connect-tgt-badge" style="font-size: 0.65rem; color: #94a3b8;">Selecciona...</span>
-            </div>
-            <select class="input-text" id="port-connect-select-tgt" style="width: 100%; font-size: 0.78rem; padding: 6px 8px; background: #0f172a; color: #f8fafc; margin-bottom: 6px;">
-              <option value="">-- Seleccionar Puerto --</option>
-            </select>
-            <input type="text" class="input-text" id="port-connect-input-tgt" placeholder="Puerto personalizado..." style="width: 100%; font-size: 0.74rem; padding: 4px 8px; display: none;">
-            <div id="port-connect-tgt-chips" style="display: flex; flex-wrap: wrap; gap: 4px; max-height: 110px; overflow-y: auto; margin-top: 6px;">
-              <!-- Chips rápidos de puertos -->
-            </div>
-          </div>
-        </div>
-
-        <!-- Selector de Tipo de Cable & Flujo -->
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; background: rgba(15, 23, 42, 0.6); border: 1px solid var(--border-color); border-radius: 8px; padding: 10px;">
-          <div>
-            <label style="font-size: 0.7rem; color: var(--text-muted); font-weight: 600; display: block; margin-bottom: 3px;">Tipo de Cable:</label>
-            <select class="input-text" id="port-connect-cable-type" style="width: 100%; font-size: 0.76rem; padding: 5px 8px; background: #0f172a; color: #f8fafc;">
-              <option value="cat6">UTP Cat 6 (Cobre)</option>
-              <option value="cat5e">UTP Cat 5e (Cobre)</option>
-              <option value="smf">Fibra Óptica Monomodo (SMF)</option>
-              <option value="mmf">Fibra Óptica Multimodo (MMF)</option>
-              <option value="dac">Direct Attach Copper (DAC 10G/25G)</option>
-            </select>
-          </div>
-          <div>
-            <label style="font-size: 0.7rem; color: var(--text-muted); font-weight: 600; display: block; margin-bottom: 3px;">Flujo de Servicio / Dirección:</label>
-            <select class="input-text" id="port-connect-direction" style="width: 100%; font-size: 0.76rem; padding: 5px 8px; background: #0f172a; color: #f8fafc;">
-              <option value="source_to_target">Origen ➔ Destino (Padre ➔ Hijo)</option>
-              <option value="target_to_source">Destino ➔ Origen (Padre ➔ Hijo)</option>
-              <option value="bidirectional">Bidireccional (Ambos sentidos)</option>
-            </select>
-          </div>
-        </div>
-
-        <!-- Notificación informativa de documentación de puerto -->
-        <div style="background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 6px; padding: 8px 10px; font-size: 0.72rem; color: #93c5fd; display: flex; align-items: center; gap: 8px;">
-          <i class="fas fa-info-circle" style="font-size: 1rem; color: #38bdf8; flex-shrink: 0;"></i>
-          <span><strong>Documentación:</strong> No es obligatorio indicar el puerto exacto para reflejar la arista en el mapa, pero es importante documentarlo en NetBox para mantener el inventario físico actualizado.</span>
-        </div>
-
-        <div class="modal-footer" style="display: flex; justify-content: flex-end; align-items: center; margin-top: 6px; gap: 8px;">
-          <button type="button" class="btn" id="btn-cancel-port-connect">Cancelar</button>
-          <button type="button" class="btn btn-primary" id="btn-confirm-port-connect">
-            <i class="fas fa-plug"></i> Conectar Puertos & Sync NetBox
-          </button>
         </div>
       </div>
     </div>
@@ -2266,9 +2121,9 @@
   </div>
 
   <!-- Scripts -->
-  <script src="/static/js/api.js?v=5.6.2"></script>
-  <script src="/static/js/app.js?v=5.8.1"></script>
-  <script src="/static/js/docs.js?v=5.6.2"></script>
+  <script src="/static/js/api.js?v=5.8.2"></script>
+  <script src="/static/js/app.js?v=5.8.2"></script>
+  <script src="/static/js/docs.js?v=5.8.2"></script>
 </body>
 </html>
 
