@@ -688,37 +688,15 @@ async def ensure_map_navigation_nodes(db, map_id: str):
                 if not await c_links.fetchone():
                     await db.execute("DELETE FROM nodes WHERE id = ?", (sn["id"],))
 
-    uncovered_children = [cm for cm in child_maps if cm["id"] not in covered_child_ids]
-    if uncovered_children:
-        cur_count = len(covered_child_ids)
-        for idx, cm in enumerate(uncovered_children):
-            slot_idx = cur_count + idx
-            col = slot_idx % 4
-            row = slot_idx // 4
-            x = 80.0 + (col * 220.0)
-            y = 170.0 + (row * 100.0)
-
-            snode_id = f"node-{uuid.uuid4().hex[:8]}"
-            extra = json.dumps({
-                "target_map_id": cm["id"],
-                "role": "Submapa",
-                "site_name": cm["name"]
-            })
-            await db.execute("""
-                INSERT INTO nodes (id, map_id, name, ip, device_type, site_name, x, y, status, extra_data)
-                VALUES (?, ?, ?, '', 'submap', ?, ?, ?, 'ok', ?)
-            """, (snode_id, map_id, f"📁 {cm['name']}", cm["description"] or cm["name"], x, y, extra))
-
+    # Nota: No auto-insertar submapas huérfanos sin enlaces para respetar la limpieza del lienzo.
+    # Los submapas en el lienzo solo se generan mediante vinculación explícita o sincronización de enlaces de NetBox.
     await db.commit()
 
 @router.get("/{map_id}", response_model=MapDetailOut)
 async def get_map_detail(map_id: str, user: Dict[str, Any] = Depends(get_current_user)):
-    """Obtiene el mapa con todos sus nodos y enlaces, asegurando automáticamente la presencia de nodos de navegación."""
+    """Obtiene el mapa con todos sus nodos y enlaces de manera ultra-rápida desde la base de datos local."""
     async with get_db_connection() as db:
-        # Sincronizar conexiones de NetBox para los equipos de este mapa al vuelo
-        await inventory_service.sync_map_connections_from_netbox(db, map_id)
-
-        # Asegurar y sincronizar nodos de navegación para este mapa
+        # Asegurar y sincronizar portal de navegación superior (padre) para este mapa
         await ensure_map_navigation_nodes(db, map_id)
         await db.commit()
 

@@ -6035,13 +6035,13 @@ function renderNodeConnectionsSummary(node) {
     const peerNode = nodesDict.get(peerId);
     const peerName = peerNode ? peerNode.name : (link.extra_data?.peer_name || link.extra_data?.target_map_name || 'Extremo Remoto');
 
-    const localIf = isSrc 
-      ? (link.source_interface || link.extra_data?.source_interface || link.extra_data?.gpon_port || 'Local')
-      : (link.target_interface || link.extra_data?.target_interface || 'Local');
+    const srcIf = link.source_interface || link.extra_data?.source_interface || link.extra_data?.gpon_port || 'Local';
+    const tgtIf = link.target_interface || link.extra_data?.target_interface || 'Remoto';
 
-    const peerIf = isSrc 
-      ? (link.target_interface || link.extra_data?.target_interface || '')
-      : (link.source_interface || link.extra_data?.source_interface || link.extra_data?.gpon_port || '');
+    const ladoA_name = isSrc ? node.name : peerName;
+    const ladoB_name = isSrc ? peerName : node.name;
+    const localIf = isSrc ? srcIf : tgtIf;
+    const peerIf = isSrc ? tgtIf : srcIf;
 
     // Tipo de medio y badges visuales
     const isFiber = link.cable_type === 'fiber' || link.cable_type === 'fibra' || !!link.extra_data?.gpon_port;
@@ -6063,16 +6063,19 @@ function renderNodeConnectionsSummary(node) {
     const desc = link.description || link.extra_data?.description || link.extra_data?.name || (isWireless ? (link.extra_data?.ssid ? `SSID: ${link.extra_data.ssid}` : '') : '');
 
     html += `
-      <div class="node-conn-item" data-link-id="${link.id}" title="Clic para seleccionar y enfocar este enlace en el lienzo">
-        <div class="node-conn-row-main">
+      <div class="node-conn-item" data-link-id="${link.id}" title="Conexión NetBox: Lado A (${safeStr(ladoA_name)}) ➔ Lado B (${safeStr(ladoB_name)})">
+        <div class="node-conn-row-main" style="gap: 5px;">
+          <span class="badge" style="background: ${isSrc ? 'rgba(56, 189, 248, 0.25)' : 'rgba(168, 85, 247, 0.25)'}; color: ${isSrc ? '#38bdf8' : '#c084fc'}; font-size: 0.58rem; font-weight: 800; padding: 1px 4px; border-radius: 3px;" title="${isSrc ? 'Este equipo es Lado A (Padre / Principal / Origen)' : 'Este equipo es Lado B (Hijo / Secundario / Destino)'}">
+            ${isSrc ? 'Lado A' : 'Lado B'}
+          </span>
           <span class="node-conn-badge-port local" title="Interfaz en este equipo: ${safeStr(localIf)}">
             <i class="fas ${typeIcon}" style="color: ${typeColor}; font-size: 0.58rem; margin-right: 3px;"></i>${safeStr(localIf)}
           </span>
-          <i class="fas fa-arrows-alt-h" style="font-size: 0.60rem; color: #64748b; flex-shrink: 0;"></i>
-          <span class="node-conn-badge-port remote" title="Interfaz remota: ${safeStr(peerIf || '—')}">
+          <i class="fas ${isSrc ? 'fa-arrow-right' : 'fa-arrow-left'}" style="font-size: 0.60rem; color: ${isSrc ? '#38bdf8' : '#c084fc'}; flex-shrink: 0;" title="${isSrc ? 'Saliente hacia Lado B (Hijo)' : 'Entrante desde Lado A (Padre)'}"></i>
+          <span class="node-conn-badge-port remote" title="Interfaz remota (${isSrc ? 'Lado B' : 'Lado A'}): ${safeStr(peerIf || '—')}">
             ${peerIf ? safeStr(peerIf) : '—'}
           </span>
-          <span class="node-conn-peer-name" title="Equipo conectado: ${safeStr(peerName)}">
+          <span class="node-conn-peer-name" title="Equipo conectado (${isSrc ? 'Lado B' : 'Lado A'}): ${safeStr(peerName)}">
             @ ${safeStr(peerName)}
           </span>
         </div>
@@ -6134,18 +6137,23 @@ function getNodeHierarchyRank(n) {
 }
 
 function classifyConnDirection(centerNode, link, peerNode) {
+  // 1. Portales padre y submapas explícitos
   if (peerNode?.device_type === 'parent_map' || peerNode?.extra_data?.is_parent_shortcut) return 'upstream';
   if (peerNode?.device_type === 'submap' || link?.extra_data?.is_submap_link) return 'downstream';
   if (centerNode?.device_type === 'parent_map') return 'downstream';
   if (centerNode?.device_type === 'submap') return 'upstream';
 
-  const centerRank = getNodeHierarchyRank(centerNode);
-  const peerRank = getNodeHierarchyRank(peerNode);
+  // 2. NetBox SSoT: LADO A (source_node_id) es siempre el PADRE / PRINCIPAL (Upstream)
+  //                 LADO B (target_node_id) es siempre el HIJO / SECUNDARIO (Downstream)
+  const isTargetToSource = (link.direction === 'target_to_source' || link.extra_data?.direction === 'target_to_source');
 
-  if (peerRank > centerRank) return 'upstream';
-  if (peerRank < centerRank) return 'downstream';
-
-  return (link.target_node_id === centerNode.id) ? 'upstream' : 'downstream';
+  if (link.source_node_id === centerNode.id) {
+    // El nodo central es Lado A (Padre / Principal) -> el peer es Lado B (Hijo / Secundario)
+    return isTargetToSource ? 'upstream' : 'downstream';
+  } else {
+    // El nodo central es Lado B (Hijo / Secundario) -> el peer es Lado A (Padre / Principal)
+    return isTargetToSource ? 'downstream' : 'upstream';
+  }
 }
 
 function getDeviceFaIcon(deviceType, name) {
@@ -6193,16 +6201,25 @@ function renderConnTreeCard(item, tier) {
         <span style="background: rgba(255, 255, 255, 0.06); padding: 1px 5px; border-radius: 3px; font-size: 0.63rem;">${safeStr(item.role)}</span>
       </div>
 
-      <div class="conn-tree-card-conninfo">
-        <span style="font-family: monospace; color: #cbd5e1; display: inline-flex; align-items: center; gap: 3px;" title="Interfaz Local ➔ Remota">
-          <i class="fas fa-plug" style="color: #64748b; font-size: 0.58rem;"></i>
-          <span style="color: #93c5fd;">${safeStr(item.localIf)}</span>
-          <i class="fas fa-long-arrow-alt-right" style="color: #64748b; font-size: 0.58rem;"></i>
-          <span style="color: #cbd5e1;">${safeStr(item.peerIf || '—')}</span>
-        </span>
-        <span class="badge" style="background: rgba(255, 255, 255, 0.05); color: ${item.mediaColor}; font-size: 0.60rem; border: 1px solid rgba(255, 255, 255, 0.08); display: inline-flex; align-items: center; gap: 3px;">
-          <i class="fas ${item.mediaIcon}" style="font-size: 0.56rem;"></i> ${item.mediaLabel}
-        </span>
+      <div class="conn-tree-card-conninfo" style="flex-direction: column; align-items: stretch; gap: 4px;">
+        <div style="display: flex; align-items: center; justify-content: space-between; gap: 6px;">
+          <div style="display: flex; align-items: center; gap: 5px; font-family: monospace; font-size: 0.63rem;">
+            <span class="badge" style="background: rgba(56, 189, 248, 0.25); color: #38bdf8; font-weight: 800; font-size: 0.58rem; padding: 1px 4px; border-radius: 3px;" title="Extremo A (Padre / Principal / Origen)">LADO A</span>
+            <span style="color: ${item.isCenterLadoA ? '#38bdf8' : '#e2e8f0'}; font-weight: ${item.isCenterLadoA ? '800' : '600'};" title="${item.isCenterLadoA ? 'Este equipo seleccionado' : 'Equipo remoto'}">
+              ${safeStr(item.ladoA_name)} <span style="color: #94a3b8;">[${safeStr(item.ladoA_if || '—')}]</span>
+            </span>
+          </div>
+          <span class="badge" style="background: rgba(255, 255, 255, 0.05); color: ${item.mediaColor}; font-size: 0.58rem; border: 1px solid rgba(255, 255, 255, 0.08); display: inline-flex; align-items: center; gap: 3px;">
+            <i class="fas ${item.mediaIcon}" style="font-size: 0.54rem;"></i> ${item.mediaLabel}
+          </span>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 5px; font-family: monospace; font-size: 0.63rem;">
+          <span class="badge" style="background: rgba(168, 85, 247, 0.25); color: #c084fc; font-weight: 800; font-size: 0.58rem; padding: 1px 4px; border-radius: 3px;" title="Extremo B (Hijo / Secundario / Destino)">LADO B</span>
+          <span style="color: ${!item.isCenterLadoA ? '#38bdf8' : '#e2e8f0'}; font-weight: ${!item.isCenterLadoA ? '800' : '600'};" title="${!item.isCenterLadoA ? 'Este equipo seleccionado' : 'Equipo remoto'}">
+            ${safeStr(item.ladoB_name)} <span style="color: #94a3b8;">[${safeStr(item.ladoB_if || '—')}]</span>
+          </span>
+        </div>
       </div>
 
       ${item.desc ? `
@@ -6325,13 +6342,14 @@ function openNodeConnectionTree(node) {
     const peerNode = nodesDict.get(peerId);
     const peerName = peerNode ? peerNode.name : (link.extra_data?.peer_name || link.extra_data?.target_map_name || 'Extremo Remoto');
 
-    const localIf = isSrc 
-      ? (link.source_interface || link.extra_data?.source_interface || link.extra_data?.gpon_port || 'Local')
-      : (link.target_interface || link.extra_data?.target_interface || 'Local');
+    const srcIf = link.source_interface || link.extra_data?.source_interface || link.extra_data?.gpon_port || 'Local';
+    const tgtIf = link.target_interface || link.extra_data?.target_interface || 'Remoto';
 
-    const peerIf = isSrc 
-      ? (link.target_interface || link.extra_data?.target_interface || '')
-      : (link.source_interface || link.extra_data?.source_interface || link.extra_data?.gpon_port || '');
+    const isCenterLadoA = isSrc;
+    const ladoA_name = isCenterLadoA ? node.name : peerName;
+    const ladoB_name = isCenterLadoA ? peerName : node.name;
+    const ladoA_if = srcIf;
+    const ladoB_if = tgtIf;
 
     const isFiber = link.cable_type === 'fiber' || link.cable_type === 'fibra' || !!link.extra_data?.gpon_port;
     const isWireless = link.cable_type === 'wireless' || !!link.netbox_wirelesslink_id || !!link.extra_data?.wireless_link_id;
@@ -6362,8 +6380,11 @@ function openNodeConnectionTree(node) {
       peerId,
       peerNode,
       peerName,
-      localIf,
-      peerIf,
+      isCenterLadoA,
+      ladoA_name,
+      ladoB_name,
+      ladoA_if,
+      ladoB_if,
       mediaIcon,
       mediaColor,
       mediaLabel,
@@ -7234,7 +7255,7 @@ function refreshSelectedNodeTelemetry() {
 }
 
 // Actualiza el dot de color (SNMP) y contorno (PING) en el canvas Konva para un nodo específico
-function applyNodeStatusToCanvas(nodeId, statusData) {
+function applyNodeStatusToCanvas(nodeId, statusData, shouldDraw = false) {
   const grp = nodeGroups.get(nodeId);
   if (!grp) return;
   const dotShape = grp.findOne('.statusDot') || grp.getChildren(c => c.getClassName() === 'Circle' && !c.listening())[0];
@@ -7276,7 +7297,9 @@ function applyNodeStatusToCanvas(nodeId, statusData) {
     snmpAlertBadge.destroy();
   }
 
-  nodesLayer.batchDraw();
+  if (shouldDraw) {
+    nodesLayer.batchDraw();
+  }
 }
 
 // ─── POLLING EN TIEMPO REAL: actualización cronológica del lienzo ─────────────
@@ -7318,9 +7341,9 @@ function startRealtimePolling(mapId) {
         }
       }
 
-      // Actualizar dot (SNMP) y contorno (PING) de cada nodo en el canvas
+      // Actualizar dot (SNMP) y contorno (PING) de cada nodo en el canvas sin redibujar en cada iteración
       for (const [nodeId, nodeStatus] of Object.entries(data.nodes)) {
-        applyNodeStatusToCanvas(nodeId, nodeStatus);
+        applyNodeStatusToCanvas(nodeId, nodeStatus, false);
         // Si este nodo está seleccionado, refrescar panel también
         if (selectedNode && selectedNode.id === nodeId) {
           applyTelemetryToPanel(nodeStatus);
@@ -7338,6 +7361,9 @@ function startRealtimePolling(mapId) {
         });
         updateAllLinkColors();
       }
+
+      // Redibujado en lote único al finalizar actualización
+      nodesLayer.batchDraw();
     } catch (e) {
       console.warn('[Realtime] Error en polling de estado:', e);
       const sourceDot = document.getElementById('telemetry-source-dot');
@@ -7387,7 +7413,11 @@ async function loadMap(mapId) {
     _realtimePollInterval = null;
   }
 
-  const mapData = await API.getMapDetail(mapId);
+  // Carga paralela de topología y breadcrumbs para máxima velocidad
+  const [mapData, crumbs] = await Promise.all([
+    API.getMapDetail(mapId),
+    API.getMapBreadcrumb(mapId)
+  ]);
   if (!mapData) return;
 
   currentMap = mapData;
@@ -7402,8 +7432,7 @@ async function loadMap(mapId) {
   }
 
   // Actualizar Breadcrumb
-  const crumbs = await API.getMapBreadcrumb(mapId);
-  renderBreadcrumbs(crumbs);
+  if (crumbs) renderBreadcrumbs(crumbs);
 
   // Renderizar enlaces primero (capa inferior)
   mapData.links.forEach(l => renderLink(l, nodesDict));
@@ -7416,7 +7445,13 @@ async function loadMap(mapId) {
 
   linksLayer.batchDraw();
   nodesLayer.batchDraw();
-  refreshMapsTabList();
+
+  // Optimización de rendimiento: Si el árbol lateral ya está cargado, solo destacar el mapa activo
+  if (!cachedMaps || cachedMaps.length === 0) {
+    await refreshMapsTabList();
+  } else {
+    highlightActiveMapInSidebar(mapId);
+  }
   checkMapCanPopulateFromSite();
 
   // Arrancar polling de estado en tiempo real para este mapa
@@ -7924,6 +7959,28 @@ function isMapDescendantOf(potentialDescendantId, ancestorId) {
   return false;
 }
 
+function highlightActiveMapInSidebar(mapId) {
+  const treeContainer = document.getElementById('maps-tree');
+  if (!treeContainer) return;
+  treeContainer.querySelectorAll('.map-item-card').forEach(c => {
+    if (c.dataset.mapId === mapId) {
+      c.classList.add('active');
+      const head = c.querySelector('.map-card-head');
+      if (head && !head.querySelector('.map-active-badge')) {
+        const badge = document.createElement('span');
+        badge.className = 'map-active-badge';
+        badge.innerHTML = '<i class="fas fa-check"></i> Activo';
+        head.appendChild(badge);
+      }
+    } else {
+      c.classList.remove('active');
+      const b = c.querySelector('.map-active-badge');
+      if (b) b.remove();
+    }
+  });
+  autoExpandAncestors(mapId);
+}
+
 async function refreshMapsTabList(filterText = '') {
   window.loadMapsTree = refreshMapsTabList;
   try {
@@ -8085,6 +8142,7 @@ async function refreshMapsTabList(filterText = '') {
 
     const card = document.createElement('div');
     card.className = `map-item-card ${isSubmap ? 'is-submap' : ''} ${isActive ? 'active' : ''}`;
+    card.dataset.mapId = mapObj.id;
     card.draggable = !isDefault;
 
     card.innerHTML = `
