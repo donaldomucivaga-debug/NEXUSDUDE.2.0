@@ -1,7 +1,8 @@
 import json
+import logging
 import uuid
-from typing import List, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import List, Dict, Any, Optional
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from app.auth import get_current_user
 from app.config import settings
 from app.database import get_db_connection
@@ -12,8 +13,11 @@ from app.models import (
     CreateMapFromSiteRequest, PopulateMapFromSiteRequest,
     BulkCreateMapsFromSitesRequest, BulkDeleteNodesRequest,
     MapReorderRequest, MapOrderItem, MapMoveRequest,
-    HierarchyItem, HierarchyCreate, HierarchyUpdate, MergeDuplicatesRequest
+    HierarchyItem, HierarchyCreate, HierarchyUpdate, MergeDuplicatesRequest,
+    AddSubmapNavigationRequest
 )
+
+logger = logging.getLogger("nexusdude.maps")
 from app.services.inventory_service import inventory_service
 from app.services.zabbix_service import zabbix_service
 
@@ -726,14 +730,19 @@ async def get_map_detail(map_id: str, user: Dict[str, Any] = Depends(get_current
                 updated_at=str(r["updated_at"])
             ))
 
-        # Enlaces (Únicamente aristas documentadas en NetBox)
+        # Enlaces (Aristas documentadas en NetBox o enlaces intermapa de navegación)
         c_links = await db.execute("""
             SELECT * FROM links 
             WHERE map_id = ? 
               AND (
                   netbox_cable_id IS NOT NULL 
                   OR netbox_wirelesslink_id IS NOT NULL 
-                  OR (extra_data IS NOT NULL AND (json_extract(extra_data, '$.netbox_cable_id') IS NOT NULL OR json_extract(extra_data, '$.wireless_link_id') IS NOT NULL))
+                  OR (extra_data IS NOT NULL AND (
+                      json_extract(extra_data, '$.netbox_cable_id') IS NOT NULL 
+                      OR json_extract(extra_data, '$.wireless_link_id') IS NOT NULL
+                      OR json_extract(extra_data, '$.is_intermap') = 1
+                      OR json_extract(extra_data, '$.is_intermap') = true
+                  ))
               )
         """, (map_id,))
         links_rows = await c_links.fetchall()
@@ -782,6 +791,294 @@ async def get_map_detail(map_id: str, user: Dict[str, Any] = Depends(get_current
             nodes=nodes,
             links=links
         )
+
+@router.get("/{map_id}/intermap-candidate")
+async def get_intermap_candidate(
+    map_id: str,
+    target_map_id: str = Query(..., description="ID del mapa destino a evaluar"),
+    local_node_id: Optional[str] = Query(None, description="Nodo local opcional para filtrar"),
+    user: Dict[str, Any] = Depends(get_current_user)
+):
+    """
+    Evalúa si existe una conexión documentada en NetBox (Cable o WirelessLink)
+    entre los dispositivos del mapa actual y los del mapa destino.
+    """
+    async with get_db_connection() as db:
+        c_local = await db.execute("SELECT id, device_id, name FROM nodes WHERE map_id = ? AND device_id IS NOT NULL", (map_id,))
+        local_nodes = await c_local.fetchall()
+        local_dev_to_node = {n["device_id"]: n for n in local_nodes}
+        local_dev_ids = set(local_dev_to_node.keys())
+
+        c_target = await db.execute("SELECT id, device_id, name FROM nodes WHERE map_id = ? AND device_id IS NOT NULL", (target_map_id,))
+        target_nodes = await c_target.fetchall()
+        target_dev_to_node = {n["device_id"]: n for n in target_nodes}
+        target_dev_ids = set(target_dev_to_node.keys())
+
+        if not local_dev_ids or not target_dev_ids:
+            return {"found": False, "candidates": []}
+
+        candidates = []
+
+        # 1. Verificar WirelessLinks de NetBox
+        try:
+            wlinks = await inventory_service.get_wireless_links()
+            for wl in wlinks:
+                wl_id = wl.get("id")
+                da = wl.get("interface_a", {}).get("device", {}).get("id")
+                db_id = wl.get("interface_b", {}).get("device", {}).get("id")
+                if (da in local_dev_ids and db_id in target_dev_ids) or (db_id in local_dev_ids and da in target_dev_ids):
+                    is_a_local = da in local_dev_ids
+                    loc_dev = da if is_a_local else db_id
+                    rem_dev = db_id if is_a_local else da
+                    loc_n = local_dev_to_node[loc_dev]
+                    rem_n = target_dev_to_node[rem_dev]
+                    candidates.append({
+                        "type": "wireless",
+                        "netbox_wirelesslink_id": wl_id,
+                        "netbox_cable_id": None,
+                        "cable_type": "wireless",
+                        "local_node_id": loc_n["id"],
+                        "local_device_id": loc_dev,
+                        "local_device_name": loc_n["name"],
+                        "local_interface": "Wireless",
+                        "remote_device_id": rem_dev,
+                        "remote_device_name": rem_n["name"],
+                        "remote_interface": "Wireless",
+                        "summary": f"Radioenlace NetBox #{wl_id} ({loc_n['name']} ➔ {rem_n['name']})"
+                    })
+        except Exception as e:
+            logger.warning(f"Error evaluando candidatos wireless: {e}")
+
+        # 2. Verificar Cables Físicos de NetBox
+        try:
+            cables = await inventory_service.get_all_cables()
+            for cb in cables:
+                cid = cb.get("id")
+                at = cb.get("a_terminations", [])
+                bt = cb.get("b_terminations", [])
+                if at and bt:
+                    da = at[0].get("object", {}).get("device", {}).get("id")
+                    db_id = bt[0].get("object", {}).get("device", {}).get("id")
+                    if (da in local_dev_ids and db_id in target_dev_ids) or (db_id in local_dev_ids and da in target_dev_ids):
+                        is_a_local = da in local_dev_ids
+                        loc_dev = da if is_a_local else db_id
+                        rem_dev = db_id if is_a_local else da
+                        loc_n = local_dev_to_node[loc_dev]
+                        rem_n = target_dev_to_node[rem_dev]
+                        loc_if = at[0].get("object", {}).get("name") if is_a_local else bt[0].get("object", {}).get("name")
+                        rem_if = bt[0].get("object", {}).get("name") if is_a_local else at[0].get("object", {}).get("name")
+                        c_type = cb.get("type", {}).get("value") if isinstance(cb.get("type"), dict) else (cb.get("type") or "cat6")
+                        candidates.append({
+                            "type": "cable",
+                            "netbox_wirelesslink_id": None,
+                            "netbox_cable_id": cid,
+                            "cable_type": c_type,
+                            "local_node_id": loc_n["id"],
+                            "local_device_id": loc_dev,
+                            "local_device_name": loc_n["name"],
+                            "local_interface": loc_if,
+                            "remote_device_id": rem_dev,
+                            "remote_device_name": rem_n["name"],
+                            "remote_interface": rem_if,
+                            "summary": f"Cable NetBox #{cid} [{c_type.upper()}] ({loc_n['name']} [{loc_if}] ➔ {rem_n['name']} [{rem_if}])"
+                        })
+        except Exception as e:
+            logger.warning(f"Error evaluando candidatos cable: {e}")
+
+        if local_node_id:
+            filtered = [c for c in candidates if c["local_node_id"] == local_node_id]
+            if filtered:
+                return {"found": True, "primary": filtered[0], "candidates": filtered}
+
+        return {
+            "found": len(candidates) > 0,
+            "primary": candidates[0] if candidates else None,
+            "candidates": candidates
+        }
+
+@router.post("/{map_id}/add-submap-navigation")
+async def add_submap_navigation(
+    map_id: str,
+    payload: AddSubmapNavigationRequest,
+    user: Dict[str, Any] = Depends(get_current_user)
+):
+    """
+    Inserta o vincula un portal de submapa existente en el lienzo actual,
+    asegura la jerarquía en map_hierarchy, el portal de retorno en el mapa hijo,
+    y crea la arista correspondiente hacia el equipo local (si se especifica).
+    """
+    if map_id == payload.target_map_id:
+        raise HTTPException(status_code=400, detail="No puedes vincular un mapa consigo mismo.")
+
+    async with get_db_connection() as db:
+        c_src = await db.execute("SELECT id, name, site_name FROM maps WHERE id = ?", (map_id,))
+        src_map = await c_src.fetchone()
+        if not src_map:
+            raise HTTPException(status_code=404, detail="El mapa actual no existe.")
+
+        c_tgt = await db.execute("SELECT id, name, site_name FROM maps WHERE id = ?", (payload.target_map_id,))
+        tgt_map = await c_tgt.fetchone()
+        if not tgt_map:
+            raise HTTPException(status_code=404, detail="El mapa destino no existe.")
+
+        # Buscar si ya existe nodo de submapa en el mapa actual
+        c_sub = await db.execute("""
+            SELECT id, name, x, y, extra_data FROM nodes 
+            WHERE map_id = ? AND device_type = 'submap' 
+              AND (extra_data LIKE ? OR name = ?)
+        """, (map_id, f'%"target_map_id": "{payload.target_map_id}"%', f"📁 {tgt_map['name']}"))
+        sub_row = await c_sub.fetchone()
+
+        if sub_row:
+            subnode_id = sub_row["id"]
+            try:
+                ed = json.loads(sub_row["extra_data"]) if sub_row["extra_data"] else {}
+            except Exception:
+                ed = {}
+            ed["target_map_id"] = payload.target_map_id
+            ed["role"] = "Submapa"
+            ed["site_name"] = tgt_map["site_name"] or tgt_map["name"]
+            await db.execute("UPDATE nodes SET extra_data = ? WHERE id = ?", (json.dumps(ed), subnode_id))
+        else:
+            pos_x = payload.x
+            pos_y = payload.y
+            if pos_x is None or pos_y is None:
+                if payload.local_node_id:
+                    c_loc = await db.execute("SELECT x, y FROM nodes WHERE id = ?", (payload.local_node_id,))
+                    loc_r = await c_loc.fetchone()
+                    if loc_r:
+                        pos_x = (loc_r["x"] or 200.0) + 180.0
+                        pos_y = loc_r["y"] or 200.0
+                    else:
+                        pos_x, pos_y = 450.0, 200.0
+                else:
+                    pos_x, pos_y = 450.0, 200.0
+
+            subnode_id = f"node-{uuid.uuid4().hex[:8]}"
+            extra = {
+                "target_map_id": payload.target_map_id,
+                "role": "Submapa",
+                "site_name": tgt_map["site_name"] or tgt_map["name"]
+            }
+            await db.execute("""
+                INSERT INTO nodes (id, map_id, name, ip, device_type, site_name, x, y, status, extra_data)
+                VALUES (?, ?, ?, '', 'submap', ?, ?, ?, 'ok', ?)
+            """, (subnode_id, map_id, f"📁 {tgt_map['name']}", tgt_map["site_name"] or tgt_map["name"], pos_x, pos_y, json.dumps(extra)))
+
+        # Asegurar acceso en map_hierarchy
+        c_hier = await db.execute("""
+            SELECT id FROM map_hierarchy WHERE parent_map_id = ? AND child_map_id = ?
+        """, (map_id, payload.target_map_id))
+        if not await c_hier.fetchone():
+            c_pos = await db.execute("SELECT COALESCE(MAX(position), -1) + 1 as next_pos FROM map_hierarchy WHERE parent_map_id = ?", (map_id,))
+            r_pos = await c_pos.fetchone()
+            n_pos = r_pos["next_pos"] if r_pos else 0
+            new_h_id = f"hier-{uuid.uuid4().hex[:8]}"
+            await db.execute("""
+                INSERT INTO map_hierarchy (id, parent_map_id, child_map_id, alias, position, is_primary)
+                VALUES (?, ?, ?, ?, ?, 0)
+            """, (new_h_id, map_id, payload.target_map_id, tgt_map["name"], n_pos))
+
+        # Asegurar portales de retorno y consistencia
+        await ensure_map_navigation_nodes(db, payload.target_map_id)
+        await ensure_map_navigation_nodes(db, map_id)
+
+        # Crear enlace si se especificó local_node_id
+        created_link_id = None
+        if payload.local_node_id:
+            c_loc = await db.execute("SELECT id, name, device_id, extra_data FROM nodes WHERE id = ? AND map_id = ?", (payload.local_node_id, map_id))
+            local_node = await c_loc.fetchone()
+            if local_node:
+                c_link_exist = await db.execute("""
+                    SELECT id FROM links 
+                    WHERE map_id = ? AND ((source_node_id = ? AND target_node_id = ?) OR (source_node_id = ? AND target_node_id = ?))
+                """, (map_id, payload.local_node_id, subnode_id, subnode_id, payload.local_node_id))
+                existing_link = await c_link_exist.fetchone()
+
+                if not existing_link:
+                    netbox_cable_id = None
+                    netbox_wirelesslink_id = None
+                    cable_type = "cat6"
+                    src_iface = "Enlace"
+                    tgt_iface = "Submapa"
+
+                    loc_dev_id = local_node["device_id"]
+                    if loc_dev_id:
+                        # Buscar en WirelessLinks
+                        wlinks = await inventory_service.get_wireless_links()
+                        for wl in wlinks:
+                            da = wl.get("interface_a", {}).get("device", {}).get("id")
+                            db_id = wl.get("interface_b", {}).get("device", {}).get("id")
+                            if loc_dev_id in (da, db_id):
+                                rem_id = db_id if loc_dev_id == da else da
+                                c_rem = await db.execute("SELECT id, name FROM nodes WHERE map_id = ? AND device_id = ?", (payload.target_map_id, rem_id))
+                                rem_r = await c_rem.fetchone()
+                                if rem_r:
+                                    netbox_wirelesslink_id = wl.get("id")
+                                    cable_type = "wireless"
+                                    src_iface = "Wireless"
+                                    tgt_iface = "Wireless"
+                                    break
+
+                        if not netbox_wirelesslink_id:
+                            cables = await inventory_service.get_all_cables()
+                            for cb in cables:
+                                at = cb.get("a_terminations", [])
+                                bt = cb.get("b_terminations", [])
+                                if at and bt:
+                                    da = at[0].get("object", {}).get("device", {}).get("id")
+                                    db_id = bt[0].get("object", {}).get("device", {}).get("id")
+                                    if loc_dev_id in (da, db_id):
+                                        rem_id = db_id if loc_dev_id == da else da
+                                        c_rem = await db.execute("SELECT id, name FROM nodes WHERE map_id = ? AND device_id = ?", (payload.target_map_id, rem_id))
+                                        rem_r = await c_rem.fetchone()
+                                        if rem_r:
+                                            netbox_cable_id = cb.get("id")
+                                            cable_type = cb.get("type", {}).get("value") if isinstance(cb.get("type"), dict) else (cb.get("type") or "cat6")
+                                            src_iface = at[0].get("object", {}).get("name") if loc_dev_id == da else bt[0].get("object", {}).get("name")
+                                            tgt_iface = bt[0].get("object", {}).get("name") if loc_dev_id == da else at[0].get("object", {}).get("name")
+                                            break
+
+                    pin_id = f"pin-submap-{uuid.uuid4().hex[:6]}"
+                    extra_link = {
+                        "is_intermap": True,
+                        "pin_id": pin_id,
+                        "local_node_id": payload.local_node_id,
+                        "local_node_name": local_node["name"],
+                        "remote_map_id": payload.target_map_id,
+                        "target_submap_node_id": subnode_id,
+                        "direction": payload.direction or "source_to_target",
+                        "sync_zabbix": True
+                    }
+                    if netbox_cable_id:
+                        extra_link["netbox_cable_id"] = netbox_cable_id
+                    if netbox_wirelesslink_id:
+                        extra_link["wireless_link_id"] = netbox_wirelesslink_id
+
+                    created_link_id = f"link-{uuid.uuid4().hex[:8]}"
+                    await db.execute("""
+                        INSERT INTO links (
+                            id, map_id, source_node_id, target_node_id,
+                            source_interface, target_interface,
+                            netbox_cable_id, netbox_wirelesslink_id,
+                            cable_type, cable_status, status, extra_data
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'connected', 'ok', ?)
+                    """, (
+                        created_link_id, map_id, payload.local_node_id, subnode_id,
+                        src_iface, tgt_iface,
+                        netbox_cable_id, netbox_wirelesslink_id,
+                        cable_type, json.dumps(extra_link)
+                    ))
+
+        await db.commit()
+
+        return {
+            "status": "success",
+            "message": f"Navegación hacia '{tgt_map['name']}' añadida exitosamente.",
+            "submap_node_id": subnode_id,
+            "link_id": created_link_id
+        }
 
 @router.post("", response_model=MapOut, status_code=status.HTTP_201_CREATED)
 async def create_map(map_data: MapCreate, user: Dict[str, Any] = Depends(get_current_user)):

@@ -3069,7 +3069,8 @@ function updateAllLinkColors() {
     const srcNode = nodeMap.get(sourceId);
     const tgtNode = nodeMap.get(targetId);
     if (line && line.getStage()) {
-      const isNetboxDocumented = !!(link?.netbox_cable_id || link?.netbox_wirelesslink_id || link?.extra_data?.netbox_cable_id || link?.extra_data?.wireless_link_id);
+      const isIntermap = !!(link?.extra_data && (link.extra_data.is_intermap || link.extra_data.remote_node_id));
+      const isNetboxDocumented = isIntermap || !!(link?.netbox_cable_id || link?.netbox_wirelesslink_id || link?.extra_data?.netbox_cable_id || link?.extra_data?.wireless_link_id);
       if (!isNetboxDocumented) {
         line.visible(false);
         return;
@@ -3419,14 +3420,14 @@ function renderLink(link, nodesDict) {
   if (!source || !target) return;
 
   // ── REGLA FUNDAMENTAL: NetBox como Única Fuente de Verdad ──
-  // Únicamente se dibujan aristas respaldadas por NetBox (Cable o WirelessLink)
-  const isNetboxDocumented = !!(link.netbox_cable_id || link.netbox_wirelesslink_id || link.extra_data?.netbox_cable_id || link.extra_data?.wireless_link_id);
+  // Se dibujan aristas respaldadas por NetBox (Cable o WirelessLink) o enlaces intermapa a submapas
+  const isIntermap = !!(link.extra_data && (link.extra_data.is_intermap || link.extra_data.remote_node_id));
+  const isNetboxDocumented = isIntermap || !!(link.netbox_cable_id || link.netbox_wirelesslink_id || link.extra_data?.netbox_cable_id || link.extra_data?.wireless_link_id);
   if (!isNetboxDocumented) {
     return; // Omitir completamente aristas no documentadas en NetBox
   }
 
   const pts = calculateLinkEndpoints(source, target, link);
-  const isIntermap = !!(link.extra_data && (link.extra_data.is_intermap || link.extra_data.remote_node_id));
   const direction = link.extra_data?.direction || 'source_to_target';
   const arrowPts = getArrowPointsForDirection(pts, direction);
 
@@ -7836,6 +7837,172 @@ function populateSiteSelectOptions(selectedSiteName = '') {
   }
 }
 
+async function openInsertSubmapNavModal() {
+  if (!currentMap) {
+    alert('Por favor selecciona o abre un mapa primero.');
+    return;
+  }
+
+  const modal = document.getElementById('modal-insert-submap-nav');
+  if (!modal) return;
+
+  const selectTarget = document.getElementById('select-nav-submap-target');
+  const inputFilter = document.getElementById('input-filter-nav-submap');
+  const previewBox = document.getElementById('nav-submap-preview');
+  const previewName = document.getElementById('nav-preview-name');
+  const previewBadge = document.getElementById('nav-preview-badge');
+  const previewStats = document.getElementById('nav-preview-stats');
+
+  const selectLocal = document.getElementById('select-nav-local-node');
+  const netboxNotice = document.getElementById('nav-submap-netbox-notice');
+  const netboxText = document.getElementById('nav-submap-netbox-text');
+  const dirBox = document.getElementById('nav-submap-direction-box');
+  const selectDir = document.getElementById('select-nav-direction');
+
+  // Resetear estados visuales
+  if (inputFilter) inputFilter.value = '';
+  if (previewBox) previewBox.style.display = 'none';
+  if (netboxNotice) netboxNotice.style.display = 'none';
+  if (dirBox) dirBox.style.display = 'none';
+  if (selectDir) selectDir.value = 'source_to_target';
+
+  // Asegurar que cachedMaps esté disponible
+  if (!Array.isArray(cachedMaps) || cachedMaps.length === 0) {
+    try {
+      cachedMaps = await API.getMaps();
+    } catch (_) {
+      cachedMaps = [];
+    }
+  }
+
+  // Filtrar mapas disponibles (excluyendo el mapa actual)
+  const availableMaps = cachedMaps
+    .filter(m => m.id !== currentMap.id)
+    .sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' }));
+
+  const populateTargetOptions = (query = '') => {
+    const q = query.trim().toLowerCase();
+    const filtered = availableMaps.filter(m => {
+      if (!q) return true;
+      const mName = (m.name || '').toLowerCase();
+      const sName = (m.site_name || '').toLowerCase();
+      return mName.includes(q) || sName.includes(q);
+    });
+
+    selectTarget.innerHTML = '<option value="">— Seleccionar un mapa de la lista —</option>';
+    filtered.forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = m.id;
+      const siteTag = m.site_name ? ` [Sitio: ${m.site_name}]` : '';
+      const retiredTag = m.is_site_retired ? ' 🔴 (Retirado)' : '';
+      opt.textContent = `${m.name}${siteTag}${retiredTag} (${m.nodes_count || 0} eq.)`;
+      selectTarget.appendChild(opt);
+    });
+  };
+
+  populateTargetOptions('');
+
+  if (inputFilter) {
+    inputFilter.oninput = () => {
+      const curVal = selectTarget.value;
+      populateTargetOptions(inputFilter.value);
+      if (curVal && Array.from(selectTarget.options).some(o => o.value === curVal)) {
+        selectTarget.value = curVal;
+      }
+    };
+  }
+
+  // Poblar equipos locales del mapa actual
+  selectLocal.innerHTML = '<option value="">— Sin enlace (Solo colocar portal de navegación) —</option>';
+  const deviceNodes = (currentMap.nodes || []).filter(n =>
+    n.device_type !== 'submap' &&
+    n.device_type !== 'parent_map' &&
+    n.device_type !== 'note' &&
+    n.device_type !== 'ftth_branch' &&
+    !n.extra_data?.is_parent_shortcut
+  );
+
+  deviceNodes.forEach(node => {
+    const opt = document.createElement('option');
+    opt.value = node.id;
+    const ipStr = node.ip ? ` (${node.ip})` : '';
+    const roleStr = node.extra_data?.role || node.device_type || 'Dispositivo';
+    opt.textContent = `${node.name} [${roleStr}]${ipStr}`;
+    selectLocal.appendChild(opt);
+  });
+
+  // Pre-seleccionar nodo si está activo en el lienzo
+  if (selectedNode && deviceNodes.some(n => n.id === selectedNode.id)) {
+    selectLocal.value = selectedNode.id;
+    if (dirBox) dirBox.style.display = 'block';
+  }
+
+  // Detección automática de conexiones NetBox al cambiar destino o equipo local
+  const updateCandidateCheck = async () => {
+    const targetMapId = selectTarget.value;
+    if (!targetMapId) {
+      if (previewBox) previewBox.style.display = 'none';
+      if (netboxNotice) netboxNotice.style.display = 'none';
+      return;
+    }
+
+    const tMap = availableMaps.find(m => m.id === targetMapId);
+    if (tMap && previewBox) {
+      previewBox.style.display = 'block';
+      if (previewName) previewName.textContent = `📁 ${tMap.name}`;
+      if (previewBadge) {
+        if (tMap.is_site_retired) {
+          previewBadge.textContent = '🔴 Sitio Retirado';
+          previewBadge.style.color = '#ef4444';
+          previewBadge.style.background = 'rgba(239, 68, 68, 0.15)';
+          previewBadge.style.borderColor = 'rgba(239, 68, 68, 0.3)';
+        } else {
+          previewBadge.textContent = tMap.site_name ? `🏢 ${tMap.site_name}` : '🟢 Sitio Activo';
+          previewBadge.style.color = '#38bdf8';
+          previewBadge.style.background = 'rgba(56, 189, 248, 0.15)';
+          previewBadge.style.borderColor = 'rgba(56, 189, 248, 0.3)';
+        }
+      }
+      if (previewStats) {
+        previewStats.textContent = `${tMap.nodes_count || 0} dispositivos registrados · ID: ${tMap.id}`;
+      }
+    }
+
+    const locNodeId = selectLocal.value || null;
+    try {
+      const res = await API.getIntermapCandidate(currentMap.id, targetMapId, locNodeId);
+      if (res && res.found && res.primary) {
+        const prim = res.primary;
+        if (netboxNotice) {
+          netboxNotice.style.display = 'block';
+          if (netboxText) {
+            netboxText.innerHTML = `<strong>${prim.summary}</strong><br><span style="color: #94a3b8; font-size: 0.70rem;">Extremo local: ${prim.local_device_name} ➔ Extremo remoto: ${prim.remote_device_name}</span>`;
+          }
+        }
+        if (!locNodeId && prim.local_node_id && Array.from(selectLocal.options).some(o => o.value === prim.local_node_id)) {
+          selectLocal.value = prim.local_node_id;
+          if (dirBox) dirBox.style.display = 'block';
+        }
+      } else {
+        if (netboxNotice) netboxNotice.style.display = 'none';
+      }
+    } catch (_) {
+      if (netboxNotice) netboxNotice.style.display = 'none';
+    }
+  };
+
+  selectTarget.onchange = updateCandidateCheck;
+  selectLocal.onchange = () => {
+    if (dirBox) {
+      dirBox.style.display = selectLocal.value ? 'block' : 'none';
+    }
+    updateCandidateCheck();
+  };
+
+  modal.style.display = 'flex';
+  if (inputFilter) inputFilter.focus();
+}
+
 async function openCreateMapModal(isSubmap = false, parentId = null) {
   updateParentMapSelectOptions();
   const modal = document.getElementById('modal-map');
@@ -10222,11 +10389,70 @@ window.addEventListener('DOMContentLoaded', async () => {
     btnGoToAllMapsTab.addEventListener('click', () => switchTab('tab-all-maps'));
   }
 
-  // Botones de crear mapa en topbar
+  // Botón Añadir Navegación a Submapa en Topbar
   const btnNewSubmap = document.getElementById('btn-new-submap');
   if (btnNewSubmap) {
-    btnNewSubmap.addEventListener('click', () => openCreateMapModal(true, currentMap?.id));
+    btnNewSubmap.addEventListener('click', () => openInsertSubmapNavModal());
   }
+
+  // Event Listeners del Modal Añadir Navegación a Submapa
+  const btnConfirmSubmapNav = document.getElementById('btn-confirm-insert-submap-nav');
+  if (btnConfirmSubmapNav) {
+    btnConfirmSubmapNav.addEventListener('click', async () => {
+      if (!currentMap) return;
+      const selectTarget = document.getElementById('select-nav-submap-target');
+      const selectLocal = document.getElementById('select-nav-local-node');
+      const selectDir = document.getElementById('select-nav-direction');
+
+      const targetMapId = selectTarget ? selectTarget.value : '';
+      if (!targetMapId) {
+        alert('Por favor selecciona un mapa destino de la lista.');
+        return;
+      }
+
+      const origHtml = btnConfirmSubmapNav.innerHTML;
+      btnConfirmSubmapNav.disabled = true;
+      btnConfirmSubmapNav.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Añadiendo navegación...';
+
+      try {
+        const payload = {
+          target_map_id: targetMapId,
+          local_node_id: selectLocal ? (selectLocal.value || null) : null,
+          direction: selectDir ? (selectDir.value || 'source_to_target') : 'source_to_target'
+        };
+
+        const res = await API.addSubmapNavigation(currentMap.id, payload);
+
+        document.getElementById('modal-insert-submap-nav').style.display = 'none';
+        await loadMap(currentMap.id);
+        await refreshMapsTabList();
+
+        if (res && res.submap_node_id && currentMap.nodes) {
+          const addedNode = currentMap.nodes.find(n => n.id === res.submap_node_id);
+          if (addedNode) selectNode(addedNode);
+        }
+      } catch (err) {
+        alert('❌ Error añadiendo navegación a submapa: ' + (err.message || err));
+      } finally {
+        btnConfirmSubmapNav.disabled = false;
+        btnConfirmSubmapNav.innerHTML = origHtml;
+      }
+    });
+  }
+
+  const btnCloseSubmapNav = document.getElementById('btn-close-insert-submap-nav');
+  if (btnCloseSubmapNav) {
+    btnCloseSubmapNav.addEventListener('click', () => {
+      document.getElementById('modal-insert-submap-nav').style.display = 'none';
+    });
+  }
+  const btnCancelSubmapNav = document.getElementById('btn-cancel-insert-submap-nav');
+  if (btnCancelSubmapNav) {
+    btnCancelSubmapNav.addEventListener('click', () => {
+      document.getElementById('modal-insert-submap-nav').style.display = 'none';
+    });
+  }
+
   const btnNewRootMap = document.getElementById('btn-new-root-map');
   if (btnNewRootMap) {
     btnNewRootMap.addEventListener('click', () => openCreateMapModal(false));

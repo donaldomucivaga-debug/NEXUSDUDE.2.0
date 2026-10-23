@@ -201,6 +201,13 @@ class HierarchyUpdate(BaseModel):
     position: Optional[int] = None
     parent_map_id: Optional[str] = None
 
+class AddSubmapNavigationRequest(BaseModel):
+    target_map_id: str
+    local_node_id: Optional[str] = None
+    direction: Optional[str] = "source_to_target"
+    x: Optional[float] = None
+    y: Optional[float] = None
+
 class MergeDuplicatesRequest(BaseModel):
     dry_run: bool = False
 

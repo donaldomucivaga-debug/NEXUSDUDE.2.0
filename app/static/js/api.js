@@ -87,6 +87,29 @@ const API = {
     throw new Error(await res.text());
   },
 
+  async getIntermapCandidate(mapId, targetMapId, localNodeId = null) {
+    let url = `/api/maps/${mapId}/intermap-candidate?target_map_id=${encodeURIComponent(targetMapId)}`;
+    if (localNodeId) url += `&local_node_id=${encodeURIComponent(localNodeId)}`;
+    const res = await this.fetch(url);
+    if (res.ok) return await res.json();
+    return { found: false, candidates: [] };
+  },
+
+  async addSubmapNavigation(mapId, payload) {
+    const res = await this.fetch(`/api/maps/${mapId}/add-submap-navigation`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+    if (res.ok) return await res.json();
+    const errText = await res.text();
+    let msg = errText;
+    try {
+      const j = JSON.parse(errText);
+      msg = j.detail || j.message || errText;
+    } catch (_) {}
+    throw new Error(msg);
+  },
+
   async mergeDuplicateMaps(dryRun = false) {
     const res = await this.fetch('/api/maps/merge-duplicates', {
       method: 'POST',
