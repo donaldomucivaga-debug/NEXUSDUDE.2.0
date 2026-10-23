@@ -538,13 +538,29 @@ async def ensure_map_navigation_nodes(db, map_id: str):
         return
 
     # --- 1. Sincronizar Nodos de Retorno a Mapa(s) Padre(s) ---
-    c_parents = await db.execute("""
-        SELECT DISTINCT parent_map_id FROM map_hierarchy
-        WHERE child_map_id = ? AND parent_map_id IS NOT NULL AND parent_map_id != ?
-    """, (map_id, map_id))
-    parent_ids = {r["parent_map_id"] for r in await c_parents.fetchall()}
+    parent_ids = set()
     if m["parent_map_id"] and m["parent_map_id"] != map_id:
         parent_ids.add(m["parent_map_id"])
+
+    # Padres adicionales en map_hierarchy: solo si no hay parent_map_id o si ya tienen enlaces conectados en este lienzo
+    c_parents = await db.execute("""
+        SELECT DISTINCT h.parent_map_id 
+        FROM map_hierarchy h
+        WHERE h.child_map_id = ? AND h.parent_map_id IS NOT NULL AND h.parent_map_id != ?
+    """, (map_id, map_id))
+    for r in await c_parents.fetchall():
+        pid = r["parent_map_id"]
+        if not parent_ids:
+            parent_ids.add(pid)
+        else:
+            # Comprobar si ya existe un portal con enlaces activos hacia este padre
+            c_has_links = await db.execute("""
+                SELECT l.id FROM links l
+                JOIN nodes n ON (l.source_node_id = n.id OR l.target_node_id = n.id)
+                WHERE n.map_id = ? AND n.device_type = 'parent_map' AND n.extra_data LIKE ?
+            """, (map_id, f'%"target_map_id": "{pid}"%'))
+            if await c_has_links.fetchone():
+                parent_ids.add(pid)
 
     # Obtener nombres de los padres válidos
     valid_parents = {}
@@ -699,8 +715,12 @@ async def ensure_map_navigation_nodes(db, map_id: str):
 async def get_map_detail(map_id: str, user: Dict[str, Any] = Depends(get_current_user)):
     """Obtiene el mapa con todos sus nodos y enlaces, asegurando automáticamente la presencia de nodos de navegación."""
     async with get_db_connection() as db:
+        # Sincronizar conexiones de NetBox para los equipos de este mapa al vuelo
+        await inventory_service.sync_map_connections_from_netbox(db, map_id)
+
         # Asegurar y sincronizar nodos de navegación para este mapa
         await ensure_map_navigation_nodes(db, map_id)
+        await db.commit()
 
         # Obtener mapa
         cursor = await db.execute("SELECT * FROM maps WHERE id = ?", (map_id,))
@@ -1070,6 +1090,58 @@ async def add_submap_navigation(
                         netbox_cable_id, netbox_wirelesslink_id,
                         cable_type, json.dumps(extra_link)
                     ))
+
+                    # Crear arista recíproca en el submapa destino (Portal Padre ➔ Equipo Remoto)
+                    c_tgt_pp = await db.execute("""
+                        SELECT id FROM nodes
+                        WHERE map_id = ? AND (device_type = 'parent_map' OR extra_data LIKE '%"is_parent_shortcut": true%')
+                          AND (extra_data LIKE ? OR name = ?)
+                    """, (payload.target_map_id, f'%"target_map_id": "{map_id}"%', f"📁 ⬆ {src_map['name']}"))
+                    tgt_pp = await c_tgt_pp.fetchone()
+
+                    if tgt_pp and rem_r:
+                        c_recip = await db.execute("""
+                            SELECT id FROM links
+                            WHERE map_id = ? AND ((source_node_id = ? AND target_node_id = ?) OR (source_node_id = ? AND target_node_id = ?))
+                        """, (payload.target_map_id, tgt_pp["id"], rem_r["id"], rem_r["id"], tgt_pp["id"]))
+                        if not await c_recip.fetchone():
+                            extra_recip = {
+                                "is_intermap": True,
+                                "pin_id": pin_id,
+                                "local_node_id": rem_r["id"],
+                                "local_node_name": rem_r["name"],
+                                "remote_node_id": local_node["id"],
+                                "remote_node_name": local_node["name"],
+                                "remote_map_id": map_id,
+                                "target_submap_device_id": local_node["device_id"],
+                                "target_submap_device_name": local_node["name"],
+                                "direction": "source_to_target",
+                                "sync_zabbix": True
+                            }
+                            if netbox_cable_id:
+                                extra_recip["netbox_cable_id"] = netbox_cable_id
+                            if netbox_wirelesslink_id:
+                                extra_recip["wireless_link_id"] = netbox_wirelesslink_id
+                                extra_recip["netbox_wirelesslink_id"] = netbox_wirelesslink_id
+
+                            await db.execute("""
+                                INSERT INTO links (
+                                    id, map_id, source_node_id, target_node_id,
+                                    source_interface, target_interface,
+                                    netbox_cable_id, netbox_wirelesslink_id,
+                                    cable_type, cable_status, status, extra_data
+                                )
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'connected', 'ok', ?)
+                            """, (
+                                f"link-{uuid.uuid4().hex[:8]}", payload.target_map_id, tgt_pp["id"], rem_r["id"],
+                                tgt_iface, src_iface,
+                                netbox_cable_id, netbox_wirelesslink_id,
+                                cable_type, json.dumps(extra_recip)
+                            ))
+
+                    # Establecer mapa padre en maps y actualizar primario en jerarquía
+                    await db.execute("UPDATE maps SET parent_map_id = ? WHERE id = ?", (map_id, payload.target_map_id))
+                    await db.execute("UPDATE map_hierarchy SET is_primary = 1 WHERE parent_map_id = ? AND child_map_id = ?", (map_id, payload.target_map_id))
 
         await db.commit()
 

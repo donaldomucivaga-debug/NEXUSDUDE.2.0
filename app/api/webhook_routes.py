@@ -191,6 +191,28 @@ async def receive_netbox_webhook(request: Request):
         asyncio.create_task(_sync_device_profile_and_interfaces(dev_id))
         return {"status": "synced", "message": f"Dispositivo '{dev_name}' e interfaces sincronizados"}
 
+    # 3. EVENTOS DE ENLACES INALÁMBRICOS (wireless.wirelesslink)
+    elif model in ("wirelesslink", "wireless.wirelesslink") or "wireless" in model or "wirelesslink" in obj_type:
+        wlink_id = data.get("id")
+        logger.info(f"🔔 Webhook NetBox: WirelessLink ID {wlink_id} {event}. Sincronizando topología al instante...")
+        if event in ("deleted", "object_deleted", "delete"):
+            await inventory_service.delete_link_by_netbox_id(wirelesslink_id=wlink_id)
+            return {"status": "deleted", "message": f"WirelessLink {wlink_id} eliminado de NexusDude"}
+        else:
+            await inventory_service.sync_single_wireless_link(wlink_id, data)
+            return {"status": "synced", "message": f"WirelessLink {wlink_id} sincronizado bidireccionalmente"}
+
+    # 4. EVENTOS DE CABLES FÍSICOS (dcim.cable)
+    elif model in ("cable", "dcim.cable") or "cable" in obj_type:
+        cable_id = data.get("id")
+        logger.info(f"🔔 Webhook NetBox: Cable ID {cable_id} {event}. Sincronizando topología al instante...")
+        if event in ("deleted", "object_deleted", "delete"):
+            await inventory_service.delete_link_by_netbox_id(cable_id=cable_id)
+            return {"status": "deleted", "message": f"Cable {cable_id} eliminado de NexusDude"}
+        else:
+            await inventory_service.sync_single_cable(cable_id, data)
+            return {"status": "synced", "message": f"Cable {cable_id} sincronizado bidireccionalmente"}
+
     return {"status": "ignored", "message": f"Modelo '{model}' no requiere acción de submapa"}
 
 @router.get("/netbox/status")
@@ -284,7 +306,7 @@ async def setup_netbox_webhook(user: Dict[str, Any] = Depends(get_current_user))
             payload_er = {
                 "name": event_rule_name,
                 "description": "Dispara webhook hacia NexusDude al crear, modificar o borrar sitios o dispositivos",
-                "object_types": ["dcim.site", "dcim.device"],
+                "object_types": ["dcim.site", "dcim.device", "dcim.cable", "wireless.wirelesslink"],
                 "event_types": ["object_created", "object_updated", "object_deleted"],
                 "enabled": True,
                 "action_type": "webhook",
