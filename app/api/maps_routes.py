@@ -726,8 +726,16 @@ async def get_map_detail(map_id: str, user: Dict[str, Any] = Depends(get_current
                 updated_at=str(r["updated_at"])
             ))
 
-        # Enlaces
-        c_links = await db.execute("SELECT * FROM links WHERE map_id = ?", (map_id,))
+        # Enlaces (Únicamente aristas documentadas en NetBox)
+        c_links = await db.execute("""
+            SELECT * FROM links 
+            WHERE map_id = ? 
+              AND (
+                  netbox_cable_id IS NOT NULL 
+                  OR netbox_wirelesslink_id IS NOT NULL 
+                  OR (extra_data IS NOT NULL AND (json_extract(extra_data, '$.netbox_cable_id') IS NOT NULL OR json_extract(extra_data, '$.wireless_link_id') IS NOT NULL))
+              )
+        """, (map_id,))
         links_rows = await c_links.fetchall()
         links = []
         for r in links_rows:
@@ -1728,11 +1736,16 @@ async def bulk_delete_nodes(req: BulkDeleteNodesRequest, user: Dict[str, Any] = 
 
 @router.post("/links", response_model=LinkOut, status_code=status.HTTP_201_CREATED)
 async def create_link(link_data: LinkCreate, user: Dict[str, Any] = Depends(get_current_user)):
-    """Crea un enlace entre dos nodos y sincroniza el cable físico correspondiente en NetBox si ambos nodos son dispositivos."""
+    """Crea un enlace entre dos nodos si está debidamente respaldado por NetBox como única fuente de verdad."""
     if not getattr(settings, "ALLOW_EDGE_EDITING", True):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="La creación y edición de aristas está deshabilitada globalmente por el nivel de Soporte en NetBox."
+            detail="NetBox es la única fuente de verdad: la inserción manual de aristas en el lienzo está deshabilitada."
+        )
+    if not link_data.netbox_cable_id and not link_data.netbox_wirelesslink_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="NetBox es la única fuente de verdad: únicamente se admiten aristas documentadas con Cable o WirelessLink de NetBox."
         )
     link_id = f"link-{uuid.uuid4().hex[:8]}"
     extra_data = link_data.extra_data or {}
@@ -2323,31 +2336,6 @@ async def sync_map_netbox_cables(map_id: str, user: Dict[str, Any] = Depends(get
                                         synced_count += 1
                     except Exception as e:
                         logger.error(f"Error sincronizando cable {cable_id} en mapa {map_id}: {e}")
-                elif peer_dev_id and peer_dev_id in dev_to_node:
-                    # Enlace directo conectado en NetBox sin ID de cable
-                    node_a_id = dev_to_node[dev_id]
-                    node_b_id = dev_to_node[peer_dev_id]
-                    pkey = (min(node_a_id, node_b_id), max(node_a_id, node_b_id))
-                    if pkey not in pair_to_links:
-                        new_link_id = f"link-{uuid.uuid4().hex[:8]}"
-                        extra_data = {"port_doc_notice": "Conexión de punto final detectada desde NetBox."}
-                        await db.execute("""
-                            INSERT INTO links (
-                                id, map_id, source_node_id, target_node_id,
-                                source_interface, target_interface,
-                                source_interface_id, target_interface_id,
-                                netbox_cable_id, cable_type, cable_status, status, extra_data
-                            )
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, (
-                            new_link_id, map_id, node_a_id, node_b_id,
-                            iface.get("name") or "", iface.get("connected_interface") or "",
-                            iface.get("id"), iface.get("connected_interface_id"),
-                            None, iface.get("cable_type") or "cat6",
-                            "connected", "ok", json.dumps(extra_data)
-                        ))
-                        pair_to_links[pkey] = [{"id": new_link_id, "netbox_cable_id": None}]
-                        synced_count += 1
 
         # Sincronizar también WirelessLinks de NetBox en este mapa
         try:
@@ -2381,6 +2369,19 @@ async def sync_map_netbox_cables(map_id: str, user: Dict[str, Any] = Depends(get
                                     existing_wl_ids.add(wl_id)
                                     synced_count += 1
                                     break
+                        else:
+                            new_link_id = f"link-{uuid.uuid4().hex[:8]}"
+                            await db.execute("""
+                                INSERT INTO links (
+                                    id, map_id, source_node_id, target_node_id,
+                                    source_interface, target_interface,
+                                    netbox_wirelesslink_id, cable_type, cable_status, status
+                                )
+                                VALUES (?, ?, ?, ?, 'Wireless', 'Wireless', ?, 'wireless', 'connected', 'ok')
+                            """, (new_link_id, map_id, node_a_id, node_b_id, wl_id))
+                            wl_pair_to_links[pkey] = [{"id": new_link_id, "netbox_wirelesslink_id": wl_id}]
+                            existing_wl_ids.add(wl_id)
+                            synced_count += 1
         except Exception as wl_err:
             logger.warning(f"Error sincronizando wireless links en mapa {map_id}: {wl_err}")
 

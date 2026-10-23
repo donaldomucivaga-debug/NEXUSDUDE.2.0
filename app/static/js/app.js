@@ -401,16 +401,7 @@ function setupDragAndDrop() {
           // Si ya existía el acceso en jerarquía, no hay problema
         }
 
-        // Auto-sincronizar enlaces intermapa hacia este submapa si ya existen equipos conectados
-        try {
-          const syncRes = await API.syncNetboxLinks(currentMap.id);
-          if (syncRes && ((syncRes.intra_links_synced || 0) > 0 || (syncRes.inter_links_synced || 0) > 0)) {
-            await loadMap(currentMap.id);
-          }
-        } catch (sErr) {
-          console.warn('Auto-sync links failed for dropped submap:', sErr);
-        }
-
+        // Enlaces únicamente gobernados por NetBox SSoT (sin despliegue automático por reglas)
         return;
       } catch (err) {
         console.error('Error insertando mapa en el lienzo:', err);
@@ -461,18 +452,6 @@ function setupDragAndDrop() {
       renderNode(newNode);
       nodesLayer.batchDraw();
       selectNode(newNode);
-
-      // Auto-descubrir y sincronizar enlaces (cables y wireless) documentados en NetBox para este dispositivo
-      if (device.id) {
-        try {
-          const syncRes = await API.syncNetboxLinks(currentMap.id);
-          if (syncRes && ((syncRes.intra_links_synced || 0) > 0 || (syncRes.inter_links_synced || 0) > 0)) {
-            await loadMap(currentMap.id);
-          }
-        } catch (sErr) {
-          console.warn('Auto-sync links failed for dropped device:', sErr);
-        }
-      }
 
     } catch (err) {
       console.error('Error soltando dispositivo en lienzo:', err);
@@ -3088,27 +3067,20 @@ function updateAllLinkColors() {
     const srcNode = nodeMap.get(sourceId);
     const tgtNode = nodeMap.get(targetId);
     if (line && line.getStage()) {
-      const isNetboxDocumented = !!link?.netbox_cable_id;
-      const isVisualNote = !!(link?.extra_data && (link.extra_data.is_note_bridge || link.extra_data.is_visual_only));
-      const isDraftOrUndocumented = !isNetboxDocumented && !isVisualNote;
-      const isIntermap = !!(link && link.extra_data && (link.extra_data.is_intermap || link.extra_data.remote_node_id));
-
-      if (isDraftOrUndocumented) {
-        line.stroke('#22c55e');
-        line.fill('#22c55e');
-        line.strokeWidth(2.2);
-        line.dash([10, 6]);
-        line.shadowBlur(0);
-        line.shadowOpacity(0);
-      } else {
-        const color = getLinkColor(link, srcNode, tgtNode);
-        line.stroke(color);
-        line.fill(color);
-        line.strokeWidth(isIntermap ? 2.2 : 1.8);
-        line.dash(isIntermap ? [6, 4] : undefined);
-        line.shadowBlur(0);
-        line.shadowOpacity(0);
+      const isNetboxDocumented = !!(link?.netbox_cable_id || link?.netbox_wirelesslink_id || link?.extra_data?.netbox_cable_id || link?.extra_data?.wireless_link_id);
+      if (!isNetboxDocumented) {
+        line.visible(false);
+        return;
       }
+      line.visible(true);
+      const isWireless = (link?.cable_type === 'wireless') || !!link?.netbox_wirelesslink_id || !!link?.extra_data?.wireless_link_id;
+      const color = getLinkColor(link, srcNode, tgtNode);
+      line.stroke(color);
+      line.fill(color);
+      line.strokeWidth(2.0);
+      line.dash(isWireless ? [10, 6] : undefined);
+      line.shadowBlur(0);
+      line.shadowOpacity(0);
     }
   });
   currentMap.nodes.forEach(n => {
@@ -3359,16 +3331,13 @@ function unhighlightLinkAndEndpoints(link) {
 
   // 1. Restaurar arista
   if (line) {
-    const isNetboxDocumented = !!(link.netbox_cable_id || link.netbox_wirelesslink_id || link.extra_data?.wireless_link_id);
-    const isVisualNote = !!(link.extra_data && (link.extra_data.is_note_bridge || link.extra_data.is_visual_only || link.extra_data.is_simple_link));
-    const isDraftOrUndocumented = !isNetboxDocumented && !isVisualNote;
-    const isIntermap = !!(link.extra_data && (link.extra_data.is_intermap || link.extra_data.remote_node_id));
-    const curColor = isDraftOrUndocumented ? '#22c55e' : getLinkColor(link, sourceNode, targetNode);
+    const isWireless = (link.cable_type === 'wireless') || !!link.netbox_wirelesslink_id || !!link.extra_data?.wireless_link_id;
+    const curColor = getLinkColor(link, sourceNode, targetNode);
 
     line.stroke(curColor);
     line.fill(curColor);
-    line.strokeWidth(isDraftOrUndocumented ? 2.2 : (isIntermap ? 2.2 : 1.8));
-    line.dash(isDraftOrUndocumented ? [10, 6] : (isIntermap ? [6, 4] : undefined));
+    line.strokeWidth(2.0);
+    line.dash(isWireless ? [10, 6] : undefined);
     line.shadowBlur(0);
     line.shadowOpacity(0);
   }
@@ -3435,23 +3404,24 @@ function renderLink(link, nodesDict) {
   const target = nodesDict.get(link.target_node_id);
   if (!source || !target) return;
 
+  // ── REGLA FUNDAMENTAL: NetBox como Única Fuente de Verdad ──
+  // Únicamente se dibujan aristas respaldadas por NetBox (Cable o WirelessLink)
+  const isNetboxDocumented = !!(link.netbox_cable_id || link.netbox_wirelesslink_id || link.extra_data?.netbox_cable_id || link.extra_data?.wireless_link_id);
+  if (!isNetboxDocumented) {
+    return; // Omitir completamente aristas no documentadas en NetBox
+  }
+
   const pts = calculateLinkEndpoints(source, target, link);
   const isIntermap = !!(link.extra_data && (link.extra_data.is_intermap || link.extra_data.remote_node_id));
   const direction = link.extra_data?.direction || 'source_to_target';
   const arrowPts = getArrowPointsForDirection(pts, direction);
 
-  const isNetboxDocumented = !!(link.netbox_cable_id || link.netbox_wirelesslink_id || link.extra_data?.wireless_link_id);
-  const isVisualNote = !!(link.extra_data && (link.extra_data.is_note_bridge || link.extra_data.is_visual_only || link.extra_data.is_simple_link));
-  const isDraftOrUndocumented = !isNetboxDocumented && !isVisualNote;
+  // ── NUEVO DIBUJADO DE ARISTAS SEGÚN MEDIO ──
+  // Enlaces inalámbricos (wireless) son con guiones y enlaces de cobre y fibra son líneas sólidas
+  const isWireless = (link.cable_type === 'wireless') || !!link.netbox_wirelesslink_id || !!link.extra_data?.wireless_link_id;
+  const linkDash = isWireless ? [10, 6] : undefined;
 
-  const color = isDraftOrUndocumented ? '#22c55e' : getLinkColor(link, source, target);
-
-  let linkDash = undefined;
-  if (isDraftOrUndocumented) {
-    linkDash = [12, 8];
-  } else if (isIntermap) {
-    linkDash = [6, 4];
-  }
+  const color = getLinkColor(link, source, target);
 
   const line = new Konva.Arrow({
     points: arrowPts,
@@ -3460,7 +3430,7 @@ function renderLink(link, nodesDict) {
     pointerWidth: 8,
     stroke: color,
     fill: color,
-    strokeWidth: isDraftOrUndocumented ? 2.2 : (isIntermap ? 2.2 : 1.8),
+    strokeWidth: 2.0,
     dash: linkDash,
     shadowBlur: 0,
     shadowOpacity: 0,
@@ -3555,24 +3525,18 @@ function renderLink(link, nodesDict) {
   // Agregar primero la línea y LUEGO las etiquetas encima para garantizar Z-index superior
   linksLayer.add(line);
 
-  if (isNetboxDocumented) {
-    // Si el nodo de origen es un Switch (o el enlace está anclado a su bahía interna),
-    // omitimos la etiqueta flotante de la arista porque el número y estado de puerto ya se visualizan dentro del nodo.
-    const isSrcSwitch = isSwitchNode(source) || !!link._srcIsSwitchBay;
-    if (link.source_interface && !isSrcSwitch) {
-      const srcLabel = formatCompactPortBadge(link.source_interface, false);
-      srcBadge = createLinkPortBadge(srcLabel, '#38bdf8');
-      linksLayer.add(srcBadge);
-    }
-    const isTgtSwitch = isSwitchNode(target) || !!link._tgtIsSwitchBay;
-    if (link.target_interface && !isTgtSwitch) {
-      const tgtLabel = formatCompactPortBadge(link.target_interface, false);
-      tgtBadge = createLinkPortBadge(tgtLabel, '#c084fc');
-      linksLayer.add(tgtBadge);
-    }
-  } else if (isDraftOrUndocumented) {
-    draftBadge = createLinkPortBadge('⚡ Sin Doc NetBox', '#10b981');
-    linksLayer.add(draftBadge);
+  // Etiquetas de interfaces (Origen y Destino)
+  const isSrcSwitch = isSwitchNode(source) || !!link._srcIsSwitchBay;
+  if (link.source_interface && !isSrcSwitch) {
+    const srcLabel = formatCompactPortBadge(link.source_interface, false);
+    srcBadge = createLinkPortBadge(srcLabel, '#38bdf8');
+    linksLayer.add(srcBadge);
+  }
+  const isTgtSwitch = isSwitchNode(target) || !!link._tgtIsSwitchBay;
+  if (link.target_interface && !isTgtSwitch) {
+    const tgtLabel = formatCompactPortBadge(link.target_interface, false);
+    tgtBadge = createLinkPortBadge(tgtLabel, '#c084fc');
+    linksLayer.add(tgtBadge);
   }
   updateBadgesPos(arrowPts);
 
@@ -4599,22 +4563,10 @@ function updateAllLinks() {
   if (nodesLayer) nodesLayer.batchDraw();
 }
 
-// ─── 5. Herramienta de Conexión de Enlaces ──────────────────────────────────
+// ─── 5. Herramienta de Conexión de Enlaces (Deshabilitada por SSoT NetBox) ───
 function startLinkMode() {
-  if (window.allowEdgeEditing === false) {
-    return;
-  }
-  linkMode = true;
-  linkSourceNode = null;
-  linkTargetNodes.clear();
-  nodeGroups.forEach(grp => grp.draggable(false));
-  document.getElementById('btn-toggle-link-mode').classList.add('btn-active');
-  const banner = document.getElementById('link-mode-banner');
-  if (banner) banner.style.display = 'flex';
-  const bannerText = document.getElementById('link-mode-text');
-  if (bannerText) bannerText.textContent = 'Paso 1: Haz clic en el nodo origen';
-  const btnMulti = document.getElementById('btn-confirm-multi-link');
-  if (btnMulti) btnMulti.style.display = 'none';
+  // Las aristas se gobiernan exclusivamente desde NetBox. Inserción manual deshabilitada.
+  return;
 }
 
 function cancelLinkMode() {
@@ -4628,8 +4580,11 @@ function cancelLinkMode() {
       const isParentShortcut = linkSourceNode.device_type === 'parent_map' || !!linkSourceNode.extra_data?.is_parent_shortcut;
       const isSubmap = linkSourceNode.device_type === 'submap' || isParentShortcut;
       const curPingStatus = linkSourceNode.ping_status || linkSourceNode.status;
-      grp.findOne('.box').stroke(isParentShortcut ? '#38bdf8' : getNodeStatusColor(curPingStatus, isSubmap));
-      grp.findOne('.box').strokeWidth(isSubmap ? 2 : 1.5);
+      const b = grp.findOne('.box');
+      if (b) {
+        b.stroke(isParentShortcut ? '#38bdf8' : getNodeStatusColor(curPingStatus, isSubmap));
+        b.strokeWidth(isSubmap ? 2 : 1.5);
+      }
     }
   }
 
@@ -4639,14 +4594,18 @@ function cancelLinkMode() {
       const isParentShortcut = tgtNode.device_type === 'parent_map' || !!tgtNode.extra_data?.is_parent_shortcut;
       const isSubmap = tgtNode.device_type === 'submap' || isParentShortcut;
       const curPingStatus = tgtNode.ping_status || tgtNode.status;
-      grp.findOne('.box').stroke(isParentShortcut ? '#38bdf8' : getNodeStatusColor(curPingStatus, isSubmap));
-      grp.findOne('.box').strokeWidth(isSubmap ? 2 : 1.5);
+      const b = grp.findOne('.box');
+      if (b) {
+        b.stroke(isParentShortcut ? '#38bdf8' : getNodeStatusColor(curPingStatus, isSubmap));
+        b.strokeWidth(isSubmap ? 2 : 1.5);
+      }
     }
   });
 
   linkSourceNode = null;
   linkTargetNodes.clear();
-  document.getElementById('btn-toggle-link-mode').classList.remove('btn-active');
+  const btnToggle = document.getElementById('btn-toggle-link-mode');
+  if (btnToggle) btnToggle.classList.remove('btn-active');
   const banner = document.getElementById('link-mode-banner');
   if (banner) banner.style.display = 'none';
   const btnMulti = document.getElementById('btn-confirm-multi-link');
@@ -5947,57 +5906,36 @@ async function openFtthBranchEditorModal(node) {
                 olt_ip: oltIpVal,
                 olt_name: oltNameVal
               });
-              await API.updateLink(existingLink.id, {
-                source_node_id: oltNode.id,
-                target_node_id: node.id,
-                source_interface: gponPortVal,
-                target_interface: '',
-                cable_type: 'fiber',
-                extra_data: updatedLinkExtra
-              });
-              existingLink.source_node_id = oltNode.id;
-              existingLink.target_node_id = node.id;
-              existingLink.source_interface = gponPortVal;
-              existingLink.target_interface = '';
-              existingLink.cable_type = 'fiber';
-              existingLink.extra_data = updatedLinkExtra;
-
-              // Destruir gráficos Konva previos del enlace y volver a dibujarlo
-              const oldLinkEntry = linkLines.get(existingLink.id);
-              if (oldLinkEntry) {
-                if (oldLinkEntry.line) oldLinkEntry.line.destroy();
-                if (oldLinkEntry.srcBadge) oldLinkEntry.srcBadge.destroy();
-                if (oldLinkEntry.tgtBadge) oldLinkEntry.tgtBadge.destroy();
-                linkLines.delete(existingLink.id);
-              }
-              const dict = new Map();
-              currentMap.nodes.forEach(n => dict.set(n.id, n));
-              renderLink(existingLink, dict);
-            } else {
-              // Crear nuevo enlace
-              const newLink = await API.createLink({
-                map_id: currentMap.id,
-                source_node_id: oltNode.id,
-                target_node_id: node.id,
-                source_interface: gponPortVal,
-                target_interface: '',
-                cable_type: 'fiber',
-                status: 'ok',
-                extra_data: {
-                  direction: 'source_to_target',
-                  is_gpon_branch: true,
+              try {
+                await API.updateLink(existingLink.id, {
+                  source_node_id: oltNode.id,
+                  target_node_id: node.id,
+                  source_interface: gponPortVal,
+                  target_interface: '',
                   cable_type: 'fiber',
-                  gpon_port: gponPortVal,
-                  gpon_index: gponIdxVal,
-                  olt_ip: oltIpVal,
-                  olt_name: oltNameVal
+                  extra_data: updatedLinkExtra
+                });
+                existingLink.source_node_id = oltNode.id;
+                existingLink.target_node_id = node.id;
+                existingLink.source_interface = gponPortVal;
+                existingLink.target_interface = '';
+                existingLink.cable_type = 'fiber';
+                existingLink.extra_data = updatedLinkExtra;
+
+                // Destruir gráficos Konva previos del enlace y volver a dibujarlo
+                const oldLinkEntry = linkLines.get(existingLink.id);
+                if (oldLinkEntry) {
+                  if (oldLinkEntry.line) oldLinkEntry.line.destroy();
+                  if (oldLinkEntry.srcBadge) oldLinkEntry.srcBadge.destroy();
+                  if (oldLinkEntry.tgtBadge) oldLinkEntry.tgtBadge.destroy();
+                  linkLines.delete(existingLink.id);
                 }
-              });
-              if (!currentMap.links) currentMap.links = [];
-              currentMap.links.push(newLink);
-              const dict = new Map();
-              currentMap.nodes.forEach(n => dict.set(n.id, n));
-              renderLink(newLink, dict);
+                const dict = new Map();
+                currentMap.nodes.forEach(n => dict.set(n.id, n));
+                renderLink(existingLink, dict);
+              } catch (linkErr) {
+                console.warn('FTTH branch link update skipped:', linkErr);
+              }
             }
           }
         }
@@ -10734,42 +10672,6 @@ window.addEventListener('DOMContentLoaded', async () => {
         _renderFtthBranchNode(newBranch);
         nodesLayer.batchDraw();
 
-        // ── Auto-vincular arista interactiva con la OLT ──
-        if (defaultOltId || defaultOltIp) {
-          const oltNode = currentMap.nodes.find(n => (defaultOltId && n.id === defaultOltId) || (defaultOltIp && n.ip === defaultOltIp) || n.name === defaultOltName);
-          if (oltNode && oltNode.id !== newBranch.id) {
-            try {
-              const newLink = await API.createLink({
-                map_id: currentMap.id,
-                source_node_id: oltNode.id,
-                target_node_id: newBranch.id,
-                source_interface: 'GPON 0/1/0',
-                target_interface: '',
-                cable_type: 'fiber',
-                status: 'ok',
-                extra_data: {
-                  direction: 'source_to_target',
-                  is_gpon_branch: true,
-                  cable_type: 'fiber',
-                  gpon_port: 'GPON 0/1/0',
-                  gpon_index: '4194312192',
-                  olt_ip: defaultOltIp,
-                  olt_name: defaultOltName
-                }
-              });
-              if (!currentMap.links) currentMap.links = [];
-              currentMap.links.push(newLink);
-              const dict = new Map();
-              currentMap.nodes.forEach(n => dict.set(n.id, n));
-              renderLink(newLink, dict);
-              updateAllLinks();
-              if (linksLayer) linksLayer.batchDraw();
-            } catch (linkErr) {
-              console.warn('Error auto-vinculando arista al crear:', linkErr);
-            }
-          }
-        }
-
         selectNode(newBranch);
         openFtthBranchEditorModal(newBranch);
       } catch(err) {
@@ -10796,15 +10698,16 @@ window.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  // Botón Conectar Enlace
-  document.getElementById('btn-toggle-link-mode').addEventListener('click', () => {
-    if (linkMode) {
-      cancelLinkMode();
-    } else {
-      startLinkMode();
-    }
-  });
-  document.getElementById('btn-cancel-link').addEventListener('click', cancelLinkMode);
+  // Botón Conectar Enlace (Deshabilitado / Opcional en DOM)
+  const btnToggleLink = document.getElementById('btn-toggle-link-mode');
+  if (btnToggleLink) {
+    btnToggleLink.addEventListener('click', () => {
+      if (linkMode) cancelLinkMode();
+      else startLinkMode();
+    });
+  }
+  const btnCancelLink = document.getElementById('btn-cancel-link');
+  if (btnCancelLink) btnCancelLink.addEventListener('click', cancelLinkMode);
 
   const btnConfirmMultiLink = document.getElementById('btn-confirm-multi-link');
   if (btnConfirmMultiLink) {

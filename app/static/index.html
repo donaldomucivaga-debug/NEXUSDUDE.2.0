@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>NexusDude - The Modern Network Dude</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=5.6.2">
+  <link rel="stylesheet" href="/static/css/style.css?v=5.8.0">
   <link rel="stylesheet" href="/static/css/docs.css?v=5.5.0">
   <!-- FontAwesome Icons -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -93,11 +93,7 @@
           </div>
           <div class="dropdown-divider"></div>
           <div class="dropdown-header">
-            <i class="fas fa-tools" style="color: #94a3b8;"></i> Conexión y Cuadrícula
-          </div>
-          <div class="dropdown-item" id="btn-toggle-link-mode" title="Activar modo para trazar enlaces entre nodos">
-            <i class="fas fa-link" style="color: #38bdf8;"></i>
-            <span>Conectar Enlace</span>
+            <i class="fas fa-border-all" style="color: #94a3b8;"></i> Cuadrícula y Alineación
           </div>
           <div class="dropdown-item btn-active" id="btn-toggle-grid" title="Activar/Desactivar imantado a cuadrícula">
             <i class="fas fa-border-all" style="color: #10b981;"></i>
@@ -897,16 +893,6 @@
 
     <!-- Canvas Area -->
     <main class="canvas-wrapper" id="canvas-dropzone">
-      <!-- Indicador de Modo Enlace -->
-      <div class="canvas-banner" id="link-mode-banner" style="display: none;">
-        <i class="fas fa-crosshairs"></i>
-        <span id="link-mode-text">Haz clic en el primer nodo para iniciar la conexión</span>
-        <button class="btn btn-success" id="btn-confirm-multi-link" style="display: none; padding: 2px 10px; font-size: 0.72rem; margin-left: 8px;">
-          <i class="fas fa-link"></i> Conectar seleccionados (<span id="multi-link-count">0</span>)
-        </button>
-        <button class="btn btn-danger" id="btn-cancel-link" style="padding: 2px 8px; font-size: 0.72rem; margin-left: 8px;">Cancelar</button>
-      </div>
-
       <div id="canvas-container"></div>
 
       <!-- Floating Controls -->
@@ -1164,16 +1150,8 @@
           <i class="fas fa-exclamation-triangle"></i> Este submapa aún no tiene dispositivos agregados. Puedes poblarlo primero desde NetBox.
         </div>
 
-        <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px;">
-          <button type="button" class="btn" id="btn-cancel-intermap-link">Cancelar</button>
-          <div style="display: flex; gap: 8px;">
-            <button type="button" class="btn btn-secondary" id="btn-simple-intermap-link" title="Crea un enlace simple / flecha visual directa al submapa sin alimentar el árbol jerárquico de Zabbix">
-              <i class="fas fa-arrow-right"></i> Enlace Simple (Visual)
-            </button>
-            <button type="button" class="btn btn-purple" id="btn-confirm-intermap-link">
-              <i class="fas fa-link"></i> Crear Enlace de Servicio
-            </button>
-          </div>
+        <div class="modal-footer" style="display: flex; justify-content: flex-end; align-items: center; margin-top: 6px;">
+          <button type="button" class="btn" id="btn-cancel-intermap-link">Cerrar</button>
         </div>
       </div>
     </div>
@@ -1515,16 +1493,11 @@
           <span><strong>Documentación:</strong> No es obligatorio indicar el puerto exacto para reflejar la arista en el mapa, pero es importante documentarlo en NetBox para mantener el inventario físico actualizado.</span>
         </div>
 
-        <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px;">
-          <button type="button" class="btn btn-secondary" id="btn-port-connect-quick" title="Crear enlace visual rápido sin registrar cable en NetBox">
-            <i class="fas fa-bolt"></i> Enlace Rápido
+        <div class="modal-footer" style="display: flex; justify-content: flex-end; align-items: center; margin-top: 6px; gap: 8px;">
+          <button type="button" class="btn" id="btn-cancel-port-connect">Cancelar</button>
+          <button type="button" class="btn btn-primary" id="btn-confirm-port-connect">
+            <i class="fas fa-plug"></i> Conectar Puertos & Sync NetBox
           </button>
-          <div style="display: flex; gap: 8px;">
-            <button type="button" class="btn" id="btn-cancel-port-connect">Cancelar</button>
-            <button type="button" class="btn btn-primary" id="btn-confirm-port-connect">
-              <i class="fas fa-plug"></i> Conectar Puertos & Sync NetBox
-            </button>
-          </div>
         </div>
       </div>
     </div>
@@ -2294,7 +2267,7 @@
 
   <!-- Scripts -->
   <script src="/static/js/api.js?v=5.6.2"></script>
-  <script src="/static/js/app.js?v=5.6.2"></script>
+  <script src="/static/js/app.js?v=5.8.0"></script>
   <script src="/static/js/docs.js?v=5.6.2"></script>
 </body>
 </html>

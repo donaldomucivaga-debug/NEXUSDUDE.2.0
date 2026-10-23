@@ -1105,20 +1105,21 @@ class InventoryService:
                                     UPDATE links
                                     SET source_interface = ?, target_interface = ?,
                                         source_interface_id = ?, target_interface_id = ?,
+                                        netbox_wirelesslink_id = ?,
                                         cable_type = 'wireless', cable_status = 'connected',
                                         status = 'ok', updated_at = CURRENT_TIMESTAMP
                                     WHERE id = ?
-                                """, (if_a_name, if_b_name, if_a_id, if_b_id, existing_link["id"]))
+                                """, (if_a_name, if_b_name, if_a_id, if_b_id, wid, existing_link["id"]))
                             else:
                                 await db.execute("""
                                     INSERT INTO links (
                                         id, map_id, source_node_id, target_node_id,
                                         source_interface, target_interface,
                                         source_interface_id, target_interface_id,
-                                        cable_type, cable_status, status
+                                        netbox_wirelesslink_id, cable_type, cable_status, status
                                     )
-                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'wireless', 'connected', 'ok')
-                                """, (f"link-{uuid.uuid4().hex[:8]}", map_a, n_a["id"], n_b["id"], if_a_name, if_b_name, if_a_id, if_b_id))
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'wireless', 'connected', 'ok')
+                                """, (f"link-{uuid.uuid4().hex[:8]}", map_a, n_a["id"], n_b["id"], if_a_name, if_b_name, if_a_id, if_b_id, wid))
                             intra_links_synced += 1
                         else:
                             # Inter-map wireless link
@@ -1133,6 +1134,7 @@ class InventoryService:
                                     "remote_node_id": n_b["id"],
                                     "remote_node_name": n_b["name"],
                                     "remote_map_id": map_b,
+                                    "netbox_wirelesslink_id": wid,
                                     "direction": "source_to_target",
                                     "sync_zabbix": True
                                 }
@@ -1144,17 +1146,18 @@ class InventoryService:
                                     "remote_node_id": n_a["id"],
                                     "remote_node_name": n_a["name"],
                                     "remote_map_id": map_a,
+                                    "netbox_wirelesslink_id": wid,
                                     "direction": "source_to_target",
                                     "sync_zabbix": True
                                 }
                                 await db.execute("""
-                                    INSERT INTO links (id, map_id, source_node_id, target_node_id, source_interface, target_interface, cable_type, cable_status, status, extra_data)
-                                    VALUES (?, ?, ?, ?, ?, ?, 'wireless', 'connected', 'ok', ?)
-                                """, (f"link-{uuid.uuid4().hex[:8]}", map_a, n_a["id"], portal_a["id"], if_a_name, if_b_name, json.dumps(extra_a)))
+                                    INSERT INTO links (id, map_id, source_node_id, target_node_id, source_interface, target_interface, netbox_wirelesslink_id, cable_type, cable_status, status, extra_data)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, 'wireless', 'connected', 'ok', ?)
+                                """, (f"link-{uuid.uuid4().hex[:8]}", map_a, n_a["id"], portal_a["id"], if_a_name, if_b_name, wid, json.dumps(extra_a)))
                                 await db.execute("""
-                                    INSERT INTO links (id, map_id, source_node_id, target_node_id, source_interface, target_interface, cable_type, cable_status, status, extra_data)
-                                    VALUES (?, ?, ?, ?, ?, ?, 'wireless', 'connected', 'ok', ?)
-                                """, (f"link-{uuid.uuid4().hex[:8]}", map_b, portal_b["id"], n_b["id"], if_a_name, if_b_name, json.dumps(extra_b)))
+                                    INSERT INTO links (id, map_id, source_node_id, target_node_id, source_interface, target_interface, netbox_wirelesslink_id, cable_type, cable_status, status, extra_data)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, 'wireless', 'connected', 'ok', ?)
+                                """, (f"link-{uuid.uuid4().hex[:8]}", map_b, portal_b["id"], n_b["id"], if_a_name, if_b_name, wid, json.dumps(extra_b)))
                                 inter_links_synced += 1
 
             await db.commit()
