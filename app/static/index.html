@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>NexusDude - The Modern Network Dude</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=5.8.4">
+  <link rel="stylesheet" href="/static/css/style.css?v=5.8.5">
   <link rel="stylesheet" href="/static/css/docs.css?v=5.5.0">
   <!-- FontAwesome Icons -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -2077,7 +2077,7 @@
         </button>
       </div>
 
-      <div class="modal-form" style="padding: 16px 20px; gap: 14px;">
+      <form class="modal-form" id="form-system-settings" autocomplete="off" onsubmit="return false;" method="post" action="javascript:void(0);" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" style="padding: 16px 20px; gap: 14px;">
         <!-- Panel 1: NetBox -->
         <div id="panel-settings-netbox" class="settings-panel">
           <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid rgba(255, 255, 255, 0.06);">
@@ -2092,13 +2092,13 @@
 
           <div class="prop-row" style="margin-bottom: 12px;">
             <label class="prop-label"><i class="fas fa-network-wired"></i> IP / URL del Servidor NetBox</label>
-            <input type="text" id="input-netbox-url" class="input-text" placeholder="http://netbox:8080 o https://10.9.1.6:8443" style="font-family: monospace;">
+            <input type="text" id="input-netbox-url" class="input-text" name="netbox_server_url" placeholder="http://netbox:8080 o https://10.9.1.6:8443" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" style="font-family: monospace;">
           </div>
 
           <div class="prop-row" style="margin-bottom: 12px;">
             <label class="prop-label"><i class="fas fa-key"></i> Token de API (NetBox)</label>
             <div style="position: relative; display: flex; align-items: center;">
-              <input type="password" id="input-netbox-token" class="input-text" placeholder="Ingresa el API Token de NetBox" style="padding-right: 36px; font-family: monospace;">
+              <input type="text" id="input-netbox-token" class="input-text secure-token-input masked" name="netbox_api_token" placeholder="Ingresa el API Token de NetBox" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other" style="padding-right: 36px; font-family: monospace;">
               <button type="button" id="btn-toggle-netbox-token-vis" style="position: absolute; right: 8px; background: none; border: none; color: var(--text-muted); cursor: pointer;" title="Mostrar/Ocultar Token">
                 <i class="fas fa-eye" id="icon-eye-netbox-token"></i>
               </button>
@@ -2152,13 +2152,13 @@
 
           <div class="prop-row" style="margin-bottom: 12px;">
             <label class="prop-label"><i class="fas fa-server"></i> IP / URL del Servidor Zabbix</label>
-            <input type="text" id="input-zabbix-url" class="input-text" placeholder="https://10.9.1.7:8082" style="font-family: monospace;">
+            <input type="text" id="input-zabbix-url" class="input-text" name="zabbix_server_url" placeholder="https://10.9.1.7:8082" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" style="font-family: monospace;">
           </div>
 
           <div class="prop-row" style="margin-bottom: 12px;">
             <label class="prop-label"><i class="fas fa-key"></i> Token de API (Zabbix)</label>
             <div style="position: relative; display: flex; align-items: center;">
-              <input type="password" id="input-zabbix-token" class="input-text" placeholder="Ingresa el API Token de Zabbix" style="padding-right: 36px; font-family: monospace;">
+              <input type="text" id="input-zabbix-token" class="input-text secure-token-input masked" name="zabbix_api_token" placeholder="Ingresa el API Token de Zabbix" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other" style="padding-right: 36px; font-family: monospace;">
               <button type="button" id="btn-toggle-zabbix-token-vis" style="position: absolute; right: 8px; background: none; border: none; color: var(--text-muted); cursor: pointer;" title="Mostrar/Ocultar Token">
                 <i class="fas fa-eye" id="icon-eye-zabbix-token"></i>
               </button>
@@ -2195,14 +2195,14 @@
             <i class="fas fa-save"></i> Guardar Configuración
           </button>
         </div>
-      </div>
+      </form>
     </div>
   </div>
 
   <!-- Scripts -->
-  <script src="/static/js/api.js?v=5.8.4"></script>
-  <script src="/static/js/app.js?v=5.8.4"></script>
-  <script src="/static/js/docs.js?v=5.8.4"></script>
+  <script src="/static/js/api.js?v=5.8.5"></script>
+  <script src="/static/js/app.js?v=5.8.5"></script>
+  <script src="/static/js/docs.js?v=5.8.5"></script>
 </body>
 </html>
 

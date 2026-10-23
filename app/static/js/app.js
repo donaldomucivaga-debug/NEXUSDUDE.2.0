@@ -159,10 +159,12 @@ function initCanvas() {
 
   // Rectángulo visual de selección múltiple (Marquee Selection) en uiLayer
   selectionRect = new Konva.Rect({
-    fill: 'rgba(56, 189, 248, 0.2)',
-    stroke: '#38bdf8',
+    fill: 'rgba(234, 255, 0, 0.15)',
+    stroke: '#eaff00',
     strokeWidth: 2,
     dash: [6, 4],
+    shadowColor: 'rgba(234, 255, 0, 0.5)',
+    shadowBlur: 8,
     visible: false,
     listening: false
   });
@@ -2104,33 +2106,148 @@ function restoreNodeBaseBorder(box, node, group) {
   }
 }
 
+function highlightNodeConnections(node) {
+  if (!node || linkMode) return;
+  const attached = nodeAttachedLinksMap.get(node.id);
+  if (!attached || attached.size === 0) return;
+
+  attached.forEach(entry => {
+    const link = entry.link;
+    if (!link) return;
+    const linkObj = linkLines.get(link.id);
+    if (!linkObj) return;
+
+    const { line, sourceNode, targetNode } = linkObj;
+
+    // 1. Iluminar la arista (Línea)
+    if (line) {
+      if (line._origStroke === undefined) line._origStroke = line.stroke();
+      if (line._origStrokeWidth === undefined) line._origStrokeWidth = line.strokeWidth();
+      line.stroke('#38bdf8');
+      line.fill('#38bdf8');
+      line.strokeWidth(2.8);
+      line.shadowBlur(0);
+      line.shadowOpacity(0);
+    }
+
+    // 2. Iluminar el extremo opuesto (nodo vecino) si no está seleccionado
+    const peerNode = (sourceNode && sourceNode.id === node.id) ? targetNode : sourceNode;
+    if (peerNode) {
+      const peerGrp = nodeGroups.get(peerNode.id);
+      if (peerGrp) {
+        const pBox = peerGrp.findOne('.box') || peerGrp.findOne('.capsule') || peerGrp.findOne('.noteBg');
+        if (pBox && !pBox.isHighlighted) {
+          if (pBox._origStroke === undefined) pBox._origStroke = pBox.stroke();
+          if (pBox._origStrokeWidth === undefined) pBox._origStrokeWidth = pBox.strokeWidth();
+          if (pBox._origShadowBlur === undefined) pBox._origShadowBlur = pBox.shadowBlur();
+          if (pBox._origShadowColor === undefined) pBox._origShadowColor = pBox.shadowColor();
+          if (pBox._origShadowOpacity === undefined) pBox._origShadowOpacity = pBox.shadowOpacity();
+
+          pBox.stroke('#38bdf8');
+          pBox.strokeWidth(2.2);
+          pBox.shadowBlur(0);
+          pBox.shadowOpacity(0);
+          pBox._linkHoverActive = true;
+        }
+      }
+    }
+
+    // 3. Iluminar bahías de switch para ambos extremos de la arista (puerto local y puerto remoto)
+    _highlightSwitchBaysForLink(link, sourceNode, targetNode, true);
+  });
+
+  if (linksLayer) linksLayer.batchDraw();
+  if (nodesLayer) nodesLayer.batchDraw();
+}
+
+function unhighlightNodeConnections(node) {
+  if (!node) return;
+  const attached = nodeAttachedLinksMap.get(node.id);
+  if (!attached || attached.size === 0) return;
+
+  attached.forEach(entry => {
+    const link = entry.link;
+    if (!link) return;
+    if (selectedLink && selectedLink.id === link.id) return;
+
+    const linkObj = linkLines.get(link.id);
+    if (!linkObj) return;
+
+    const { line, sourceNode, targetNode } = linkObj;
+
+    // 1. Restaurar arista
+    if (line) {
+      const isWireless = (link.cable_type === 'wireless') || !!link.netbox_wirelesslink_id || !!link.extra_data?.wireless_link_id;
+      const curColor = getLinkColor(link, sourceNode, targetNode);
+      line.stroke(curColor);
+      line.fill(curColor);
+      line.strokeWidth(2.0);
+      line.dash(isWireless ? [10, 6] : undefined);
+      line.shadowBlur(0);
+      line.shadowOpacity(0);
+      delete line._origStroke;
+      delete line._origStrokeWidth;
+    }
+
+    // 2. Restaurar nodo opuesto
+    const peerNode = (sourceNode && sourceNode.id === node.id) ? targetNode : sourceNode;
+    if (peerNode) {
+      const peerGrp = nodeGroups.get(peerNode.id);
+      if (peerGrp) {
+        const pBox = peerGrp.findOne('.box') || peerGrp.findOne('.capsule') || peerGrp.findOne('.noteBg');
+        if (pBox && pBox._linkHoverActive) {
+          pBox._linkHoverActive = false;
+          if (!pBox.isHighlighted) {
+            restoreNodeBaseBorder(pBox, peerNode, peerGrp);
+            delete pBox._origStroke;
+            delete pBox._origStrokeWidth;
+            delete pBox._origShadowBlur;
+            delete pBox._origShadowColor;
+            delete pBox._origShadowOpacity;
+          }
+        }
+      }
+    }
+
+    // 3. Restaurar bahías de switch
+    _highlightSwitchBaysForLink(link, sourceNode, targetNode, false);
+  });
+
+  if (linksLayer) linksLayer.batchDraw();
+  if (nodesLayer) nodesLayer.batchDraw();
+}
+
 function applyNodeHover(group, node, isHovered) {
   if (!group || !node) return;
   const box = group.findOne('.box');
   if (!box) return;
 
   const isCurrentSelection = (selectedNode && selectedNode.id === node.id) || selectedNodes.has(node);
-  if (isCurrentSelection) return;
-  if (box._linkHoverActive) return;
 
   if (isHovered) {
-    box.stroke('#38bdf8');
-    box.strokeWidth(2.0);
-    box.shadowColor('rgba(56, 189, 248, 0.75)');
-    box.shadowBlur(14);
-    box.shadowOpacity(0.85);
-    box.shadowOffset({ x: 0, y: 0 });
+    if (!isCurrentSelection && !box._linkHoverActive) {
+      box.stroke('#38bdf8');
+      box.strokeWidth(2.0);
+      box.shadowColor('rgba(56, 189, 248, 0.75)');
+      box.shadowBlur(14);
+      box.shadowOpacity(0.85);
+      box.shadowOffset({ x: 0, y: 0 });
 
-    const label = group.findOne('.label');
-    if (label) {
-      if (!label._origFill) label._origFill = label.fill();
-      label.fill('#ffffff');
+      const label = group.findOne('.label');
+      if (label) {
+        if (!label._origFill) label._origFill = label.fill();
+        label.fill('#ffffff');
+      }
     }
+    highlightNodeConnections(node);
   } else {
-    restoreNodeBaseBorder(box, node, group);
-    const label = group.findOne('.label');
-    if (label && label._origFill) {
-      label.fill(label._origFill);
+    unhighlightNodeConnections(node);
+    if (!isCurrentSelection) {
+      restoreNodeBaseBorder(box, node, group);
+      const label = group.findOne('.label');
+      if (label && label._origFill) {
+        label.fill(label._origFill);
+      }
     }
   }
   nodesLayer.batchDraw();
@@ -2139,8 +2256,8 @@ function applyNodeHover(group, node, isHovered) {
 function showNodeSelection(group, isMulti = false) {
   if (!group) return;
   const box = group.findOne('.box');
-  const selColor = isMulti ? '#c084fc' : '#38bdf8';
-  const selGlow = isMulti ? 'rgba(192, 132, 252, 0.85)' : 'rgba(56, 189, 248, 0.85)';
+  const selColor = isMulti ? '#eaff00' : '#38bdf8';
+  const selGlow = isMulti ? 'rgba(234, 255, 0, 0.85)' : 'rgba(56, 189, 248, 0.85)';
 
   if (box) {
     box.stroke(selColor);
@@ -6310,9 +6427,9 @@ function showMultiSelectionNotice(count) {
       <div class="multi-select-card">
         
         <!-- Cabecera de Selección Múltiple -->
-        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid rgba(56, 189, 248, 0.2);">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid rgba(234, 255, 0, 0.25);">
           <div style="display: flex; align-items: center; gap: 8px;">
-            <div style="width: 28px; height: 28px; border-radius: 6px; background: rgba(56, 189, 248, 0.15); display: flex; align-items: center; justify-content: center; color: #38bdf8; font-size: 0.9rem;">
+            <div style="width: 28px; height: 28px; border-radius: 6px; background: rgba(234, 255, 0, 0.15); display: flex; align-items: center; justify-content: center; color: #eaff00; font-size: 0.9rem;">
               <i class="fas fa-object-group"></i>
             </div>
             <div>
@@ -6320,14 +6437,14 @@ function showMultiSelectionNotice(count) {
               <div style="font-size: 0.68rem; color: #94a3b8;">${count} nodos marcados en el lienzo</div>
             </div>
           </div>
-          <span style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3); font-size: 0.7rem; font-weight: 700; padding: 2px 7px; border-radius: 12px;">
+          <span style="background: rgba(234, 255, 0, 0.15); color: #eaff00; border: 1px solid rgba(234, 255, 0, 0.4); font-size: 0.7rem; font-weight: 700; padding: 2px 7px; border-radius: 12px;">
             ${count}
           </span>
         </div>
 
         <!-- Indicador de reacomodo -->
         <p style="font-size: 0.73rem; color: #94a3b8; margin: 0 0 10px 0; line-height: 1.4;">
-          <i class="fas fa-arrows-alt" style="color: #38bdf8; margin-right: 4px;"></i> Arrastra cualquier nodo marcado en el lienzo para mover el grupo en bloque.
+          <i class="fas fa-arrows-alt" style="color: #eaff00; margin-right: 4px;"></i> Arrastra cualquier nodo marcado en el lienzo para mover el grupo en bloque.
         </p>
 
         <!-- Lista de nodos seleccionados -->
@@ -11415,22 +11532,30 @@ window.addEventListener('DOMContentLoaded', async () => {
     tabBtnZabbix.addEventListener('click', () => switchSettingsTab('zabbix'));
   }
 
-  // Visibilidad de contraseñas / tokens
+  // Visibilidad de contraseñas / tokens protegidos (Anti-Google Password Manager)
   if (btnToggleNetboxTokenVis && inputNetboxToken) {
     btnToggleNetboxTokenVis.addEventListener('click', () => {
-      const isPass = inputNetboxToken.type === 'password';
-      inputNetboxToken.type = isPass ? 'text' : 'password';
+      const isMasked = inputNetboxToken.classList.contains('masked');
+      if (isMasked) {
+        inputNetboxToken.classList.remove('masked');
+      } else {
+        inputNetboxToken.classList.add('masked');
+      }
       const icon = btnToggleNetboxTokenVis.querySelector('i');
-      if (icon) icon.className = isPass ? 'fas fa-eye-slash' : 'fas fa-eye';
+      if (icon) icon.className = isMasked ? 'fas fa-eye-slash' : 'fas fa-eye';
     });
   }
 
   if (btnToggleZabbixTokenVis && inputZabbixToken) {
     btnToggleZabbixTokenVis.addEventListener('click', () => {
-      const isPass = inputZabbixToken.type === 'password';
-      inputZabbixToken.type = isPass ? 'text' : 'password';
+      const isMasked = inputZabbixToken.classList.contains('masked');
+      if (isMasked) {
+        inputZabbixToken.classList.remove('masked');
+      } else {
+        inputZabbixToken.classList.add('masked');
+      }
       const icon = btnToggleZabbixTokenVis.querySelector('i');
-      if (icon) icon.className = isPass ? 'fas fa-eye-slash' : 'fas fa-eye';
+      if (icon) icon.className = isMasked ? 'fas fa-eye-slash' : 'fas fa-eye';
     });
   }
 
