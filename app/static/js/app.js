@@ -1242,11 +1242,11 @@ function _renderNoteNode(node) {
   // ── Hover ──
   group.on('mouseenter', () => {
     document.body.style.cursor = linkMode ? 'crosshair' : 'pointer';
-    if (!bg.isHighlighted) { bg.stroke('#f8fafc'); nodesLayer.batchDraw(); }
+    applyNodeHover(group, node, true);
   });
   group.on('mouseleave', () => {
     document.body.style.cursor = 'default';
-    if (!bg.isHighlighted) { bg.stroke(theme.border); nodesLayer.batchDraw(); }
+    applyNodeHover(group, node, false);
   });
 
   nodesLayer.add(group);
@@ -1439,10 +1439,7 @@ function _renderFtthBranchNode(node) {
   // ── Hover: Tooltip flotante enriquecido con telemetría de ONUs y tráfico ──
   group.on('mouseenter mousemove', (e) => {
     document.body.style.cursor = linkMode ? 'crosshair' : 'pointer';
-    if (!capsule.isHighlighted) {
-      capsule.stroke('#38bdf8');
-      nodesLayer.batchDraw();
-    }
+    applyNodeHover(group, node, true);
 
     const tooltip = document.getElementById('canvas-gpon-tooltip');
     if (tooltip) {
@@ -1504,10 +1501,7 @@ function _renderFtthBranchNode(node) {
 
   group.on('mouseleave', () => {
     document.body.style.cursor = 'default';
-    if (!capsule.isHighlighted) {
-      capsule.stroke(branchBorderColor);
-      nodesLayer.batchDraw();
-    }
+    applyNodeHover(group, node, false);
     const tooltip = document.getElementById('canvas-gpon-tooltip');
     if (tooltip) tooltip.style.display = 'none';
   });
@@ -1615,10 +1609,10 @@ function _renderSwitchNode(node) {
     fill: boxFill,
     stroke: pingColor,
     strokeWidth: 1.5,
-    cornerRadius: 6,
+    cornerRadius: 8,
     shadowColor: hexToRgba(roleHex, 0.25) || 'rgba(0, 0, 0, 0.45)',
-    shadowBlur: 4,
-    shadowOpacity: 0.4,
+    shadowBlur: 6,
+    shadowOpacity: 0.5,
     shadowOffset: { x: 0, y: 2 },
     shadowForStrokeEnabled: false,
     perfectDrawEnabled: false,
@@ -1982,37 +1976,13 @@ function _renderSwitchNode(node) {
 
   group.on('mouseenter', () => {
     document.body.style.cursor = linkMode ? 'crosshair' : 'pointer';
-    if (!box.isHighlighted) {
-      if (linkMode && linkSourceNode && linkSourceNode.id === node.id) return;
-      box.stroke('#38bdf8');
-      nodesLayer.batchDraw();
-    }
+    applyNodeHover(group, node, true);
   });
 
   group.on('mouseleave', () => {
     document.body.style.cursor = 'default';
     _hideSwitchBayTooltip();
-    if (box._linkHoverActive) return;
-    if (!box.isHighlighted) {
-      if (linkMode && linkSourceNode && linkSourceNode.id === node.id) {
-        box.stroke('#10b981');
-        box.strokeWidth(3);
-      } else if (linkMode && linkTargetNodes.has(node)) {
-        box.stroke('#38bdf8');
-        box.strokeWidth(2.5);
-      } else if (selectedNodes.has(node)) {
-        box.stroke('#a855f7');
-        box.strokeWidth(2);
-      } else if (selectedNode && selectedNode.id === node.id) {
-        box.stroke('#38bdf8');
-        box.strokeWidth(2);
-      } else {
-        const curPingStatus = node.ping_status || node.status;
-        box.stroke(getNodeStatusColor(curPingStatus, false));
-        box.strokeWidth(1.5);
-      }
-      nodesLayer.batchDraw();
-    }
+    applyNodeHover(group, node, false);
   });
 
   nodesLayer.add(group);
@@ -2045,6 +2015,256 @@ function refreshSwitchNodeBays(nodeOrId) {
     if (bNotch) bNotch.fill(theme.notch);
     if (bTxt) bTxt.fill(theme.text);
   });
+}
+
+// ─── Estilos y Dinámicas Visuales de Nodos (Contorno, Hover y Selección) ─────
+
+function restoreNodeBaseBorder(box, node, group) {
+  if (!box || !node) return;
+  if (box._linkHoverActive) return;
+
+  if (node.device_type === 'note') {
+    const colorKey = node.extra_data?.note_color || 'yellow';
+    const theme = (typeof NOTE_COLORS !== 'undefined' && NOTE_COLORS[colorKey]) ? NOTE_COLORS[colorKey] : { bg: '#fef08a', border: '#ca8a04' };
+    box.stroke(theme.border);
+    box.strokeWidth(1.5);
+    box.shadowColor('rgba(0, 0, 0, 0.35)');
+    box.shadowBlur(6);
+    box.shadowOpacity(0.5);
+    box.shadowOffset({ x: 1, y: 2 });
+    return;
+  }
+
+  if (node.device_type === 'ftth_branch') {
+    const isDown = node.status === 'down' || node.ping_status === 'down' || node.extra_data?.port_status === 'down';
+    const hasAtyp = (node.extra_data?.atypical_count || 0) > 0;
+    const col = isDown ? '#ef4444' : (hasAtyp ? '#f59e0b' : '#10b981');
+    box.stroke(col);
+    box.strokeWidth(isDown ? 2 : 1.5);
+    box.shadowColor(isDown ? 'rgba(239, 68, 68, 0.5)' : (hasAtyp ? 'rgba(245, 158, 11, 0.4)' : 'rgba(16, 185, 129, 0.35)'));
+    box.shadowBlur(isDown ? 8 : 4);
+    box.shadowOpacity(0.6);
+    box.shadowOffset({ x: 0, y: 0 });
+    return;
+  }
+
+  const isParentShortcut = (group && group.isParentShortcut) || node.device_type === 'parent_map' || !!node.extra_data?.is_parent_shortcut;
+  const isSubmap = (group && group.isSubmap) || node.device_type === 'submap' || isParentShortcut;
+  const roleHex = getNodeRoleColor(node);
+
+  if (isParentShortcut) {
+    box.stroke('#38bdf8');
+    box.strokeWidth(2);
+    box.dash([5, 3]);
+    box.shadowColor('rgba(56, 189, 248, 0.4)');
+    box.shadowBlur(8);
+    box.shadowOpacity(0.4);
+    box.shadowOffset({ x: 0, y: 2 });
+    return;
+  }
+
+  if (node.device_type === 'submap') {
+    box.stroke('#a855f7');
+    box.strokeWidth(1.8);
+    box.dash(undefined);
+    box.shadowColor('rgba(168, 85, 247, 0.35)');
+    box.shadowBlur(8);
+    box.shadowOpacity(0.45);
+    box.shadowOffset({ x: 0, y: 2 });
+    return;
+  }
+
+  const curPingStatus = node.ping_status || node.status;
+  const pingColor = getNodeStatusColor(curPingStatus, isSubmap);
+  const isDown = curPingStatus === 'down' || curPingStatus === 'problem';
+  const isWarning = curPingStatus === 'warning';
+
+  box.dash(undefined);
+  if (isDown) {
+    box.stroke('#ef4444');
+    box.strokeWidth(2.2);
+    box.shadowColor('rgba(239, 68, 68, 0.6)');
+    box.shadowBlur(10);
+    box.shadowOpacity(0.7);
+    box.shadowOffset({ x: 0, y: 0 });
+  } else if (isWarning) {
+    box.stroke('#f59e0b');
+    box.strokeWidth(2.0);
+    box.shadowColor('rgba(245, 158, 11, 0.5)');
+    box.shadowBlur(8);
+    box.shadowOpacity(0.6);
+    box.shadowOffset({ x: 0, y: 0 });
+  } else {
+    box.stroke(pingColor);
+    box.strokeWidth(1.5);
+    box.shadowColor(roleHex ? hexToRgba(roleHex, 0.35) : 'rgba(0, 0, 0, 0.5)');
+    box.shadowBlur(6);
+    box.shadowOpacity(0.5);
+    box.shadowOffset({ x: 0, y: 2 });
+  }
+}
+
+function applyNodeHover(group, node, isHovered) {
+  if (!group || !node) return;
+  const box = group.findOne('.box');
+  if (!box) return;
+
+  const isCurrentSelection = (selectedNode && selectedNode.id === node.id) || selectedNodes.has(node);
+  if (isCurrentSelection) return;
+  if (box._linkHoverActive) return;
+
+  if (isHovered) {
+    box.stroke('#38bdf8');
+    box.strokeWidth(2.0);
+    box.shadowColor('rgba(56, 189, 248, 0.75)');
+    box.shadowBlur(14);
+    box.shadowOpacity(0.85);
+    box.shadowOffset({ x: 0, y: 0 });
+
+    const label = group.findOne('.label');
+    if (label) {
+      if (!label._origFill) label._origFill = label.fill();
+      label.fill('#ffffff');
+    }
+  } else {
+    restoreNodeBaseBorder(box, node, group);
+    const label = group.findOne('.label');
+    if (label && label._origFill) {
+      label.fill(label._origFill);
+    }
+  }
+  nodesLayer.batchDraw();
+}
+
+function showNodeSelection(group, isMulti = false) {
+  if (!group) return;
+  const box = group.findOne('.box');
+  const selColor = isMulti ? '#c084fc' : '#38bdf8';
+  const selGlow = isMulti ? 'rgba(192, 132, 252, 0.85)' : 'rgba(56, 189, 248, 0.85)';
+
+  if (box) {
+    box.stroke(selColor);
+    box.strokeWidth(2.4);
+    box.shadowColor(selGlow);
+    box.shadowBlur(18);
+    box.shadowOpacity(0.9);
+    box.shadowOffset({ x: 0, y: 0 });
+    box.isHighlighted = true;
+  }
+
+  let ring = group.findOne('.selectionRing');
+  let bw = 120;
+  let bh = 45;
+  let bx = 0;
+  let by = 0;
+  if (box && typeof box.width === 'function' && box.width() > 0) {
+    bw = box.width();
+    bh = box.height();
+    bx = typeof box.x === 'function' ? box.x() : 0;
+    by = typeof box.y === 'function' ? box.y() : 0;
+  }
+
+  const pad = 4;
+  const rad = (box && typeof box.cornerRadius === 'function' ? box.cornerRadius() : 8) + 3;
+
+  if (!ring) {
+    ring = new Konva.Group({ name: 'selectionRing', listening: false });
+
+    const outerRect = new Konva.Rect({
+      x: bx - pad,
+      y: by - pad,
+      width: bw + (pad * 2),
+      height: bh + (pad * 2),
+      stroke: selColor,
+      strokeWidth: 1.6,
+      dash: [5, 3],
+      cornerRadius: rad,
+      shadowColor: selGlow,
+      shadowBlur: 10,
+      shadowOpacity: 0.8,
+      listening: false,
+      name: 'outerRect'
+    });
+    ring.add(outerRect);
+
+    const hSize = 5;
+    const hHalf = hSize / 2;
+    const corners = [
+      { x: bx - pad - hHalf, y: by - pad - hHalf },
+      { x: bx + bw + pad - hHalf, y: by - pad - hHalf },
+      { x: bx - pad - hHalf, y: by + bh + pad - hHalf },
+      { x: bx + bw + pad - hHalf, y: by + bh + pad - hHalf }
+    ];
+
+    corners.forEach((c, idx) => {
+      ring.add(new Konva.Rect({
+        x: c.x,
+        y: c.y,
+        width: hSize,
+        height: hSize,
+        fill: '#ffffff',
+        stroke: selColor,
+        strokeWidth: 1.2,
+        cornerRadius: 1,
+        listening: false,
+        name: `handle_${idx}`
+      }));
+    });
+
+    group.add(ring);
+  } else {
+    ring.visible(true);
+    const outerRect = ring.findOne('.outerRect');
+    if (outerRect) {
+      outerRect.x(bx - pad);
+      outerRect.y(by - pad);
+      outerRect.width(bw + (pad * 2));
+      outerRect.height(bh + (pad * 2));
+      outerRect.stroke(selColor);
+      outerRect.shadowColor(selGlow);
+    }
+    const hHalf = 2.5;
+    const corners = [
+      { x: bx - pad - hHalf, y: by - pad - hHalf },
+      { x: bx + bw + pad - hHalf, y: by - pad - hHalf },
+      { x: bx - pad - hHalf, y: by + bh + pad - hHalf },
+      { x: bx + bw + pad - hHalf, y: by + bh + pad - hHalf }
+    ];
+    for (let i = 0; i < 4; i++) {
+      const h = ring.findOne(`.handle_${i}`);
+      if (h) {
+        h.x(corners[i].x);
+        h.y(corners[i].y);
+        h.stroke(selColor);
+      }
+    }
+  }
+
+  const label = group.findOne('.label');
+  if (label) {
+    if (!label._origFill) label._origFill = label.fill();
+    label.fill('#ffffff');
+  }
+
+  nodesLayer.batchDraw();
+}
+
+function hideNodeSelection(group, node) {
+  if (!group || !node) return;
+  const box = group.findOne('.box');
+  const ring = group.findOne('.selectionRing');
+  if (ring) {
+    ring.destroy();
+  }
+  if (box) {
+    box.isHighlighted = false;
+    restoreNodeBaseBorder(box, node, group);
+  }
+  const label = group.findOne('.label');
+  if (label && label._origFill) {
+    label.fill(label._origFill);
+  }
+  nodesLayer.batchDraw();
 }
 
 function renderNode(node) {
@@ -2081,27 +2301,30 @@ function renderNode(node) {
   const pingColor = isParentShortcut ? '#38bdf8' : getNodeStatusColor(pingStatus, isSubmap);
   const roleHex = getNodeRoleColor(node);
 
-  // Caja de fondo: relleno translúcido con el color del rol/función de NetBox (22-26% alpha)
-  let boxFill = '#162235';
+  // Caja de fondo: relleno elegante con tinte sutil de rol NetBox
+  let boxFill = 'rgba(15, 23, 42, 0.94)';
   if (isParentShortcut) {
-    boxFill = 'rgba(12, 74, 110, 0.88)';
+    boxFill = 'rgba(12, 74, 110, 0.90)';
   } else if (node.device_type === 'submap') {
-    boxFill = 'rgba(74, 14, 122, 0.78)';
+    boxFill = 'rgba(74, 14, 122, 0.85)';
   } else if (roleHex) {
-    boxFill = hexToRgba(roleHex, 0.24) || '#162235';
+    boxFill = hexToRgba(roleHex, 0.22) || 'rgba(15, 23, 42, 0.94)';
   }
+
+  const curPingStatus = node.ping_status || node.status;
+  const isDownStatus = curPingStatus === 'down' || curPingStatus === 'problem';
 
   const box = new Konva.Rect({
     width: nodeWidth,
     height: nodeHeight,
     fill: boxFill,
-    stroke: isParentShortcut ? '#38bdf8' : pingColor,
-    strokeWidth: isParentShortcut ? 2 : 1.5,
+    stroke: isParentShortcut ? '#38bdf8' : (isDownStatus ? '#ef4444' : pingColor),
+    strokeWidth: isParentShortcut ? 2 : (isDownStatus ? 2.2 : 1.5),
     dash: isParentShortcut ? [5, 3] : undefined,
-    cornerRadius: 6,
-    shadowColor: isParentShortcut ? 'rgba(56, 189, 248, 0.4)' : (roleHex ? hexToRgba(roleHex, 0.25) : 'rgba(0, 0, 0, 0.45)'),
-    shadowBlur: isParentShortcut ? 8 : (roleHex ? 4 : 0),
-    shadowOpacity: 0.4,
+    cornerRadius: 8,
+    shadowColor: isParentShortcut ? 'rgba(56, 189, 248, 0.4)' : (roleHex ? hexToRgba(roleHex, 0.35) : 'rgba(0, 0, 0, 0.5)'),
+    shadowBlur: isParentShortcut ? 8 : (isDownStatus ? 10 : 6),
+    shadowOpacity: 0.5,
     shadowOffset: { x: 0, y: 2 },
     shadowForStrokeEnabled: false,
     perfectDrawEnabled: false,
@@ -2343,40 +2566,14 @@ function renderNode(node) {
     }
   });
 
-  // Hover visual optimizado en nodesLayer
+  // Hover visual optimizado y reactivo
   group.on('mouseenter', () => {
     document.body.style.cursor = linkMode ? 'crosshair' : 'pointer';
-    if (!box.isHighlighted) {
-      if (linkMode && linkSourceNode && linkSourceNode.id === node.id) {
-        return; // Mantener resaltado de origen
-      }
-      box.stroke('#38bdf8');
-      nodesLayer.batchDraw();
-    }
+    applyNodeHover(group, node, true);
   });
   group.on('mouseleave', () => {
     document.body.style.cursor = 'default';
-    if (box._linkHoverActive) return;
-    if (!box.isHighlighted) {
-      if (linkMode && linkSourceNode && linkSourceNode.id === node.id) {
-        box.stroke('#10b981');
-        box.strokeWidth(3);
-      } else if (linkMode && linkTargetNodes.has(node)) {
-        box.stroke('#38bdf8');
-        box.strokeWidth(2.5);
-      } else if (selectedNodes.has(node)) {
-        box.stroke('#a855f7');
-        box.strokeWidth(2);
-      } else if (selectedNode && selectedNode.id === node.id) {
-        box.stroke('#38bdf8');
-        box.strokeWidth(2);
-      } else {
-        const curPingStatus = node.ping_status || node.status;
-        box.stroke(isParentShortcut ? '#38bdf8' : getNodeStatusColor(curPingStatus, isSubmap));
-        box.strokeWidth(isSubmap ? 2 : 1.5);
-      }
-      nodesLayer.batchDraw();
-    }
+    applyNodeHover(group, node, false);
   });
 
   nodesLayer.add(group);
@@ -5787,11 +5984,7 @@ function selectNode(node) {
 
   const grp = nodeGroups.get(node.id);
   if (grp) {
-    const box = grp.findOne('.box');
-    box.stroke('#0ea5e9');
-    box.strokeWidth(2.5);
-    box.isHighlighted = true;
-    nodesLayer.batchDraw();
+    showNodeSelection(grp, false);
   }
 
   document.getElementById('no-selection-msg').style.display = 'none';
@@ -6018,35 +6211,9 @@ function deselectNode() {
   if (selectedNode) {
     const grp = nodeGroups.get(selectedNode.id);
     if (grp) {
-      const box = grp.findOne('.box');
-      if (box) {
-        if (selectedNode.device_type === 'note') {
-          // Restaurar borde de la nota al color del tema
-          const colorKey = selectedNode.extra_data?.note_color || 'yellow';
-          const theme = NOTE_COLORS[colorKey] || NOTE_COLORS['yellow'];
-          box.stroke(theme.border);
-          box.strokeWidth(1.5);
-        } else if (selectedNode.device_type === 'ftth_branch') {
-          // Restaurar borde del brazo FTTH
-          const isDown = selectedNode.status === 'down' || selectedNode.ping_status === 'down';
-          const hasAtyp = (selectedNode.extra_data?.atypical_count || 0) > 0;
-          const col = isDown ? '#ef4444' : (hasAtyp ? '#f59e0b' : '#10b981');
-          box.stroke(col);
-          box.strokeWidth(isDown ? 2 : 1.5);
-          const arrow = grp.findOne('.branchArrow');
-          if (arrow) arrow.stroke(col);
-        } else {
-          const isParentShortcut = grp.isParentShortcut || false;
-          const isSubmap = grp.isSubmap || (selectedNode.device_type === 'submap');
-          const curPingStatus = selectedNode.ping_status || selectedNode.status;
-          box.stroke(isParentShortcut ? '#38bdf8' : getNodeStatusColor(curPingStatus, isSubmap));
-          box.strokeWidth(isParentShortcut ? 2 : 1.5);
-        }
-        box.isHighlighted = false;
-      }
+      hideNodeSelection(grp, selectedNode);
     }
     selectedNode = null;
-    nodesLayer.batchDraw();
   }
   document.getElementById('no-selection-msg').style.display = 'block';
   document.getElementById('node-properties-panel').style.display = 'none';
@@ -6064,14 +6231,8 @@ function addNodeToMultiSelection(node) {
 
   const grp = nodeGroups.get(node.id);
   if (grp) {
-    const box = grp.findOne('.box');
-    if (box) {
-      box.stroke('#38bdf8');
-      box.strokeWidth(2.5);
-      box.isHighlighted = true;
-    }
+    showNodeSelection(grp, true);
   }
-  nodesLayer.batchDraw();
 }
 
 function removeNodeFromMultiSelection(node) {
@@ -6080,17 +6241,8 @@ function removeNodeFromMultiSelection(node) {
 
   const grp = nodeGroups.get(node.id);
   if (grp) {
-    const box = grp.findOne('.box');
-    if (box) {
-      const isParentShortcut = grp.isParentShortcut || false;
-      const isSubmap = grp.isSubmap || (node.device_type === 'submap');
-      const curPingStatus = node.ping_status || node.status;
-      box.stroke(isParentShortcut ? '#38bdf8' : getNodeStatusColor(curPingStatus, isSubmap));
-      box.strokeWidth(isParentShortcut ? 2 : 1.5);
-      box.isHighlighted = false;
-    }
+    hideNodeSelection(grp, node);
   }
-  nodesLayer.batchDraw();
 
   if (selectedNodes.size > 0) {
     showMultiSelectionNotice(selectedNodes.size);
@@ -6103,14 +6255,10 @@ function clearMultiSelection() {
   selectedNodes.forEach(node => {
     const grp = nodeGroups.get(node.id);
     if (grp) {
-      const box = grp.findOne('.box');
-      if (box && node !== selectedNode) {
-        const isParentShortcut = grp.isParentShortcut || false;
-        const isSubmap = grp.isSubmap || (node.device_type === 'submap');
-        const curPingStatus = node.ping_status || node.status;
-        box.stroke(isParentShortcut ? '#38bdf8' : getNodeStatusColor(curPingStatus, isSubmap));
-        box.strokeWidth(isParentShortcut ? 2 : 1.5);
-        box.isHighlighted = false;
+      if (node !== selectedNode) {
+        hideNodeSelection(grp, node);
+      } else {
+        showNodeSelection(grp, false);
       }
     }
   });
@@ -6582,6 +6730,12 @@ function applyNodeStatusToCanvas(nodeId, statusData) {
     pingStatus = statusData;
   }
 
+  const nodeObj = _getOrBuildNodeMap().get(nodeId);
+  if (nodeObj) {
+    nodeObj.ping_status = pingStatus;
+    nodeObj.status = pingStatus;
+  }
+
   // Iluminación gobernada por PING (tanto el contorno como el punto interior)
   const pingColor = isParentShortcut ? '#38bdf8' : getNodeStatusColor(pingStatus, isSubmap);
 
@@ -6589,7 +6743,11 @@ function applyNodeStatusToCanvas(nodeId, statusData) {
     dotShape.fill(pingColor);
   }
   if (boxShape && !boxShape.isHighlighted) {
-    boxShape.stroke(pingColor);
+    if (nodeObj) {
+      restoreNodeBaseBorder(boxShape, nodeObj, grp);
+    } else {
+      boxShape.stroke(pingColor);
+    }
   }
 
   // Eliminar cualquier badge previo de SNMP si existiera
